@@ -6,6 +6,7 @@
 
 import type { FamilyColours } from './pluginLayouts'
 import { EQ_BAND_COLOURS, EQ_BAND_KINDS } from './pluginLayouts'
+import { t, tf } from '../../i18n'
 
 export interface PluginParam {
   id: number
@@ -360,7 +361,7 @@ export function drawDisplay(
       const open: [number, number][] = live.grHistory.map((gr, i) => [xAt(i), gr > -1 ? 14 : H - 14])
       line(open, f.a2, 2)
       const now = live.grHistory[live.grHistory.length - 1] ?? 0
-      return live.gr == null ? '' : now > -1 ? 'OPEN' : 'CLOSED'
+      return live.gr == null ? '' : now > -1 ? t('OPEN') : t('CLOSED')
     }
     // Gain reduction from the top, 0..24 dB.
     const red: [number, number][] = live.grHistory.map((gr, i) => [xAt(i), 14 + (Math.min(24, -gr) / 24) * (H - 34)])
@@ -594,7 +595,7 @@ export function drawDisplay(
       }
     })
     line([[W * 0.3, H - 14], [W * 0.7, H - 14]], f.a, 2)
-    return moving ? 'RUNNING' : 'NO SIGNAL'
+    return moving ? t('RUNNING') : t('NO SIGNAL')
   }
 
   if (kind === 'steps') {
@@ -637,7 +638,9 @@ export function drawDisplay(
     if (kind !== 'noise') line([[0, yDb(0)], [W, yDb(0)]], 'rgba(255,255,255,.14)', 1, false)
     area(pts, f.a, 0.22); line(pts, f.a2, 2)
     freqLabels()
-    return kind === 'noise' ? v.t('Colour').toUpperCase() : kind === 'excite' ? `ABOVE ${v.t('Frequency')}` : `${v.t('Boost')} BELOW ${v.t('Crossover')}`
+    return kind === 'noise' ? v.t('Colour').toUpperCase()
+      : kind === 'excite' ? tf('ABOVE {freq}', { freq: v.t('Frequency') })
+        : tf('{boost} BELOW {freq}', { boost: v.t('Boost'), freq: v.t('Crossover') })
   }
 
   if (kind === 'gonio') {
@@ -648,10 +651,10 @@ export function drawDisplay(
     })
     lab('MONO', cx, cy - r - 4, '#8b8b99', 'center'); lab('L', cx - r - 10, cy + 3); lab('R', cx + r + 4, cy + 3)
     const s = live.scope
-    if (!s || s.length < 4) return 'NO SIGNAL'
+    if (!s || s.length < 4) return t('NO SIGNAL')
     let peak = 0
     for (let i = 0; i < s.length; i++) peak = Math.max(peak, Math.abs(s[i]))
-    if (peak < 1e-4) return 'NO SIGNAL'
+    if (peak < 1e-4) return t('NO SIGNAL')
     const k = (r * 0.9) / Math.max(0.25, peak * Math.SQRT2)
     g.fillStyle = `rgba(${rgb(f.a2)},.55)`
     for (let i = 0; i + 1 < s.length; i += 2) {

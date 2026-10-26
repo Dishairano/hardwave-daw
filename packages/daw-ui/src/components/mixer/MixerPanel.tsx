@@ -15,6 +15,7 @@ import { MixerPanelV2 } from './v2/MixerPanel'
 import { PluginParamSheet } from './PluginParamSheet'
 import { memo, useEffect, useState, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { t, tf, useLanguage } from '../../i18n'
 
 export function MixerPanel() {
   // Phase 1 feature flag — route to the new FL Wide 2 mixer when the user
@@ -32,6 +33,7 @@ export function MixerPanel() {
  *  big song dropped the screen to a few frames a second. Now each strip
  *  row reads its own meter and redraws only when its own track changes. */
 function MixerPanelLegacy() {
+  useLanguage()
   const tracks = useTrackStore((s) => s.tracks)
   const { setVolume, toggleMute } = useTrackStore(useShallow((s) => ({ setVolume: s.setVolume, toggleMute: s.toggleMute })))
   const master = useMeterStore((s) => s.master)
@@ -50,17 +52,17 @@ function MixerPanelLegacy() {
         height: 22, background: 'rgba(255,255,255,0.01)', borderBottom: `1px solid ${hw.border}`,
         display: 'flex', alignItems: 'center', padding: '0 4px 0 8px', gap: 4,
       }}>
-        <span style={{ flex: 1, fontSize: 10, fontWeight: 600, color: hw.textMuted }}>Mixer</span>
+        <span style={{ flex: 1, fontSize: 10, fontWeight: 600, color: hw.textMuted }}>{t('Mixer')}</span>
         <button
           data-testid="mixer-reset-meters"
           onClick={() => setClipResetNonce(n => n + 1)}
-          title="Reset all clip indicators"
+          title={t('Reset all clip indicators')}
           style={{
             height: 16, padding: '0 6px', fontSize: 8, fontWeight: 600,
             color: hw.textMuted, background: 'rgba(255,255,255,0.04)',
             border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
           }}
-        >RESET</button>
+        >{t('RESET')}</button>
         <DetachButton panelId="mixer" />
       </div>
 
@@ -94,7 +96,7 @@ function MixerPanelLegacy() {
 
         {allTracks.length === 0 && (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: hw.textFaint, fontSize: 10 }}>
-            Add tracks to see mixer
+            {t('Add tracks to see mixer')}
           </div>
         )}
       </div>
@@ -218,6 +220,7 @@ interface StripProps {
 }
 
 function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, soloed, soloSafe, armed, monitorInput = true, phaseInvert = false, swapLr = false, stereoSeparation = 1, delaySamples = 0, peakL, peakR, rmsDb, peakHoldDb, clipResetNonce, isMaster, onRename, onColorChange, onVolume, onPan, onMute, onSolo, onArm, onToggleMonitorInput, onToggleSoloSafe, onTogglePhaseInvert, onToggleSwapLr, onStereoSeparation, onDelaySamples }: StripProps) {
+  useLanguage()
   const [clipped, setClipped] = useState(false)
   const resetClip = useCallback(() => setClipped(false), [])
   useEffect(() => { if (peakL >= 0 || peakR >= 0) setClipped(true) }, [peakL, peakR])
@@ -281,7 +284,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
       {/* Color bar */}
       <div
         onClick={e => { if (!isMaster && onColorChange) { e.stopPropagation(); setColorOpen(v => !v) } }}
-        title={!isMaster && onColorChange ? 'Click to change track color' : undefined}
+        title={!isMaster && onColorChange ? t('Click to change track color') : undefined}
         style={{
           height: 4, background: color, cursor: !isMaster && onColorChange ? 'pointer' : 'default',
           position: 'relative',
@@ -330,7 +333,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         ) : (
           <div
             onDoubleClick={() => { if (!isMaster && onRename) setEditing(true) }}
-            title={!isMaster && onRename ? 'Double-click to rename' : undefined}
+            title={!isMaster && onRename ? t('Double-click to rename') : undefined}
             style={{
               fontSize: 9, fontWeight: 500, color: hw.textPrimary,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -354,7 +357,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         {/* Clip indicator */}
         <div
           onClick={resetClip}
-          title={clipped ? 'Click to reset clip indicator' : undefined}
+          title={clipped ? t('Click to reset clip indicator') : undefined}
           style={{
             width: '100%', height: 6, borderRadius: hw.radius.sm,
             background: clipped ? hw.red : 'rgba(255,255,255,0.04)',
@@ -436,7 +439,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
           {onTogglePhaseInvert && (
             <button
               onClick={onTogglePhaseInvert}
-              title={phaseInvert ? 'Phase inverted (click to restore)' : 'Invert phase'}
+              title={phaseInvert ? t('Phase inverted (click to restore)') : t('Invert phase')}
               style={{
                 ...sB, color: phaseInvert ? hw.accent : hw.textMuted,
                 background: phaseInvert ? 'rgba(124,58,237,0.22)' : 'rgba(255,255,255,0.03)',
@@ -446,7 +449,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
           {onToggleSwapLr && (
             <button
               onClick={onToggleSwapLr}
-              title={swapLr ? 'L/R swapped (click to restore)' : 'Swap L/R'}
+              title={swapLr ? t('L/R swapped (click to restore)') : t('Swap L/R')}
               style={{
                 ...sB, color: swapLr ? hw.accent : hw.textMuted,
                 background: swapLr ? 'rgba(124,58,237,0.22)' : 'rgba(255,255,255,0.03)',
@@ -465,7 +468,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         }}>M</button>
         <button
           onClick={onSolo}
-          title={soloSafe ? 'Solo (solo-safe on: ignores other solos)' : 'Solo'}
+          title={soloSafe ? t('Solo (solo-safe on: ignores other solos)') : t('Solo')}
           style={{
             ...sB, color: soloed ? hw.yellow : hw.textMuted,
             background: soloed ? hw.yellowDim : 'rgba(255,255,255,0.03)',
@@ -476,7 +479,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         {!isMaster && onArm && (
           <button
             onClick={onArm}
-            title="Arm for recording"
+            title={t('Arm for recording')}
             style={{
               ...sB, color: armed ? hw.red : hw.textMuted,
               background: armed ? hw.redDim : 'rgba(255,255,255,0.03)',
@@ -486,7 +489,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         {!isMaster && armed && onToggleMonitorInput && (
           <button
             onClick={onToggleMonitorInput}
-            title={monitorInput ? 'Disable input monitoring' : 'Enable input monitoring (hear input through FX chain)'}
+            title={monitorInput ? t('Disable input monitoring') : t('Enable input monitoring (hear input through FX chain)')}
             style={{
               ...sB, color: monitorInput ? hw.accent : hw.textMuted,
               background: monitorInput ? 'rgba(124,58,237,0.18)' : 'rgba(255,255,255,0.03)',
@@ -511,14 +514,14 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
             {name}
           </div>
-          <StripMenuItem label="Rename" shortcut="F2" onClick={() => { setCtxMenu(null); setEditing(true) }} />
-          <StripMenuItem label="Reset volume (0 dB)" onClick={() => { setCtxMenu(null); onVolume?.(0) }} />
-          <StripMenuItem label="Reset pan (center)" onClick={() => { setCtxMenu(null); onPan(0) }} />
-          <StripMenuItem label={muted ? 'Unmute' : 'Mute'} onClick={() => { setCtxMenu(null); onMute?.() }} />
-          <StripMenuItem label={soloed ? 'Unsolo' : 'Solo'} onClick={() => { setCtxMenu(null); onSolo() }} />
+          <StripMenuItem label={t('Rename')} shortcut="F2" onClick={() => { setCtxMenu(null); setEditing(true) }} />
+          <StripMenuItem label={t('Reset volume (0 dB)')} onClick={() => { setCtxMenu(null); onVolume?.(0) }} />
+          <StripMenuItem label={t('Reset pan (center)')} onClick={() => { setCtxMenu(null); onPan(0) }} />
+          <StripMenuItem label={muted ? t('Unmute') : t('Mute')} onClick={() => { setCtxMenu(null); onMute?.() }} />
+          <StripMenuItem label={soloed ? t('Unsolo') : t('Solo')} onClick={() => { setCtxMenu(null); onSolo() }} />
           {onToggleSoloSafe && (
             <StripMenuItem
-              label={soloSafe ? 'Disable solo-safe' : 'Solo-safe'}
+              label={soloSafe ? t('Disable solo-safe') : t('Solo-safe')}
               onClick={() => { setCtxMenu(null); onToggleSoloSafe() }}
             />
           )}
@@ -526,20 +529,20 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
             <>
               <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
               <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                Utilities
+                {t('Utilities')}
               </div>
               {onTogglePhaseInvert && (
-                <StripMenuItem label={phaseInvert ? 'Restore phase' : 'Invert phase (Ø)'} onClick={() => { setCtxMenu(null); onTogglePhaseInvert() }} />
+                <StripMenuItem label={phaseInvert ? t('Restore phase') : t('Invert phase (Ø)')} onClick={() => { setCtxMenu(null); onTogglePhaseInvert() }} />
               )}
               {onToggleSwapLr && (
-                <StripMenuItem label={swapLr ? 'Restore L/R' : 'Swap L↔R'} onClick={() => { setCtxMenu(null); onToggleSwapLr() }} />
+                <StripMenuItem label={swapLr ? t('Restore L/R') : t('Swap L↔R')} onClick={() => { setCtxMenu(null); onToggleSwapLr() }} />
               )}
               {onStereoSeparation && (
                 <div style={{ padding: '4px 8px 2px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textSecondary, marginBottom: 2 }}>
-                    <span>Separation</span>
+                    <span>{t('Separation')}</span>
                     <span style={{ fontFamily: "'Consolas', monospace", color: hw.textMuted }}>
-                      {stereoSeparation < 0.01 ? 'mono' : `${stereoSeparation.toFixed(2)}×`}
+                      {stereoSeparation < 0.01 ? t('mono') : `${stereoSeparation.toFixed(2)}×`}
                     </span>
                   </div>
                   <input
@@ -556,7 +559,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
               )}
               {onDelaySamples && (
                 <div style={{ padding: '4px 8px 6px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 9, color: hw.textSecondary }}>Delay</span>
+                  <span style={{ fontSize: 9, color: hw.textSecondary }}>{t('Delay')}</span>
                   <input
                     type="number"
                     min={0}
@@ -577,7 +580,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
           )}
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           <div style={{ padding: '4px 8px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-            Color
+            {t('Color')}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 2, padding: '2px 6px 6px' }}>
             {PATTERN_COLORS.map(c => (
@@ -597,7 +600,7 @@ function Strip({ trackId, inserts = [], name, color, number, volumeDb, muted, so
         <ParameterContextMenu
           x={faderCtx.x}
           y={faderCtx.y}
-          label={isMaster ? 'Master volume' : `${name} volume`}
+          label={isMaster ? t('Master volume') : tf('{name} volume', { name })}
           value={volumeDb}
           defaultValue={0}
           unit=" dB"
@@ -663,6 +666,7 @@ const MAX_VISIBLE_SLOTS = 10
 const NO_TRACKS: TrackInfo[] = []
 
 function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[] }) {
+  useLanguage()
   const { setInsertEnabled, removeFromTrack, reorderInsert, setFxChainBypassed, addToTrack, setInsertWet, setPluginSidechainSource } = usePluginStore(useShallow((s) => ({
     setInsertEnabled: s.setInsertEnabled, removeFromTrack: s.removeFromTrack, reorderInsert: s.reorderInsert,
     setFxChainBypassed: s.setFxChainBypassed, addToTrack: s.addToTrack, setInsertWet: s.setInsertWet,
@@ -852,7 +856,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
   }
 
   const handleSavePreset = async (slot: InsertInfo) => {
-    const name = window.prompt(`Save slot preset — "${slot.pluginName}" as:`, slot.pluginName)
+    const name = window.prompt(tf('Save slot preset — "{name}" as:', { name: slot.pluginName }), slot.pluginName)
     if (name === null) return
     addSlotPreset(name, {
       pluginId: slot.pluginId,
@@ -912,7 +916,9 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
               e.preventDefault()
               setMenu({ x: e.clientX, y: e.clientY, slotId: slot.id })
             }}
-            title={`${slot.pluginName} — click to ${slot.enabled ? 'disable' : 'enable'} · drag to reorder`}
+            title={slot.enabled
+              ? tf('{name} — click to disable · drag to reorder', { name: slot.pluginName })
+              : tf('{name} — click to enable · drag to reorder', { name: slot.pluginName })}
             style={{
               height: 11,
               background: isDragOver
@@ -937,11 +943,11 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
               <span
                 data-testid={`fx-slot-sc-${slot.id}`}
                 style={{ fontSize: 7, fontWeight: 700, color: '#f5a524', flexShrink: 0, letterSpacing: 0.3 }}
-                title={`Sidechain from ${tracks.find(t => t.id === slot.sidechainSource)?.name ?? 'track'}`}
+                title={tf('Sidechain from {name}', { name: tracks.find(tr => tr.id === slot.sidechainSource)?.name ?? t('track') })}
               >SC</span>
             )}
             {slot.enabled && slot.wet < 0.999 && (
-              <span style={{ fontSize: 7, color: hw.textFaint, flexShrink: 0 }} title={`Wet ${Math.round(slot.wet * 100)}%`}>
+              <span style={{ fontSize: 7, color: hw.textFaint, flexShrink: 0 }} title={tf('Wet {n}%', { n: Math.round(slot.wet * 100) })}>
                 {Math.round(slot.wet * 100)}%
               </span>
             )}
@@ -980,7 +986,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
             await setFxChainBypassed(trackId, !allBypassed)
             fetchTracks()
           }}
-          title={allBypassed ? 'Un-bypass FX chain' : 'Bypass entire FX chain'}
+          title={allBypassed ? t('Un-bypass FX chain') : t('Bypass entire FX chain')}
           data-testid={`fx-bypass-${trackId}`}
           style={{
             width: '100%', height: 10, marginTop: 2,
@@ -990,7 +996,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
             border: `1px solid ${allBypassed ? 'rgba(255, 120, 80, 0.4)' : hw.borderDark}`,
             borderRadius: hw.radius.sm, cursor: 'pointer', padding: 0,
           }}
-        >{allBypassed ? 'BYPASSED' : 'BYPASS'}</button>
+        >{allBypassed ? t('BYPASSED') : t('BYPASS')}</button>
       )}
 
       {menu && (
@@ -1016,8 +1022,8 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     setPresetMenuOpen(false)
                   }}
                   style={menuBtnStyle}
-                  title="Open the plugin in a floating panel (generic parameter fallback for plugins without a GUI)"
-                >{openPluginWindows.includes(slot.id) ? 'Plugin window open ✓' : 'Open plugin…'}</button>
+                  title={t('Open the plugin in a floating panel (generic parameter fallback for plugins without a GUI)')}
+                >{openPluginWindows.includes(slot.id) ? t('Plugin window open ✓') : t('Open plugin…')}</button>
                 <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
                 <button
                   onClick={async () => {
@@ -1026,7 +1032,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     setMenu(null)
                   }}
                   style={menuBtnStyle}
-                >{slot.enabled ? 'Disable' : 'Enable'}</button>
+                >{slot.enabled ? t('Disable') : t('Enable')}</button>
                 <button
                   disabled={idx <= 0}
                   onClick={async () => {
@@ -1035,7 +1041,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     setMenu(null)
                   }}
                   style={{ ...menuBtnStyle, opacity: idx <= 0 ? 0.3 : 1 }}
-                >Move up</button>
+                >{t('Move up')}</button>
                 <button
                   disabled={idx >= inserts.length - 1}
                   onClick={async () => {
@@ -1044,11 +1050,11 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     setMenu(null)
                   }}
                   style={{ ...menuBtnStyle, opacity: idx >= inserts.length - 1 ? 0.3 : 1 }}
-                >Move down</button>
+                >{t('Move down')}</button>
                 <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
                 <div style={{ padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: hw.textMuted }}>
-                    <span>Wet</span>
+                    <span>{t('Wet')}</span>
                     <span>{Math.round(slot.wet * 100)}%</span>
                   </div>
                   <input
@@ -1064,7 +1070,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                       setInsertWet(trackId, slot.id, 1.0).then(() => fetchTracks())
                     }}
                     style={{ width: '100%', cursor: 'pointer' }}
-                    title="Drag to blend dry/wet · double-click to reset"
+                    title={t('Drag to blend dry/wet · double-click to reset')}
                   />
                 </div>
                 <div style={{ height: 1, background: hw.border, margin: '2px 0' }} />
@@ -1075,14 +1081,14 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     setPresetMenuOpen(false)
                   }}
                   style={menuBtnStyle}
-                >Save preset…</button>
+                >{t('Save preset…')}</button>
                 <button
                   onClick={() => setPresetMenuOpen(v => !v)}
                   disabled={slotPresets.length === 0}
                   style={{ ...menuBtnStyle, opacity: slotPresets.length === 0 ? 0.4 : 1, display: 'flex', justifyContent: 'space-between' }}
-                  title={slotPresets.length === 0 ? 'No saved presets yet' : 'Load a saved preset'}
+                  title={slotPresets.length === 0 ? t('No saved presets yet') : t('Load a saved preset')}
                 >
-                  <span>Load preset</span>
+                  <span>{t('Load preset')}</span>
                   <span style={{ color: hw.textFaint, fontSize: 9 }}>
                     {slotPresets.length > 0 ? (presetMenuOpen ? '▾' : '▸') : ''}
                   </span>
@@ -1104,7 +1110,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                             setPresetMenuOpen(false)
                           }}
                           style={{ ...menuBtnStyle, flex: 1, paddingLeft: 16 }}
-                          title={`Load "${p.name}" (${p.pluginName})`}
+                          title={tf('Load "{name}" ({plugin})', { name: p.name, plugin: p.pluginName })}
                         >
                           <span style={{ fontSize: 10 }}>{p.name}</span>
                           <span style={{ fontSize: 8, color: hw.textFaint, marginLeft: 6 }}>{p.pluginName}</span>
@@ -1112,11 +1118,11 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            if (window.confirm(`Delete preset "${p.name}"?`)) {
+                            if (window.confirm(tf('Delete preset "{name}"?', { name: p.name }))) {
                               removeSlotPreset(p.id)
                             }
                           }}
-                          title="Delete preset"
+                          title={t('Delete preset')}
                           style={{ ...menuBtnStyle, color: '#e06060', padding: '4px 6px' }}
                         >×</button>
                       </div>
@@ -1131,7 +1137,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     setMenu(null)
                   }}
                   style={{ ...menuBtnStyle, color: '#e06060' }}
-                >Remove</button>
+                >{t('Remove')}</button>
               </>
             )
           })()}
@@ -1149,7 +1155,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
         const size = windowSizes[winSlotId]
         const pinned = !!windowPinned[winSlotId]
         const frameZ = pinned ? 10000 + winIdx : 300 + winIdx
-        const title = `${slot.pluginName} — ${track?.name ?? 'track'}`
+        const title = tf('{plugin} — {track}', { plugin: slot.pluginName, track: track?.name ?? t('track') })
         const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 10, color: hw.textMuted }
         const frameStyle: React.CSSProperties = size
           ? {
@@ -1199,7 +1205,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                 onClick={() => togglePluginWindowPinned(winSlotId)}
                 onMouseDown={(e) => e.stopPropagation()}
                 data-testid={`plugin-window-pin-${slot.id}`}
-                title={pinned ? 'Unpin (currently stays on top)' : 'Pin window on top'}
+                title={pinned ? t('Unpin (currently stays on top)') : t('Pin window on top')}
                 style={{
                   height: 18, padding: '0 6px', borderRadius: 3,
                   background: pinned ? 'rgba(245,165,36,0.2)' : 'transparent',
@@ -1207,23 +1213,23 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                   border: `1px solid ${pinned ? '#f5a524' : hw.borderDark}`,
                   cursor: 'pointer', fontSize: 9, letterSpacing: 0.4, lineHeight: '16px', fontWeight: 600,
                 }}
-              >{pinned ? 'PINNED' : 'PIN'}</button>
+              >{pinned ? t('PINNED') : t('PIN')}</button>
               <button
                 onClick={() => resetPluginWindow(winSlotId)}
                 onMouseDown={(e) => e.stopPropagation()}
                 data-testid={`plugin-window-reset-${slot.id}`}
-                title="Reset window position, size, and pin state"
+                title={t('Reset window position, size, and pin state')}
                 style={{
                   height: 18, padding: '0 6px', borderRadius: 3,
                   background: 'transparent', color: hw.textMuted,
                   border: `1px solid ${hw.borderDark}`, cursor: 'pointer', fontSize: 9, letterSpacing: 0.4, lineHeight: '16px',
                 }}
-              >RESET</button>
+              >{t('RESET')}</button>
               <button
                 onClick={close}
                 onMouseDown={(e) => e.stopPropagation()}
                 data-testid={`plugin-window-close-${slot.id}`}
-                title="Close"
+                title={t('Close')}
                 style={{
                   width: 18, height: 18, borderRadius: 3, padding: 0,
                   background: 'transparent', color: hw.textMuted,
@@ -1235,28 +1241,28 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
             <div style={{ flex: size ? 1 : undefined, minHeight: 0, overflowY: 'auto' }}>
               <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 5 }}>
                 <div style={rowStyle}>
-                  <span style={{ color: hw.textFaint }}>Vendor</span>
+                  <span style={{ color: hw.textFaint }}>{t('Vendor')}</span>
                   <span>{descriptor?.vendor || '—'}</span>
                 </div>
                 <div style={rowStyle}>
-                  <span style={{ color: hw.textFaint }}>Version</span>
+                  <span style={{ color: hw.textFaint }}>{t('Version')}</span>
                   <span>{descriptor?.version || '—'}</span>
                 </div>
                 <div style={rowStyle}>
-                  <span style={{ color: hw.textFaint }}>Format</span>
+                  <span style={{ color: hw.textFaint }}>{t('Format')}</span>
                   <span>{descriptor?.format || '—'}</span>
                 </div>
                 <div style={rowStyle}>
-                  <span style={{ color: hw.textFaint }}>Category</span>
+                  <span style={{ color: hw.textFaint }}>{t('Category')}</span>
                   <span>{descriptor?.category || '—'}</span>
                 </div>
                 <div style={rowStyle}>
                   <span style={{ color: hw.textFaint }}>I/O</span>
-                  <span>{descriptor ? `${descriptor.num_inputs} in / ${descriptor.num_outputs} out` : '—'}</span>
+                  <span>{descriptor ? tf('{inputs} in / {outputs} out', { inputs: descriptor.num_inputs, outputs: descriptor.num_outputs }) : '—'}</span>
                 </div>
                 <div style={rowStyle}>
-                  <span style={{ color: hw.textFaint }}>Slot</span>
-                  <span>{track?.name ?? 'track'} · #{idx + 1}</span>
+                  <span style={{ color: hw.textFaint }}>{t('Slot')}</span>
+                  <span>{track?.name ?? t('track')} · #{idx + 1}</span>
                 </div>
               </div>
 
@@ -1264,7 +1270,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
 
               <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ fontSize: 9, letterSpacing: 0.5, textTransform: 'uppercase', color: hw.textFaint }}>
-                  {descriptor?.has_editor ? 'Parameters' : 'Parameters (generic)'}
+                  {descriptor?.has_editor ? t('Parameters') : t('Parameters (generic)')}
                 </div>
                 {descriptor?.has_editor && (
                   <button
@@ -1289,7 +1295,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                       border: '1px solid rgba(220, 38, 38, 0.5)',
                       borderRadius: hw.radius.sm, cursor: 'pointer',
                     }}
-                  >Open Plugin GUI</button>
+                  >{t('Open Plugin GUI')}</button>
                 )}
                 <button
                   onClick={async () => {
@@ -1304,11 +1310,11 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     border: `1px solid ${slot.enabled ? 'rgba(124, 58, 237, 0.5)' : hw.borderDark}`,
                     borderRadius: hw.radius.sm, cursor: 'pointer',
                   }}
-                >{slot.enabled ? 'Enabled' : 'Disabled (click to enable)'}</button>
+                >{slot.enabled ? t('Enabled') : t('Disabled (click to enable)')}</button>
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: hw.textMuted }}>
-                    <span>Wet</span>
+                    <span>{t('Wet')}</span>
                     <span>{Math.round(slot.wet * 100)}%</span>
                   </div>
                   <input
@@ -1323,7 +1329,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                     onDoubleClick={() => { setInsertWet(trackId, slot.id, 1.0).then(() => fetchTracks()) }}
                     data-testid="plugin-window-wet"
                     style={{ width: '100%', cursor: 'pointer' }}
-                    title="Drag to blend dry/wet · double-click to reset"
+                    title={t('Drag to blend dry/wet · double-click to reset')}
                   />
                 </label>
 
@@ -1332,7 +1338,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: hw.textMuted }}>
-                    <span>Sidechain source</span>
+                    <span>{t('Sidechain source')}</span>
                     {slot.sidechainSource && <span style={{ color: '#f5a524', fontWeight: 700, letterSpacing: 0.5 }}>SC</span>}
                   </div>
                   <select
@@ -1348,9 +1354,9 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                       border: `1px solid ${hw.borderDark}`, borderRadius: hw.radius.sm,
                       padding: '4px 6px', cursor: 'pointer',
                     }}
-                    title="Route another track's output into this plugin's sidechain input"
+                    title={t("Route another track's output into this plugin's sidechain input")}
                   >
-                    <option value="">None</option>
+                    <option value="">{t('None')}</option>
                     {tracks
                       .filter(t => t.id !== trackId && t.kind !== 'Master')
                       .map(t => (
@@ -1375,7 +1381,7 @@ function FxSlots({ trackId, inserts }: { trackId?: string; inserts: InsertInfo[]
                 e.preventDefault()
                 e.stopPropagation()
               }}
-              title="Drag to resize"
+              title={t('Drag to resize')}
               style={{
                 position: 'absolute', right: 0, bottom: 0,
                 width: 14, height: 14, cursor: 'nwse-resize',

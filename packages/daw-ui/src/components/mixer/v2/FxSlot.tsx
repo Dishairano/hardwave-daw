@@ -6,6 +6,7 @@ import { Knob } from '../../primitives/Knob'
 import type { InsertInfo } from '../../../stores/trackStore'
 import { usePerfMetersStore } from '../../../stores/perfMetersStore'
 import { usePluginPresetStore } from '../../../stores/pluginPresetStore'
+import { t, tf, useLanguage } from '../../../i18n'
 
 export interface FxSlotProps {
   trackId: string
@@ -44,6 +45,7 @@ export interface FxSlotProps {
  * re-render slots 01/02/04..10.
  */
 export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
+  useLanguage()
   const { trackId, slotIndex, insert, onOpenPicker } = props
   const reductionDb = usePerfMetersStore(
     s => (insert ? s.gainReduction[`${trackId}:${insert.id}`] ?? 0 : 0),
@@ -146,12 +148,12 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
         void import('../../../stores/notificationStore').then(({ useNotificationStore }) => {
           useNotificationStore.getState().push('info',
             next
-              ? `${insert.pluginName} will run in its own process`
-              : `${insert.pluginName} will run inside the DAW again`,
+              ? tf('{name} will run in its own process', { name: insert.pluginName })
+              : tf('{name} will run inside the DAW again', { name: insert.pluginName }),
             {
               detail: next
-                ? 'A crash in it cannot take the song with it. It costs one buffer of latency, and its window opens on its own, beside the DAW rather than inside it. Takes effect the next time it loads.'
-                : 'Takes effect the next time it loads.',
+                ? t('A crash in it cannot take the song with it. It costs one buffer of latency, and its window opens on its own, beside the DAW rather than inside it. Takes effect the next time it loads.')
+                : t('Takes effect the next time it loads.'),
             })
         })
       })
@@ -163,7 +165,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     setMenuOpen(false)
     invoke('remove_plugin_from_track', { trackId, slotId: insert.id }).catch((e) => {
       console.error('remove_plugin_from_track failed', e)
-      useNotificationStore.getState().push('error', `Could not remove ${insert.pluginName}: ${String(e)}`)
+      useNotificationStore.getState().push('error', tf('Could not remove {name}: {error}', { name: insert.pluginName, error: String(e) }))
     })
   }, [insert, trackId])
 
@@ -197,7 +199,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
       >
         <div className="mx-fx-slot-idx">{idxLabel}</div>
         <div className="mx-fx-slot-led" />
-        <div className="mx-fx-slot-name">+ click to add plugin</div>
+        <div className="mx-fx-slot-name">{t('+ click to add plugin')}</div>
         <div />
         <div className="mx-fx-slot-wet">—</div>
       </div>
@@ -217,7 +219,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
       <div className="mx-fx-slot-led" />
       <div
         className="mx-fx-slot-name"
-        title={insert.pluginName + ' · click to open · right-click for the menu'}
+        title={tf('{name} · click to open · right-click for the menu', { name: insert.pluginName })}
         onClick={(e) => {
           // A click on the name opens the plug-in. Presets are in its
           // window's dropdown.
@@ -230,7 +232,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             limiters worked it out every sample and nothing showed it. */}
         {reductionDb < -0.1 && (
           <span
-            title={`Pulling the level down by ${Math.abs(reductionDb).toFixed(1)} dB`}
+            title={tf('Pulling the level down by {db} dB', { db: Math.abs(reductionDb).toFixed(1) })}
             style={{
               position: 'absolute', right: 2, bottom: 1, height: 2,
               // Full width at 12 dB down, which covers most mixing.
@@ -250,23 +252,23 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
           size={18}
           onChange={handleWetChange}
           onChangeEnd={handleWetCommit}
-          title="Dry / Wet"
+          title={t('Dry / Wet')}
         />
       </div>
       <div className="mx-fx-slot-wet">{Math.round(wetPct)}%</div>
       {menuOpen && (
         <div className="mx-fx-slot-menu" role="menu">
           <button role="menuitem" onClick={onBypass}>
-            {bypassed ? 'Un-bypass' : 'Bypass'}
+            {bypassed ? t('Un-bypass') : t('Bypass')}
           </button>
           <button role="menuitem" onClick={onReplace}>
-            Replace…
+            {t('Replace…')}
           </button>
           <button role="menuitem" onClick={onRemove}>
-            Remove
+            {t('Remove')}
           </button>
           <button role="menuitem" onClick={onShowGui} disabled={!insert}>
-            {usesPanel ? 'Show controls' : 'Show GUI'}
+            {usesPanel ? t('Show controls') : t('Show GUI')}
           </button>
           <button
             role="menuitem"
@@ -277,17 +279,17 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             }}
             disabled={!insert}
           >
-            Presets…
+            {t('Presets…')}
           </button>
           <button
             role="menuitem"
             onClick={onToggleSandbox}
             disabled={!insert}
             title={sandboxed
-              ? 'It runs in a process of its own: a crash cannot take the song with it, at the cost of one buffer of latency.'
-              : 'Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and its window opens on its own, beside the DAW.'}
+              ? t('It runs in a process of its own: a crash cannot take the song with it, at the cost of one buffer of latency.')
+              : t('Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and its window opens on its own, beside the DAW.')}
           >
-            {sandboxed ? 'Own process: on' : 'Own process: off'}
+            {sandboxed ? t('Own process: on') : t('Own process: off')}
           </button>
         </div>
       )}
@@ -317,6 +319,7 @@ function PresetDropdown(props: {
   pluginId: string
   onClose: () => void
 }) {
+  useLanguage()
   const { anchor, trackId, slotId, pluginId, onClose } = props
   const ref = useRef<HTMLDivElement | null>(null)
   const presets = usePluginPresetStore((s) => s.byPlugin[pluginId] ?? null)
@@ -368,7 +371,7 @@ function PresetDropdown(props: {
         type="button"
         className="mx-fx-preset-save"
         onClick={async () => {
-          const name = window.prompt('Preset name:')?.trim()
+          const name = window.prompt(t('Preset name:'))?.trim()
           if (!name) return
           try {
             await save(trackId, slotId, pluginId, name)
@@ -378,12 +381,12 @@ function PresetDropdown(props: {
           onClose()
         }}
       >
-        + Save current as preset…
+        {t('+ Save current as preset…')}
       </button>
       <div className="mx-fx-preset-list">
-        {presets == null && <div className="mx-fx-preset-empty">Loading…</div>}
+        {presets == null && <div className="mx-fx-preset-empty">{t('Loading…')}</div>}
         {presets && presets.length === 0 && (
-          <div className="mx-fx-preset-empty">No saved presets yet</div>
+          <div className="mx-fx-preset-empty">{t('No saved presets yet')}</div>
         )}
         {presets &&
           presets.map((p) => (

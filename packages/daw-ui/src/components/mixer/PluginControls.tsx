@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { usePluginPresetStore } from '../../stores/pluginPresetStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { PluginParamSheet } from './PluginParamSheet'
+import { t, useLanguage } from '../../i18n'
 
 export interface PluginControlsProps {
   trackId: string
@@ -18,6 +19,7 @@ export interface PluginControlsProps {
  * of its own beside a detached one.
  */
 export function PluginControls({ trackId, slotId, pluginId, pluginName, onClose }: PluginControlsProps) {
+  useLanguage()
   // Bumped after a preset loads, so the sliders read the new values.
   const [generation, setGeneration] = useState(0)
 
@@ -42,8 +44,8 @@ export function PluginControls({ trackId, slotId, pluginId, pluginName, onClose 
         {onClose && (
           <button
             onClick={onClose}
-            aria-label="Close"
-            title="Close (Esc)"
+            aria-label={t('Close')}
+            title={t('Close (Esc)')}
             style={{ background: 'transparent', border: 0, color: '#9a9aa6', cursor: 'pointer', fontSize: 14, lineHeight: 1 }}
           >
             ×
@@ -67,6 +69,7 @@ export function PresetSelect({ trackId, slotId, pluginId, onLoaded }: {
   pluginId: string
   onLoaded?: () => void
 }) {
+  useLanguage()
   const presets = usePluginPresetStore((s) => s.byPlugin[pluginId] ?? null)
 
   useEffect(() => {
@@ -74,12 +77,12 @@ export function PresetSelect({ trackId, slotId, pluginId, onLoaded }: {
   }, [pluginId])
 
   const report = (what: string) => (e: unknown) =>
-    useNotificationStore.getState().push('error', `${what}: ${String(e)}`)
+    useNotificationStore.getState().push('error', `${t(what)}: ${String(e)}`)
 
   const onPreset = async (value: string) => {
     if (!value) return
     if (value === '__save') {
-      const name = window.prompt('Preset name:')?.trim()
+      const name = window.prompt(t('Preset name:'))?.trim()
       if (!name) return
       await usePluginPresetStore.getState().save(trackId, slotId, pluginId, name).catch(report('Could not save the preset'))
       return
@@ -92,17 +95,17 @@ export function PresetSelect({ trackId, slotId, pluginId, onLoaded }: {
     <select
       value=""
       onChange={(e) => void onPreset(e.target.value)}
-      title="Presets"
+      title={t('Presets')}
       style={{
         flex: 1, minWidth: 0, background: '#0a0a0d', color: '#e5e5ea',
         border: '1px solid rgba(255,255,255,0.12)', fontSize: 11, padding: '3px 6px',
       }}
     >
-      <option value="">{presets == null ? 'Presets…' : presets.length ? 'Presets' : 'No presets yet'}</option>
+      <option value="">{presets == null ? t('Presets…') : presets.length ? t('Presets') : t('No presets yet')}</option>
       {(presets ?? []).map((p) => (
         <option key={p.id} value={p.id}>{p.name}</option>
       ))}
-      <option value="__save">+ Save current as preset…</option>
+      <option value="__save">{t('+ Save current as preset…')}</option>
     </select>
   )
 }

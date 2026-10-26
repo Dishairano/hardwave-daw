@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
 import { biquadDb, type BiquadKind, type LiveData, type ParamView, type PluginParam } from './pluginDraw'
 import './eqWindow.css'
+import { t, tf, useLanguage } from '../../i18n'
 
 /**
  * The EQ's window: the display is the instrument. Almost all of it is the
@@ -97,6 +98,7 @@ const GRID_F = [20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 70
 const LABEL_F: [number, string][] = [[50, '50'], [100, '100'], [200, '200'], [500, '500'], [1000, '1k'], [2000, '2k'], [5000, '5k'], [10000, '10k']]
 
 export function EqWindow(props: EqWindowProps) {
+  useLanguage()
   const { view, setParam, openMenu, live, bus, sampleRate } = props
   const bands = useMemo(() => readBands(view), [view])
   const outQ = view.par('Output Gain')
@@ -289,7 +291,7 @@ export function EqWindow(props: EqWindowProps) {
     setHover(i)
     const b = i >= 0 ? bandsRef.current[i] : null
     const text = b
-      ? `${SHAPE_NAME[b.shape]} · ${fmtF(b.f)}${NO_GAIN.has(b.shape) ? '' : ` · ${fmtG(b.g)}`} · Q ${b.q.toFixed(2)}`
+      ? `${t(SHAPE_NAME[b.shape])} · ${fmtF(b.f)}${NO_GAIN.has(b.shape) ? '' : ` · ${fmtG(b.g)}`} · Q ${b.q.toFixed(2)}`
       : `${fmtF(fOf(x))} · ${fmtG(dbOf(y))}`
     setTip({ x, y, text })
   }
@@ -346,18 +348,18 @@ export function EqWindow(props: EqWindowProps) {
         <div className="eqw-pre" onPointerDown={(e) => e.stopPropagation()}>{props.presetPicker}</div>
         <div className="eqw-sep" />
         <div className="eqw-ab" onPointerDown={(e) => e.stopPropagation()}>
-          <button className={props.ab === 'A' ? 'on' : ''} onClick={() => props.onAb('A')} title="Settings A">A</button>
-          <button className={props.ab === 'B' ? 'on' : ''} onClick={() => props.onAb('B')} title="Settings B, to compare with A">B</button>
+          <button className={props.ab === 'A' ? 'on' : ''} onClick={() => props.onAb('A')} title={t('Settings A')}>A</button>
+          <button className={props.ab === 'B' ? 'on' : ''} onClick={() => props.onAb('B')} title={t('Settings B, to compare with A')}>B</button>
         </div>
         <div className="eqw-grow" />
         <div className="eqw-tools" onPointerDown={(e) => e.stopPropagation()}>
-          <button onClick={() => setRange((r) => (r === 18 ? 12 : r === 12 ? 30 : 18))} title="Gain range of the display">±{range} dB</button>
-          <button className={analyzer ? 'on' : ''} onClick={() => setAnalyzer((a) => !a)} title="Analyzer: the sound before and after the EQ">Analyzer</button>
+          <button onClick={() => setRange((r) => (r === 18 ? 12 : r === 12 ? 30 : 18))} title={t('Gain range of the display')}>±{range} dB</button>
+          <button className={analyzer ? 'on' : ''} onClick={() => setAnalyzer((a) => !a)} title={t('Analyzer: the sound before and after the EQ')}>{t('Analyzer')}</button>
           <div className="eqw-sep" />
-          <button className={`eqw-pw${props.enabled ? '' : ' off'}`} onClick={() => props.onBypass(!props.enabled)} title={props.enabled ? 'Bypass' : 'Turn on'}>
+          <button className={`eqw-pw${props.enabled ? '' : ' off'}`} onClick={() => props.onBypass(!props.enabled)} title={props.enabled ? t('Bypass') : t('Turn on')}>
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" strokeWidth="1.6" strokeLinecap="round"><path d="M6 1.2v4" /><path d="M3.2 3a4 4 0 1 0 5.6 0" /></svg>
           </button>
-          {props.onClose && <button className="eqw-x" onClick={props.onClose} aria-label="Close" title="Close (Esc)">✕</button>}
+          {props.onClose && <button className="eqw-x" onClick={props.onClose} aria-label={t('Close')} title={t('Close (Esc)')}>✕</button>}
         </div>
       </div>
 
@@ -368,9 +370,9 @@ export function EqWindow(props: EqWindowProps) {
           onWheel={onWheel} onDoubleClick={onDoubleClick} onContextMenu={onContextMenu}
         >
           <canvas ref={canvasRef} />
-          {props.error && <div className="eqw-note">Could not read the EQ's settings: {props.error}</div>}
-          {props.ready && !bands.some((b) => b.on) && sel < 0 && <div className="eqw-empty">Double-click to add a band</div>}
-          {!props.ready && !props.error && <div className="eqw-note">Loading…</div>}
+          {props.error && <div className="eqw-note">{tf("Could not read the EQ's settings: {error}", { error: props.error })}</div>}
+          {props.ready && !bands.some((b) => b.on) && sel < 0 && <div className="eqw-empty">{t('Double-click to add a band')}</div>}
+          {!props.ready && !props.error && <div className="eqw-note">{t('Loading…')}</div>}
           {tip && <div className="eqw-tip" style={{ left: Math.min(size.current.W - 220, tip.x + 14), top: Math.max(6, tip.y - 30) }}>{tip.text}</div>}
           {selBand && selBand.p.f && (
             <BandPop
@@ -380,7 +382,7 @@ export function EqWindow(props: EqWindowProps) {
           )}
         </div>
         <div className="eqw-side">
-          <span className="eqw-lab">Out</span>
+          <span className="eqw-lab">{t('Out')}</span>
           <canvas ref={meterRef} className="eqw-meter" />
           {outQ && (
             <Knob
@@ -393,11 +395,11 @@ export function EqWindow(props: EqWindowProps) {
 
       <div className="eqw-ft">
         {bands.map((b, i) => (b.on || i === sel) && (
-          <span key={i} className={`eqw-chip${i === sel ? ' sel' : ''}${b.on ? '' : ' off'}`} onClick={() => setSel(i)} title={`${SHAPE_NAME[b.shape]}, band ${i + 1}`}>
+          <span key={i} className={`eqw-chip${i === sel ? ' sel' : ''}${b.on ? '' : ' off'}`} onClick={() => setSel(i)} title={tf('{shape}, band {n}', { shape: t(SHAPE_NAME[b.shape]), n: i + 1 })}>
             <i style={{ background: BAND_COLORS(i) }} />{fmtF(b.f)}{NO_GAIN.has(b.shape) ? '' : ` · ${fmtG(b.g)}`}
           </span>
         ))}
-        <span className="eqw-hint">{bands.some((b) => !b.on) ? 'Double-click to add a band · drag a point · scroll for Q · right-click for automation' : 'Drag a point · scroll for Q · right-click for automation'}</span>
+        <span className="eqw-hint">{bands.some((b) => !b.on) ? t('Double-click to add a band · drag a point · scroll for Q · right-click for automation') : t('Drag a point · scroll for Q · right-click for automation')}</span>
       </div>
       {props.menu}
     </div>
@@ -414,6 +416,7 @@ function BandPop({ band, colour, x, y, W, H, setParam, openMenu, automated }: {
   openMenu: (e: React.MouseEvent, q: PluginParam) => void
   automated: Set<number>
 }) {
+  useLanguage()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: 0, top: 0 })
   useLayoutEffect(() => {
@@ -430,17 +433,17 @@ function BandPop({ band, colour, x, y, W, H, setParam, openMenu, automated }: {
       {band.p.type && (
         <div className="eqw-types">
           {SHAPES.map((s, i) => (
-            <button key={s} className={band.shape === s ? 'on' : ''} title={SHAPE_NAME[s]} onClick={() => band.p.type && setParam(band.p.type, i)}>
+            <button key={s} className={band.shape === s ? 'on' : ''} title={t(SHAPE_NAME[s])} onClick={() => band.p.type && setParam(band.p.type, i)}>
               <svg width="18" height="16" viewBox="0 0 18 16" fill="none" strokeWidth="1.6" strokeLinecap="round"><path d={SHAPE_ICON[s]} /></svg>
             </button>
           ))}
         </div>
       )}
-      {band.p.f && <Knob q={band.p.f} value={band.f} label="Freq" colour={colour} log text={fmtF(band.f)} setParam={setParam} openMenu={openMenu} auto={automated.has(band.p.f.id)} />}
-      {band.p.g && <Knob q={band.p.g} value={band.g} label="Gain" colour={colour} bipolar text={fmtG(band.g)} disabled={noGain} setParam={setParam} openMenu={openMenu} auto={automated.has(band.p.g.id)} />}
+      {band.p.f && <Knob q={band.p.f} value={band.f} label={t('Freq')} colour={colour} log text={fmtF(band.f)} setParam={setParam} openMenu={openMenu} auto={automated.has(band.p.f.id)} />}
+      {band.p.g && <Knob q={band.p.g} value={band.g} label={t('Gain')} colour={colour} bipolar text={fmtG(band.g)} disabled={noGain} setParam={setParam} openMenu={openMenu} auto={automated.has(band.p.g.id)} />}
       {band.p.q && <Knob q={band.p.q} value={band.q} label="Q" colour={colour} log text={band.q.toFixed(2)} setParam={setParam} openMenu={openMenu} auto={automated.has(band.p.q.id)} />}
       {band.p.on && (
-        <button className={`eqw-pw${band.on ? '' : ' off'}`} title={band.on ? 'Turn this band off' : 'Turn this band on'} onClick={() => band.p.on && setParam(band.p.on, band.on ? band.p.on.min : band.p.on.max)}>
+        <button className={`eqw-pw${band.on ? '' : ' off'}`} title={band.on ? t('Turn this band off') : t('Turn this band on')} onClick={() => band.p.on && setParam(band.p.on, band.on ? band.p.on.min : band.p.on.max)}>
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" strokeWidth="1.6" strokeLinecap="round"><path d="M6 1.2v4" /><path d="M3.2 3a4 4 0 1 0 5.6 0" /></svg>
         </button>
       )}

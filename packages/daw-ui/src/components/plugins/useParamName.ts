@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useTrackStore, type AutomationTargetInfo } from '../../stores/trackStore'
+import { tf, useLanguage } from '../../i18n'
 
 /** Parameter names per slot, read once per session. */
 const names = new Map<string, Promise<Map<number, string>>>()
@@ -26,6 +27,7 @@ function slotNames(trackId: string, slotId: string): Promise<Map<number, string>
  * the knob nor the plug-in.
  */
 export function useAutomationTargetName(trackId: string, target: AutomationTargetInfo, plain: (t: AutomationTargetInfo) => string): string {
+  useLanguage()
   const slotId = target.kind === 'plugin_param' ? target.slotId : null
   const paramId = target.kind === 'plugin_param' ? target.paramId : null
   const plugin = useTrackStore((s) => (slotId ? s.tracks.find((t) => t.id === trackId)?.inserts?.find((i) => i.id === slotId)?.pluginName : undefined))
@@ -39,5 +41,5 @@ export function useAutomationTargetName(trackId: string, target: AutomationTarge
   if (target.kind !== 'plugin_param') return plain(target)
   const who = plugin?.replace(/^Hardwave /, '')
   if (param && who) return `${param} · ${who}`
-  return param ?? (who ? `${who} · parameter ${target.paramId}` : plain(target))
+  return param ?? (who ? tf('{plugin} · parameter {n}', { plugin: who, n: target.paramId }) : plain(target))
 }

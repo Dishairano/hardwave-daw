@@ -4,6 +4,7 @@ import { useSendStore, type SendInfo } from '../../../stores/sendStore'
 import { inputLabel, useTrackStore, type TrackInfo } from '../../../stores/trackStore'
 import { useNotificationStore } from '../../../stores/notificationStore'
 import { interfaceInputs, inputValue, parseInputValue } from './recordInputs'
+import { t, tf, useLanguage } from '../../../i18n'
 
 export interface RoutingMatrixProps {
   trackId: string
@@ -31,6 +32,7 @@ const DEFAULT_NAME = /^Insert \d+$/
  * a send copies some of it to another channel on top of that.
  */
 export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMatrixProps) {
+  useLanguage()
   const sends = useSendStore((s) => s.byTrack[trackId] ?? EMPTY_SENDS)
   const tracks = useTrackStore((s) => s.tracks)
   const self = tracks.find((t) => t.id === trackId)
@@ -63,7 +65,7 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
   // A refused route (a loop back to this channel, say) says why on screen.
   const report = (what: string) => (e: unknown) => {
     console.error(what, e)
-    useNotificationStore.getState().push('error', `${what}: ${String(e)}`)
+    useNotificationStore.getState().push('error', `${t(what)}: ${String(e)}`)
   }
 
   const setOutput = useCallback(
@@ -99,7 +101,7 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
     const ch = self.inputChannel
     inputs.push({
       value: recordsValue,
-      label: `${inputLabel(ch)} (not on this interface)`,
+      label: tf('{input} (not on this interface)', { input: inputLabel(ch) }),
       channel: ch,
     })
   }
@@ -115,13 +117,13 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
   const destinations = (exclude: Set<string>) => (
     <>
       {used.length > 0 && (
-        <optgroup label="Channels in use">
+        <optgroup label={t('Channels in use')}>
           {used.filter((t) => !exclude.has(t.id)).map((t) => (
             <option key={t.id} value={t.id}>{t.name}</option>
           ))}
         </optgroup>
       )}
-      <optgroup label="Empty inserts">
+      <optgroup label={t('Empty inserts')}>
         {empty.filter((t) => !exclude.has(t.id)).map((t) => (
           <option key={t.id} value={t.id}>{t.name}</option>
         ))}
@@ -133,9 +135,9 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
     return (
       <div className="mx-fx-routing">
         <div className="mx-fx-routing-head">
-          <h4>Routing</h4>
+          <h4>{t('Routing')}</h4>
         </div>
-        <div className="mx-fx-routing-empty">The master goes to your audio output.</div>
+        <div className="mx-fx-routing-empty">{t('The master goes to your audio output.')}</div>
       </div>
     )
   }
@@ -149,56 +151,56 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
       {self?.kind !== 'Midi' && (
         <>
           <div className="mx-fx-routing-head">
-            <h4>Records</h4>
+            <h4>{t('Records')}</h4>
           </div>
           <select
             className="mx-fx-route-select"
             value={recordsValue}
             onChange={(e) => setInput(e.target.value)}
-            title="What this channel records when it is armed: an input of the audio interface, or the sound of another channel or the master (resampling)"
+            title={t('What this channel records when it is armed: an input of the audio interface, or the sound of another channel or the master (resampling)')}
           >
-            <option value="">Audio input (from Audio settings)</option>
+            <option value="">{t('Audio input (from Audio settings)')}</option>
             {inputs.length > 0 && (
-              <optgroup label="Audio interface">
+              <optgroup label={t('Audio interface')}>
                 {inputs.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </optgroup>
             )}
-            {masterId && <option value={masterId}>Master (the whole song)</option>}
+            {masterId && <option value={masterId}>{t('Master (the whole song)')}</option>}
             {destinations(new Set())}
           </select>
           <div className="mx-fx-routing-head" style={{ marginTop: 10 }}>
-            <h4>Output</h4>
+            <h4>{t('Output')}</h4>
           </div>
         </>
       )}
       {self?.kind === 'Midi' && (
         <div className="mx-fx-routing-head">
-          <h4>Output</h4>
+          <h4>{t('Output')}</h4>
         </div>
       )}
       <select
         className="mx-fx-route-select"
         value={self?.outputBus ?? ''}
         onChange={(e) => setOutput(e.target.value)}
-        title="Where this channel's sound goes"
+        title={t("Where this channel's sound goes")}
       >
         <option value="">Master</option>
         {destinations(new Set())}
       </select>
 
       <div className="mx-fx-routing-head" style={{ marginTop: 10 }}>
-        <h4>Sends</h4>
+        <h4>{t('Sends')}</h4>
       </div>
       {sends.length === 0 && (
         <div className="mx-fx-routing-empty">
-          No sends. A send copies part of this channel to another one, for a shared reverb or delay.
+          {t('No sends. A send copies part of this channel to another one, for a shared reverb or delay.')}
         </div>
       )}
       <div className="mx-fx-route-list">
         {sends.map((send) => {
-          const dest = tracks.find((t) => t.id === send.target)?.name ?? '(missing channel)'
+          const dest = tracks.find((t) => t.id === send.target)?.name ?? t('(missing channel)')
           const active = send.enabled
           const rev = send.preFader
           const rowCls =
@@ -214,8 +216,8 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
                     .setEnabled(trackId, send.index, !active)
                     .catch(report('Could not switch the send'))
                 }
-                title={active ? 'Turn this send off' : 'Turn this send on'}
-                aria-label={active ? 'Turn send off' : 'Turn send on'}
+                title={active ? t('Turn this send off') : t('Turn this send on')}
+                aria-label={active ? t('Turn send off') : t('Turn send on')}
               />
               <div className="mx-fx-route-dest" title={dest}>{dest}</div>
               <input
@@ -239,7 +241,7 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
                 onDoubleClick={() =>
                   useSendStore.getState().setGain(trackId, send.index, 0).catch(report('Could not set the send level'))
                 }
-                title="Send level (double-click for 0 dB)"
+                title={t('Send level (double-click for 0 dB)')}
               />
               <div className="mx-fx-route-amt">{gain <= -60 ? '-∞' : gain.toFixed(1)} dB</div>
               <button
@@ -250,17 +252,17 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
                     .setPreFader(trackId, send.index, !rev)
                     .catch(report('Could not switch the send'))
                 }
-                title={rev ? 'Before the fader. Click: after the fader' : 'After the fader. Click: before the fader'}
+                title={rev ? t('Before the fader. Click: after the fader') : t('After the fader. Click: before the fader')}
               >
-                {rev ? 'pre' : 'post'}
+                {rev ? t('pre') : t('post')}
               </button>
               <button
                 className="mx-fx-route-x"
                 onClick={() =>
                   useSendStore.getState().removeSend(trackId, send.index).catch(report('Could not remove the send'))
                 }
-                title="Remove this send"
-                aria-label="Remove send"
+                title={t('Remove this send')}
+                aria-label={t('Remove send')}
               >
                 ×
               </button>
@@ -272,10 +274,10 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
         className="mx-fx-route-select"
         value=""
         onChange={(e) => addSend(e.target.value)}
-        title="Copy part of this channel to another channel"
+        title={t('Copy part of this channel to another channel')}
         style={{ marginTop: 6 }}
       >
-        <option value="">+ Send to…</option>
+        <option value="">{t('+ Send to…')}</option>
         {destinations(sentTo)}
       </select>
     </div>

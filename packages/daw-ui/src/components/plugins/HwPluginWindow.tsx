@@ -16,6 +16,7 @@ import {
 } from './pluginDraw'
 import { ParamMenu, type ParamMenuTarget } from './ParamMenu'
 import { EqWindow } from './EqWindow'
+import { t, tf, useLanguage } from '../../i18n'
 import './hwPlugin.css'
 
 export interface HwPluginWindowProps {
@@ -74,6 +75,7 @@ export function HwPluginWindow({ trackId, slotId, pluginId, pluginName, own, onC
 }
 
 function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClose, onHeaderPointerDown }: HwPluginWindowProps & { layout: PluginLayout }) {
+  useLanguage()
   const fam = FAMILY[layout.fam]
   const [params, setParams] = useState<PluginParam[] | null>(null)
   const [values, setValues] = useState<Record<number, number>>({})
@@ -264,7 +266,9 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
     setEnabled(on)
     invoke('set_insert_enabled', { trackId, slotId, enabled: on }).catch((e) => {
       setEnabled(!on)
-      useNotificationStore.getState().push('error', `Could not ${on ? 'turn on' : 'bypass'} ${pluginName}: ${String(e)}`)
+      useNotificationStore.getState().push('error', on
+        ? tf('Could not turn on {name}: {error}', { name: pluginName, error: String(e) })
+        : tf('Could not bypass {name}: {error}', { name: pluginName, error: String(e) }))
     })
   }
 
@@ -320,14 +324,14 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
       <div className="hdr" onPointerDown={onHeaderPointerDown}>
         <div>
           <div className="tile"><svg viewBox="0 0 24 24" dangerouslySetInnerHTML={{ __html: ICON[layout.fam] }} /></div>
-          <div className="nm"><b>{name}</b><small>{layout.sub}</small></div>
+          <div className="nm"><b>{name}</b><small>{t(layout.sub)}</small></div>
         </div>
         <div onPointerDown={(e) => e.stopPropagation()}>
           <PresetPicker trackId={trackId} slotId={slotId} pluginId={pluginId} onLoaded={() => setGeneration((g) => g + 1)} />
         </div>
         <div onPointerDown={(e) => e.stopPropagation()}>
-          <button className={`ab${ab === 'A' ? ' on' : ''}`} onClick={() => switchAb('A')} title="Settings A">A</button>
-          <button className={`ab${ab === 'B' ? ' on' : ''}`} onClick={() => switchAb('B')} title="Settings B, to compare with A">B</button>
+          <button className={`ab${ab === 'A' ? ' on' : ''}`} onClick={() => switchAb('A')} title={t('Settings A')}>A</button>
+          <button className={`ab${ab === 'B' ? ' on' : ''}`} onClick={() => switchAb('B')} title={t('Settings B, to compare with A')}>B</button>
         </div>
         {layout.hp && view.par(layout.hp) && (
           <div onPointerDown={(e) => e.stopPropagation()}><HeaderSeg ctx={ctx} name={layout.hp} /></div>
@@ -337,11 +341,11 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
           <div className="end" onPointerDown={(e) => e.stopPropagation()}><HeaderMix ctx={ctx} name={layout.mix} /></div>
         )}
         <div className="end" onPointerDown={(e) => e.stopPropagation()}>
-          <button className={`byp${enabled ? '' : ' off'}`} onClick={() => setBypass(!enabled)} title={enabled ? 'Bypass' : 'Turn on'}>
-            {enabled ? 'ACTIVE' : 'BYPASS'}
+          <button className={`byp${enabled ? '' : ' off'}`} onClick={() => setBypass(!enabled)} title={enabled ? t('Bypass') : t('Turn on')}>
+            {enabled ? t('ACTIVE') : t('BYPASS')}
           </button>
           {onClose && (
-            <button className="arw" onClick={onClose} aria-label="Close" title="Close (Esc)">✕</button>
+            <button className="arw" onClick={onClose} aria-label={t('Close')} title={t('Close (Esc)')}>✕</button>
           )}
         </div>
       </div>
@@ -349,9 +353,9 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
       <div className="main">
         {!layout.outOnly && <Strip label="IN" ctx={ctx} at={0} />}
         {error ? (
-          <div className="note" style={{ flex: 1, padding: 20 }}>Could not read {name}&apos;s settings: {error}</div>
+          <div className="note" style={{ flex: 1, padding: 20 }}>{tf("Could not read {name}'s settings: {error}", { name, error })}</div>
         ) : !params ? (
-          <div className="note" style={{ flex: 1, padding: 20 }}>Loading…</div>
+          <div className="note" style={{ flex: 1, padding: 20 }}>{t('Loading…')}</div>
         ) : (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
             {layout.top && <PanelView ctx={ctx} p={layout.top} />}
@@ -368,9 +372,9 @@ function WindowBody({ layout, trackId, slotId, pluginId, pluginName, own, onClos
 
       <div className="ftr">
         <span>Hardwave&nbsp;<span style={{ color: 'var(--sub)' }}>Studios</span></span>
-        <span><i className="st" style={enabled ? undefined : { background: 'var(--dim)', boxShadow: 'none' }} />{enabled ? 'Running' : 'Bypassed'}</span>
+        <span><i className="st" style={enabled ? undefined : { background: 'var(--dim)', boxShadow: 'none' }} />{enabled ? t('Running') : t('Bypassed')}</span>
         <span className="grow" />
-        <span className="r">Built in</span>
+        <span className="r">{t('Built in')}</span>
         {version && <span className="r"><b>v{version}</b></span>}
       </div>
 
@@ -418,14 +422,15 @@ interface Ctx {
 }
 
 function PanelView({ ctx, p, wide }: { ctx: Ctx; p: Panel; wide?: boolean }) {
+  useLanguage()
   const onQ = p.on ? ctx.view.par(p.on) : undefined
   const on = onQ ? ctx.view.norm(onQ) >= 0.5 : true
   return (
     <div className={`pnl${p.grow ? ' grow' : ''}`}>
       <div className="ph">
         <span className="dot" />
-        <span className="t">{p.t}</span>
-        {p.x && <span className="x">{p.x}</span>}
+        <span className="t">{t(p.t)}</span>
+        {p.x && <span className="x">{t(p.x)}</span>}
         {onQ && (
           <span
             className={`tg${on ? ' on' : ''}`}
@@ -453,6 +458,7 @@ function PanelView({ ctx, p, wide }: { ctx: Ctx; p: Panel; wide?: boolean }) {
 }
 
 function RowView({ ctx, r }: { ctx: Ctx; r: Row }) {
+  useLanguage()
   const kind = r[0]
   if (kind === 'k') return <div className="knobs">{(r.slice(1) as string[]).map((n) => <KnobFor ctx={ctx} name={n} key={n} />)}</div>
   if (kind === 'K') return <div className="knobs"><KnobFor ctx={ctx} name={r[1] as string} big /></div>
@@ -460,7 +466,7 @@ function RowView({ ctx, r }: { ctx: Ctx; r: Row }) {
   if (kind === 'w') return <SwitchRow ctx={ctx} name={r[1] as string} />
   if (kind === 'd') return <Display ctx={ctx} kind={r[1] as string} h={r[2] as number} />
   if (kind === 'r') return <Readouts ctx={ctx} items={r.slice(1) as Readout[]} />
-  if (kind === 'n') return <div className="note">{r[1] as string}</div>
+  if (kind === 'n') return <div className="note">{t(r[1] as string)}</div>
   if (kind === 'm') return <LevelRows ctx={ctx} />
   if (kind === 'g') return <GrRow ctx={ctx} />
   if (kind === 'load') return <LoadSample />
@@ -491,6 +497,7 @@ const Knob = memo(function Knob({ q, big, t, text, col, auto, onSet, denorm, onM
   q: PluginParam; big?: boolean; t: number; text: string; col: FamilyColours; auto: boolean
   onSet: (v: number) => void; denorm: (t: number) => number; onMenu: (e: React.MouseEvent) => void
 }) {
+  useLanguage()
   const size = big ? 64 : 46
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => { if (ref.current) drawKnob(ref.current, t, col) }, [t, col])
@@ -508,7 +515,7 @@ const Knob = memo(function Knob({ q, big, t, text, col, auto, onSet, denorm, onM
     c.addEventListener('pointermove', move); c.addEventListener('pointerup', up)
   }
   return (
-    <div className={`kb${big ? ' big' : ''}${auto ? ' auto' : ''}`} onContextMenu={onMenu} title={`${q.name}: ${text} · right-click for automation`}>
+    <div className={`kb${big ? ' big' : ''}${auto ? ' auto' : ''}`} onContextMenu={onMenu} title={tf('{name}: {value} · right-click for automation', { name: q.name, value: text })}>
       <span className="lbl">{short(q.name)}</span>
       <canvas
         ref={ref} width={size * 2} height={size * 2} style={{ width: size, height: size }}
@@ -523,11 +530,12 @@ const Knob = memo(function Knob({ q, big, t, text, col, auto, onSet, denorm, onM
 
 function choicesOf(view: ParamView, q: PluginParam): string[] | null {
   if (q.options && q.options.length > 1) return q.options
-  if (view.isSwitch(q)) return ['Off', 'On']
+  if (view.isSwitch(q)) return [t('Off'), t('On')]
   return null
 }
 
 function Pills({ ctx, name }: { ctx: Ctx; name: string }) {
+  useLanguage()
   const q = ctx.view.par(name)
   if (!q) return null
   const opts = choicesOf(ctx.view, q)
@@ -590,25 +598,28 @@ function HeaderMix({ ctx, name }: { ctx: Ctx; name: string }) {
 }
 
 function SwitchRow({ ctx, name }: { ctx: Ctx; name: string }) {
+  useLanguage()
   const q = ctx.view.par(name)
   if (!q) return null
   const on = ctx.view.norm(q) >= 0.5
   return (
     <div className={`sw${ctx.automated.has(q.id) ? ' auto' : ''}`} onContextMenu={(e) => ctx.openMenu(e, q)}>
       <span className="lbl">{short(name)}</span>
-      <button className={`btn${on ? ' on' : ''}`} onClick={() => ctx.setParam(q, on ? q.min : q.max)}>{on ? 'ON' : 'OFF'}</button>
+      <button className={`btn${on ? ' on' : ''}`} onClick={() => ctx.setParam(q, on ? q.min : q.max)}>{on ? t('ON') : t('OFF')}</button>
     </div>
   )
 }
 
 function Display({ ctx, kind, h }: { ctx: Ctx; kind: string; h: number }) {
+  // The corner text is drawn in the chosen language, so a change redraws it.
+  const language = useLanguage()
   const ref = useRef<HTMLCanvasElement>(null)
   const [corner, setCorner] = useState('')
   const isLive = LIVE_KINDS.has(kind) || kind === 'table'
   useEffect(() => {
     if (!ref.current) return
     setCorner(drawDisplay(ref.current, kind, ctx.view, ctx.fam, ctx.live, { eqBand: ctx.eqBand, time: performance.now() }))
-  }, [kind, ctx.view, ctx.fam, ctx.eqBand, ctx.live])
+  }, [kind, ctx.view, ctx.fam, ctx.eqBand, ctx.live, language])
   // Redraw when the window changes size, with what is current then.
   const latest = useRef(ctx)
   latest.current = ctx
@@ -632,7 +643,7 @@ function Display({ ctx, kind, h }: { ctx: Ctx; kind: string; h: number }) {
     return () => ro.disconnect()
   }, [kind])
 
-  const label = kind.startsWith('wave:') ? 'WAVE' : kind === 'gonio' ? 'STEREO FIELD' : kind.toUpperCase()
+  const label = kind.startsWith('wave:') ? t('WAVE') : kind === 'gonio' ? t('STEREO FIELD') : kind.toUpperCase()
   const drag = kind === 'xover' ? xoverDrag(ctx, ref) : undefined
   return (
     <div className={`disp${drag ? ' drag' : ''}`} style={{ height: h }}>
@@ -667,23 +678,24 @@ function xoverDrag(ctx: Ctx, ref: React.RefObject<HTMLCanvasElement | null>) {
 }
 
 function Readouts({ ctx, items }: { ctx: Ctx; items: Readout[] }) {
+  useLanguage()
   useLive(ctx.bus, items.some((r) => LIVE_READOUTS.has(r)))
   const l = ctx.live
   const fmtDb = (lin: number) => { const d = toDb(lin); return d > -100 ? `${d.toFixed(1)} dB` : '-inf' }
   const cell = (r: Readout): [string, string] => {
-    if (r === 'in') return ['Peak in', fmtDb(Math.max(l.levels[0], l.levels[1]))]
-    if (r === 'out') return ['Peak out', fmtDb(Math.max(l.levels[2], l.levels[3]))]
-    if (r === 'gr') return ['Reduction', l.gr == null ? '-' : `${l.gr.toFixed(1)} dB`]
-    if (r === 'grmax') return ['Max GR', `${l.grHistory.reduce((m, x) => Math.min(m, x), 0).toFixed(1)} dB`]
-    if (r === 'gate') return ['Gate', l.gr == null ? '-' : l.gr > -1 ? 'Open' : 'Closed']
-    if (r === 'corr') return ['Correlation', l.scope && l.scope.some((x) => x !== 0) ? correlation(l.scope).toFixed(2) : '-']
+    if (r === 'in') return [t('Peak in'), fmtDb(Math.max(l.levels[0], l.levels[1]))]
+    if (r === 'out') return [t('Peak out'), fmtDb(Math.max(l.levels[2], l.levels[3]))]
+    if (r === 'gr') return [t('Reduction'), l.gr == null ? '-' : `${l.gr.toFixed(1)} dB`]
+    if (r === 'grmax') return [t('Max GR'), `${l.grHistory.reduce((m, x) => Math.min(m, x), 0).toFixed(1)} dB`]
+    if (r === 'gate') return [t('Gate'), l.gr == null ? '-' : l.gr > -1 ? t('Open') : t('Closed')]
+    if (r === 'corr') return [t('Correlation'), l.scope && l.scope.some((x) => x !== 0) ? correlation(l.scope).toFixed(2) : '-']
     if (r === 'repeats' || r === 'tail') {
       const fb = Math.min(1, ctx.view.num('Feedback', 0) / 100)
       // Echoes until they are 60 dB down.
       const repeats = fb <= 0 ? 1 : fb >= 1 ? Infinity : Math.ceil(Math.log(0.001) / Math.log(fb))
-      if (r === 'repeats') return ['Repeats', Number.isFinite(repeats) ? String(repeats) : '∞']
+      if (r === 'repeats') return [t('Repeats'), Number.isFinite(repeats) ? String(repeats) : '∞']
       const ms = repeats * ctx.view.num('Time', 0)
-      return ['Tail', !Number.isFinite(ms) ? '∞' : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`]
+      return [t('Tail'), !Number.isFinite(ms) ? '∞' : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`]
     }
     const name = r.slice(6)
     return [name, ctx.view.t(name)]
@@ -739,9 +751,12 @@ function Strip({ label, ctx, at }: { label: string; ctx: Ctx; at: 0 | 2 }) {
 }
 
 function LoadSample() {
+  useLanguage()
+  // The menu item's name sits in the sentence wherever the language puts it.
+  const [before, after] = t('With this channel selected, right-click a sample in the browser and choose {item}.').split('{item}')
   return (
     <div className="note">
-      With this channel selected, right-click a sample in the browser and choose <b style={{ color: 'var(--txt)' }}>Send to selected channel</b>.
+      {before}<b style={{ color: 'var(--txt)' }}>{t('Send to selected channel')}</b>{after}
     </div>
   )
 }
@@ -749,10 +764,11 @@ function LoadSample() {
 // --------------------------------------------------------------- presets
 
 function PresetPicker({ trackId, slotId, pluginId, onLoaded }: { trackId: string; slotId: string; pluginId: string; onLoaded: () => void }) {
+  useLanguage()
   const presets = usePluginPresetStore((s) => s.byPlugin[pluginId] ?? null)
   const currentId = usePluginPresetStore((s) => s.currentPresetId(trackId, slotId, pluginId))
   useEffect(() => { usePluginPresetStore.getState().refresh(pluginId).catch(() => { /* stays empty */ }) }, [pluginId])
-  const report = (what: string) => (e: unknown) => useNotificationStore.getState().push('error', `${what}: ${String(e)}`)
+  const report = (what: string) => (e: unknown) => useNotificationStore.getState().push('error', `${t(what)}: ${String(e)}`)
   const current = presets?.find((p) => p.id === currentId)
 
   const step = async (d: 1 | -1) => {
@@ -762,7 +778,7 @@ function PresetPicker({ trackId, slotId, pluginId, onLoaded }: { trackId: string
   const pick = async (value: string) => {
     if (!value) return
     if (value === '__save') {
-      const name = window.prompt('Preset name:')?.trim()
+      const name = window.prompt(t('Preset name:'))?.trim()
       if (!name) return
       await usePluginPresetStore.getState().save(trackId, slotId, pluginId, name).catch(report('Could not save the preset'))
       return
@@ -773,16 +789,16 @@ function PresetPicker({ trackId, slotId, pluginId, onLoaded }: { trackId: string
   const none = !presets?.length
   return (
     <>
-      <button className="arw" onClick={() => void step(-1)} disabled={none} title="Previous preset">◀</button>
-      <label className="preset" title="Presets">
+      <button className="arw" onClick={() => void step(-1)} disabled={none} title={t('Previous preset')}>◀</button>
+      <label className="preset" title={t('Presets')}>
         <select value="" onChange={(e) => void pick(e.target.value)}>
-          <option value="">{current?.name ?? (presets == null ? 'Presets…' : none ? 'Init' : 'Presets')}</option>
+          <option value="">{current?.name ?? (presets == null ? t('Presets…') : none ? t('Init') : t('Presets'))}</option>
           {(presets ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          <option value="__save">+ Save current as preset…</option>
+          <option value="__save">{t('+ Save current as preset…')}</option>
         </select>
         <i>▾</i>
       </label>
-      <button className="arw" onClick={() => void step(1)} disabled={none} title="Next preset">▶</button>
+      <button className="arw" onClick={() => void step(1)} disabled={none} title={t('Next preset')}>▶</button>
     </>
   )
 }

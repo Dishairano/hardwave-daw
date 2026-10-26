@@ -4,12 +4,14 @@ import { Fader } from '../../primitives/Fader'
 import { DbScale } from './DbScale'
 import { useVcaStore, type Vca } from '../../../stores/vcaStore'
 import { useTrackStore } from '../../../stores/trackStore'
+import { t, tf, useLanguage } from '../../../i18n'
 
 /**
  * One VCA fader in the mixer: an amber cap, a mute, a fader that moves every
  * member by the same amount, and the list of its members.
  */
 export const VcaStrip = memo(function VcaStrip({ vca, index }: { vca: Vca; index: number }) {
+  useLanguage()
   const store = useVcaStore.getState()
   const [membersAt, setMembersAt] = useState<{ x: number; y: number } | null>(null)
   const count = vca.members.length
@@ -21,9 +23,9 @@ export const VcaStrip = memo(function VcaStrip({ vca, index }: { vca: Vca; index
       </div>
       <div
         className="mx-s-name"
-        title="Double-click to rename"
+        title={t('Double-click to rename')}
         onDoubleClick={() => {
-          const name = window.prompt('VCA name:', vca.name)?.trim()
+          const name = window.prompt(t('VCA name:'), vca.name)?.trim()
           if (name && name !== vca.name) void store.rename(vca.id, name)
         }}
       >
@@ -33,18 +35,18 @@ export const VcaStrip = memo(function VcaStrip({ vca, index }: { vca: Vca; index
         <button
           className={'mx-pill mx-pill-m' + (vca.muted ? ' on' : '')}
           onClick={() => { void store.setMuted(vca.id, !vca.muted) }}
-          title={vca.muted ? 'Unmute every track in this VCA' : 'Mute every track in this VCA (their own mute buttons stay as they are)'}
+          title={vca.muted ? t('Unmute every track in this VCA') : t('Mute every track in this VCA (their own mute buttons stay as they are)')}
         >
           M
         </button>
       </div>
-      <div className="mx-vca-count">{count === 1 ? '1 track' : `${count} tracks`}</div>
+      <div className="mx-vca-count">{count === 1 ? t('1 track') : tf('{n} tracks', { n: count })}</div>
       <div className="mx-s-fader-meter">
         <div className="mx-fader-col">
           <Fader
             valueDb={vca.gain_db}
             onChange={(db) => store.setGainLive(vca.id, db)}
-            title="Moves every member by the same amount"
+            title={t('Moves every member by the same amount')}
           />
         </div>
         <DbScale />
@@ -58,7 +60,7 @@ export const VcaStrip = memo(function VcaStrip({ vca, index }: { vca: Vca; index
           setMembersAt({ x: r.left, y: r.top })
         }}
       >
-        Members…
+        {t('Members…')}
       </button>
       {membersAt && (
         <VcaMembers vca={vca} at={membersAt} onClose={() => setMembersAt(null)} />
@@ -68,6 +70,7 @@ export const VcaStrip = memo(function VcaStrip({ vca, index }: { vca: Vca; index
 })
 
 function VcaMembers({ vca, at, onClose }: { vca: Vca; at: { x: number; y: number }; onClose: () => void }) {
+  useLanguage()
   const tracks = useTrackStore(s => s.tracks)
   const store = useVcaStore.getState()
   const ref = useRef<HTMLDivElement>(null)
@@ -95,7 +98,7 @@ function VcaMembers({ vca, at, onClose }: { vca: Vca; at: { x: number; y: number
       className="mx-vca-pop"
       style={{ left: Math.min(at.x, window.innerWidth - 250), top: Math.max(8, Math.min(at.y - height, window.innerHeight - height - 8)), maxHeight: height }}
     >
-      <h4>{vca.name}: members</h4>
+      <h4>{tf('{name}: members', { name: vca.name })}</h4>
       <div className="mx-vca-list">
         {candidates.map(t => (
           <label key={t.id}>
@@ -109,7 +112,7 @@ function VcaMembers({ vca, at, onClose }: { vca: Vca; at: { x: number; y: number
         className="mx-vca-delete"
         onClick={() => { onClose(); void store.remove(vca.id) }}
       >
-        Delete this VCA
+        {t('Delete this VCA')}
       </button>
     </div>,
     document.body,

@@ -9,6 +9,7 @@ import { RoutingMatrix } from './RoutingMatrix'
 import { FxSlot } from './FxSlot'
 import { PluginPickerFlyout } from '../../plugin-picker/PluginPickerFlyout'
 import { invoke } from '@tauri-apps/api/core'
+import { t, tf, useLanguage } from '../../../i18n'
 
 // Lazy: the modal pulls in the category sidebar + full plug-in list
 // renderer. It only matters when the user clicks "Search more…", so
@@ -44,6 +45,7 @@ const SLOT_COUNT = 10
  * right slot.
  */
 export const FxRackPanel = memo(function FxRackPanel() {
+  useLanguage()
   const selectedId = useMixerSelectionStore((s) => s.selectedTrackId)
   const track = useTrackById(selectedId ?? '')
 
@@ -93,7 +95,7 @@ export const FxRackPanel = memo(function FxRackPanel() {
         .then(() => useTrackStore.getState().refreshTrack(targetTrackId))
         .catch((e) => {
           console.error('add_plugin_to_track failed', e)
-          useNotificationStore.getState().push('error', `The plug-in did not load: ${String(e)}`)
+          useNotificationStore.getState().push('error', tf('The plug-in did not load: {error}', { error: String(e) }))
         })
     },
     [track, closeAll],
@@ -102,7 +104,7 @@ export const FxRackPanel = memo(function FxRackPanel() {
   if (!track) {
     return (
       <div className="mx-fx-rack">
-        <div className="mx-fx-rack-empty">No track selected</div>
+        <div className="mx-fx-rack-empty">{t('No track selected')}</div>
       </div>
     )
   }
@@ -114,8 +116,8 @@ export const FxRackPanel = memo(function FxRackPanel() {
   const isMaster = track.kind === 'Master'
   const badge = isMaster ? 'M' : (track.name.match(/\d+/)?.[0] ?? track.kind[0] ?? '·')
   const roleLine = isMaster
-    ? 'Master · Stereo · final output'
-    : `${track.kind} · ${track.muted ? 'muted' : 'active'}`
+    ? t('Master · Stereo · final output')
+    : track.muted ? tf('{kind} · muted', { kind: track.kind }) : tf('{kind} · active', { kind: track.kind })
 
   // Pad inserts up to SLOT_COUNT so the row count is always 10.
   const insertsPadded = Array.from({ length: SLOT_COUNT }, (_, i) => track.inserts[i])
@@ -137,7 +139,7 @@ export const FxRackPanel = memo(function FxRackPanel() {
 
       <div className="mx-fx-slots">
         <h4>
-          FX Slots <span>{SLOT_COUNT} of {SLOT_COUNT} · {activeCount} active</span>
+          {t('FX Slots')} <span>{tf('{n} of {total} · {active} active', { n: SLOT_COUNT, total: SLOT_COUNT, active: activeCount })}</span>
         </h4>
         {insertsPadded.map((insert, i) => (
           <FxSlot
