@@ -23,6 +23,7 @@ import { useNotificationStore } from '../../stores/notificationStore'
 import { useHistoryStore } from '../../stores/historyStore'
 import { usePickerStore } from '../../stores/pickerStore'
 import { usePlaylistToolStore } from '../../stores/playlistToolStore'
+import { rippleMoveShifts } from '../../stores/ripple'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { useColorPickerStore } from '../../stores/colorPickerStore'
 import { useLogStore } from '../../dev/logStore'
@@ -87,6 +88,8 @@ interface DragState {
   originalFadeInTicks: number
   originalFadeOutTicks: number
   groupMoveOriginals?: { clipId: string; trackId: string; origPos: number }[]
+  /** The clip went to another track during the drag: no ripple then. */
+  crossedTracks?: boolean
   /** The other clips' edges and the markers, for magnetic snap. Gathered on
    *  the first move of a drag and kept for the rest of it. */
   snapTargets?: number[]
@@ -230,6 +233,44 @@ const PLAYHEAD_CARET: React.CSSProperties = {
 }
 
 /** Size a canvas's backing store for a CSS size; false when it already was. */
+/** Persist a ripple move: the dragged clip, its group, and on each of their
+ *  tracks every clip after them, moved by `delta`, as one undo step. The
+ *  drag moved the dragged clips in the store already; the rest move here. */
+async function commitRippleMove(drag: DragState, delta: number) {
+  const store = useTrackStore.getState()
+  const members = [
+    { clipId: drag.clipId, trackId: drag.trackId, origPos: drag.originalPositionTicks },
+    ...(drag.groupMoveOriginals ?? []),
+  ]
+  const byTrack = new Map<string, typeof members>()
+  for (const m of members) byTrack.set(m.trackId, [...(byTrack.get(m.trackId) ?? []), m])
+  await store.beginHistoryGroup()
+  try {
+    for (const [trackId, moved] of byTrack) {
+      const track = useTrackStore.getState().tracks.find(t => t.id === trackId)
+      if (!track) continue
+      const ids = new Set(moved.map(m => m.clipId))
+      const from = Math.min(...moved.map(m => m.origPos))
+      // Where the other clips were before the drag: the store holds them
+      // there still, since only the dragged ones moved.
+      const shifts = rippleMoveShifts(track.clips ?? [], ids, from, delta)
+      const all = [
+        ...moved.map(m => [m.clipId, Math.max(0, m.origPos + delta)] as [string, number]),
+        ...shifts.entries(),
+      ]
+      // Moving later: the last clip first, so none lands on one yet to move;
+      // moving earlier: the first first.
+      all.sort((a, b) => (delta > 0 ? b[1] - a[1] : a[1] - b[1]))
+      for (const [clipId, newPositionTicks] of all) {
+        await invoke('move_clip', { trackId, clipId, newPositionTicks })
+      }
+    }
+  } finally {
+    await store.endHistoryGroup(members.length === 1 ? 'Move clip, and the clips after it' : `Move ${members.length} clips, and the clips after them`)
+  }
+  await useTrackStore.getState().fetchTracks()
+}
+
 function fitCanvas(canvas: HTMLCanvasElement, w: number, h: number, dpr: number): boolean {
   const pw = Math.round(w * dpr)
   const ph = Math.round(h * dpr)
@@ -1836,6 +1877,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         // track as the source (otherwise the clip would teleport back
         // every frame).
         drag.trackId = targetTrack.id
+        drag.crossedTracks = true
       } else {
         // Hot path — fires every mousemove. Local-only update keeps the
         // 60fps drag fluid even with 500 pre-allocated tracks. The
@@ -1951,6 +1993,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       if (liveClip && drag.mode === 'resize-left') {
         commitClipTrimStart(drag.trackId, drag.clipId, liveClip.position_ticks)
           .catch(err => console.error('commitClipTrimStart failed', err))
+      } else if (liveClip && drag.mode === 'move' && !drag.crossedTracks
+        && usePlaylistToolStore.getState().ripple
+        && liveClip.position_ticks !== drag.originalPositionTicks) {
+        // Ripple editing: the clips after the moved ones move with them,
+        // as one undo step.
+        void commitRippleMove(drag, liveClip.position_ticks - drag.originalPositionTicks)
+          .catch(err => console.error('ripple move failed', err))
+        dragRef.current = null
+        forceRender(n => n + 1)
+        return
       } else if (liveClip) {
         const lengthArg = drag.mode === 'move' ? undefined : liveClip.length_ticks
         commitClipDrag(drag.trackId, drag.clipId, liveClip.position_ticks, lengthArg)

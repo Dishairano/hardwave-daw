@@ -36,9 +36,16 @@ export type PlaylistTool =
 interface PlaylistToolState {
   tool: PlaylistTool
   setTool: (t: PlaylistTool) => void
+  /** Ripple editing: moving a clip moves every clip after it on the same
+   *  track by as much, so an intro made longer pushes the song back
+   *  instead of running into it. Off at every start, so it never surprises. */
+  ripple: boolean
+  toggleRipple: () => void
 }
 
 export const usePlaylistToolStore = create<PlaylistToolState>((set) => ({
   tool: 'draw',
   setTool: (tool) => set({ tool }),
+  ripple: false,
+  toggleRipple: () => set((s) => ({ ripple: !s.ripple })),
 }))
