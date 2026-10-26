@@ -271,6 +271,40 @@ async function commitRippleMove(drag: DragState, delta: number) {
   await useTrackStore.getState().fetchTracks()
 }
 
+/** A MIDI clip's notes inside its body (see the call in drawClip). */
+function drawNotePreview(
+  ctx: CanvasRenderingContext2D,
+  notes: [number, number, number][],
+  color: string,
+  muted: boolean,
+  x: number, y: number, w: number, h: number,
+  pxPerTick: number,
+) {
+  let lo = 127, hi = 0
+  for (const n of notes) { if (n[2] < lo) lo = n[2]; if (n[2] > hi) hi = n[2] }
+  // At least an octave of room, so a part on one note sits mid-clip
+  // rather than as a bar along the top.
+  const span = Math.max(12, hi - lo + 1)
+  const mid = (lo + hi) / 2
+  const low = mid - span / 2
+  const pad = 2
+  const rowH = Math.max(1, Math.min(4, (h - pad * 2) / span))
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(x + 1, y, w - 2, h - 1)
+  ctx.clip()
+  ctx.fillStyle = muted ? '#52525b' : mixHex(color, '#ffffff', 0.35)
+  ctx.globalAlpha = muted ? 0.5 : 0.9
+  for (const [start, len, pitch] of notes) {
+    const nx = x + start * pxPerTick
+    if (nx > x + w) continue
+    const nw = Math.max(1, len * pxPerTick - 1)
+    const ny = y + pad + (1 - (pitch - low + 0.5) / span) * (h - pad * 2) - rowH / 2
+    ctx.fillRect(nx, ny, Math.min(nw, x + w - nx), rowH)
+  }
+  ctx.restore()
+}
+
 function fitCanvas(canvas: HTMLCanvasElement, w: number, h: number, dpr: number): boolean {
   const pw = Math.round(w * dpr)
   const ph = Math.round(h * dpr)
@@ -1058,6 +1092,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.beginPath()
       ctx.roundRect(x + 0.75, y + 0.75, w - 1.5, h - 1.5, radius)
       ctx.stroke()
+    }
+
+    // A MIDI clip shows its notes, as FL shows a pattern in the playlist: a
+    // thin bar per note, the clip's own lowest to highest note filling the
+    // body, so a bass line and a lead read differently at a glance.
+    if (clip.kind === 'midi' && clip.notePreview?.length && h - headerH > 6) {
+      drawNotePreview(ctx, clip.notePreview, color, clip.muted, x, y + headerH, w, h - headerH, pxPerTick)
     }
 
     // Waveform — pick the best available tier: prefer the current one, else fallback
