@@ -1,32 +1,86 @@
-//! Convolution reverb — direct-form time-domain convolution of an
-//! impulse response with an input signal. Suitable for short IRs;
-//! an FFT-based partitioned convolution would scale better for long
-//! IRs but this primitive covers the core feature set the roadmap
-//! calls out (load/trim/pre-delay/EQ/low-CPU mode).
+//! Convolution reverb: an impulse response convolved with the input.
+//!
+//! It was direct-form, every sample multiplied against the whole impulse:
+//! the default 1.8 s plate is 86,000 multiply-adds per sample per channel,
+//! about eight billion a second, which no processor plays in real time.
+//! Putting the reverb on a track overloaded the audio thread.
+//!
+//! Now it is partitioned. The first `HEAD` taps stay direct, so nothing is
+//! delayed; the rest of the impulse is cut into blocks of `HEAD` samples
+//! whose spectra are kept, and each block of input is turned into a
+//! spectrum once and multiplied with all of them (uniformly partitioned
+//! overlap-save, with the input's spectra in a frequency-domain delay
+//! line). That is about a hundred times less work. Every buffer and the
+//! FFT plans are made when the reverb is made, so nothing allocates while
+//! it plays.
+
+use std::sync::Arc;
+
+use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 
 use crate::biquad::{Biquad, BiquadKind};
 
-/// Max IR length in samples — 2 seconds at 48 kHz. Past this, the
-/// direct convolution becomes expensive and callers should use
-/// `set_low_cpu_mode` to truncate the IR further.
+/// Max IR length in samples — 2 seconds at 48 kHz. Longer impulses are
+/// cut; `set_low_cpu_mode` shortens them further.
 pub const MAX_IR_SAMPLES: usize = 96_000;
 
-/// Single-channel convolution engine. Holds the IR and a ring buffer
-/// of recent input samples. For stereo, instantiate two instances.
+/// Taps convolved directly, and the partition size of the rest.
+const HEAD: usize = 256;
+/// The FFT size: two partitions, for overlap-save.
+const FFT_N: usize = 2 * HEAD;
+/// Bins kept of a real signal's spectrum (the rest mirror them).
+const BINS: usize = HEAD + 1;
+/// Partitions of the tail, for the longest impulse.
+const MAX_PARTS: usize = (MAX_IR_SAMPLES - HEAD).div_ceil(HEAD);
+
+/// Single-channel convolution engine. For stereo, instantiate two.
 struct ConvolutionChannel {
     ir: Vec<f32>,
-    input_ring: Vec<f32>,
-    ring_pos: usize,
     effective_len: usize,
+    /// The last `HEAD` input samples, for the direct head.
+    head_ring: Vec<f32>,
+    head_pos: usize,
+    /// The tail's partitions as spectra, `BINS` each, and how many count.
+    parts: Vec<Complex32>,
+    active_parts: usize,
+    /// The input blocks' spectra, newest at `fdl_pos`.
+    fdl: Vec<Complex32>,
+    fdl_pos: usize,
+    /// The previous block and the one filling, time domain.
+    in_block: Vec<f32>,
+    in_fill: usize,
+    /// The tail's output for the block now playing.
+    out_block: Vec<f32>,
+    work: Vec<Complex32>,
+    scratch: Vec<Complex32>,
+    fft: Arc<dyn Fft<f32>>,
+    ifft: Arc<dyn Fft<f32>>,
 }
 
 impl ConvolutionChannel {
     fn new() -> Self {
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_N);
+        let ifft = planner.plan_fft_inverse(FFT_N);
+        let scratch_len = fft
+            .get_inplace_scratch_len()
+            .max(ifft.get_inplace_scratch_len());
         Self {
-            ir: Vec::new(),
-            input_ring: vec![0.0; MAX_IR_SAMPLES],
-            ring_pos: 0,
+            ir: Vec::with_capacity(MAX_IR_SAMPLES),
             effective_len: 0,
+            head_ring: vec![0.0; HEAD],
+            head_pos: 0,
+            parts: vec![Complex32::new(0.0, 0.0); MAX_PARTS * BINS],
+            active_parts: 0,
+            fdl: vec![Complex32::new(0.0, 0.0); MAX_PARTS * BINS],
+            fdl_pos: 0,
+            in_block: vec![0.0; FFT_N],
+            in_fill: 0,
+            out_block: vec![0.0; HEAD],
+            work: vec![Complex32::new(0.0, 0.0); FFT_N],
+            scratch: vec![Complex32::new(0.0, 0.0); scratch_len],
+            fft,
+            ifft,
         }
     }
 
@@ -35,42 +89,141 @@ impl ConvolutionChannel {
         self.ir.clear();
         self.ir.extend_from_slice(&samples[..n]);
         self.effective_len = n;
+        self.active_parts = n.saturating_sub(HEAD).div_ceil(HEAD);
+        for p in 0..MAX_PARTS {
+            self.partition_spectrum(p);
+        }
     }
 
+    /// An impulse and its partitions' spectra made elsewhere: copied in,
+    /// with no FFT and no allocation, so it can happen while playing.
+    fn load_prepared(&mut self, ir: &[f32], parts: &[Complex32]) {
+        let n = ir.len().min(MAX_IR_SAMPLES);
+        self.ir.clear();
+        self.ir.extend_from_slice(&ir[..n]);
+        self.parts.copy_from_slice(parts);
+        self.effective_len = n;
+        self.active_parts = n.saturating_sub(HEAD).div_ceil(HEAD);
+    }
+
+    /// Tail partition `p`'s spectrum: its HEAD taps up to the trim,
+    /// zero-padded to FFT_N.
+    fn partition_spectrum(&mut self, p: usize) {
+        let from = HEAD + p * HEAD;
+        let end = self.effective_len;
+        for (k, w) in self.work.iter_mut().enumerate() {
+            let tap = from + k;
+            let v = if k < HEAD && tap < end {
+                self.ir[tap]
+            } else {
+                0.0
+            };
+            *w = Complex32::new(v, 0.0);
+        }
+        self.fft
+            .process_with_scratch(&mut self.work, &mut self.scratch);
+        self.parts[p * BINS..(p + 1) * BINS].copy_from_slice(&self.work[..BINS]);
+    }
+
+    /// Keep only the first `trim_samples` taps. The partitions holding the
+    /// old and the new end are worked out again, so the cut is exact and
+    /// a longer trim brings the taps back. One FFT each, no allocation.
     fn set_trim(&mut self, trim_samples: usize) {
+        let old_end = self.effective_len;
         self.effective_len = trim_samples.min(self.ir.len());
+        self.active_parts = self.effective_len.saturating_sub(HEAD).div_ceil(HEAD);
+        for end in [old_end, self.effective_len] {
+            if end > HEAD {
+                let p = (end - HEAD - 1) / HEAD;
+                if p < MAX_PARTS {
+                    self.partition_spectrum(p);
+                }
+            }
+        }
     }
 
     fn reset(&mut self) {
-        for s in self.input_ring.iter_mut() {
-            *s = 0.0;
-        }
-        self.ring_pos = 0;
+        self.head_ring.fill(0.0);
+        self.head_pos = 0;
+        self.fdl.fill(Complex32::new(0.0, 0.0));
+        self.fdl_pos = 0;
+        self.in_block.fill(0.0);
+        self.in_fill = 0;
+        self.out_block.fill(0.0);
     }
 
     fn process(&mut self, input: f32) -> f32 {
-        self.input_ring[self.ring_pos] = input;
-        let len = self.effective_len;
-        if len == 0 {
-            self.ring_pos = (self.ring_pos + 1) % self.input_ring.len();
-            return 0.0;
+        // The head, direct: the newest sample against the first taps.
+        self.head_ring[self.head_pos] = input;
+        let head_len = self.effective_len.min(HEAD);
+        let mut head = 0.0_f32;
+        for (k, &coef) in self.ir[..head_len].iter().enumerate() {
+            head += coef * self.head_ring[(self.head_pos + HEAD - k) % HEAD];
         }
-        let ring_len = self.input_ring.len();
-        let mut sum = 0.0_f32;
-        for (i, &coef) in self.ir[..len].iter().enumerate() {
-            let idx = (self.ring_pos + ring_len - i) % ring_len;
-            sum += self.input_ring[idx] * coef;
+        self.head_pos = (self.head_pos + 1) % HEAD;
+
+        // The tail for this sample was worked out at the end of the
+        // previous block.
+        let tail = self.out_block[self.in_fill];
+        self.in_block[HEAD + self.in_fill] = input;
+        self.in_fill += 1;
+        if self.in_fill == HEAD {
+            self.next_block();
         }
-        self.ring_pos = (self.ring_pos + 1) % ring_len;
-        sum
+        head + tail
     }
+
+    /// A block of input is complete: keep its spectrum and work out the
+    /// tail's output for the next block from every partition.
+    fn next_block(&mut self) {
+        self.in_fill = 0;
+        if self.active_parts == 0 {
+            self.out_block.fill(0.0);
+            self.in_block.copy_within(HEAD.., 0);
+            return;
+        }
+        for (w, &x) in self.work.iter_mut().zip(self.in_block.iter()) {
+            *w = Complex32::new(x, 0.0);
+        }
+        self.fft
+            .process_with_scratch(&mut self.work, &mut self.scratch);
+        let at = self.fdl_pos * BINS;
+        self.fdl[at..at + BINS].copy_from_slice(&self.work[..BINS]);
+        // Y = sum over partitions q of X(newest - q) * H(q).
+        self.work.fill(Complex32::new(0.0, 0.0));
+        for q in 0..self.active_parts {
+            let x = ((self.fdl_pos + MAX_PARTS - q) % MAX_PARTS) * BINS;
+            let h = q * BINS;
+            for b in 0..BINS {
+                self.work[b] += self.fdl[x + b] * self.parts[h + b];
+            }
+        }
+        // A real signal's spectrum mirrors itself.
+        for b in 1..HEAD {
+            self.work[FFT_N - b] = self.work[b].conj();
+        }
+        self.ifft
+            .process_with_scratch(&mut self.work, &mut self.scratch);
+        let scale = 1.0 / FFT_N as f32;
+        for (o, w) in self.out_block.iter_mut().zip(self.work[HEAD..].iter()) {
+            *o = w.re * scale;
+        }
+        self.fdl_pos = (self.fdl_pos + 1) % MAX_PARTS;
+        self.in_block.copy_within(HEAD.., 0);
+    }
+}
+
+/// An impulse response with its partitions' spectra worked out, so a
+/// reverb can switch to it while playing (see `ConvolutionReverb::prepare_ir`).
+pub struct PreparedIr {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    parts_left: Vec<Complex32>,
+    parts_right: Vec<Complex32>,
 }
 
 /// Stereo convolution reverb with pre-delay, dry/wet mix, IR
 /// length trim (low-CPU mode), and optional stereo width + tail EQ.
-/// Convolution itself is direct-form (O(IR_len) per sample); for
-/// long IRs this is CPU-heavy — the length-trim knob is the
-/// low-CPU escape hatch.
 pub struct ConvolutionReverb {
     left: ConvolutionChannel,
     right: ConvolutionChannel,
@@ -117,6 +270,26 @@ impl ConvolutionReverb {
     pub fn load_ir_stereo(&mut self, left: &[f32], right: &[f32]) {
         self.left.load_ir(left);
         self.right.load_ir(right);
+    }
+
+    /// Work out an impulse ahead, off the audio thread: loading it with
+    /// `load_ir_stereo` takes hundreds of FFTs and allocates, too much for
+    /// a preset change while playing. Leaves the reverb loaded with it.
+    pub fn prepare_ir(&mut self, left: &[f32], right: &[f32]) -> PreparedIr {
+        self.load_ir_stereo(left, right);
+        PreparedIr {
+            left: self.left.ir.clone(),
+            right: self.right.ir.clone(),
+            parts_left: self.left.parts.clone(),
+            parts_right: self.right.parts.clone(),
+        }
+    }
+
+    /// Switch to an impulse made by `prepare_ir`: copies only, safe while
+    /// playing.
+    pub fn load_prepared(&mut self, ir: &PreparedIr) {
+        self.left.load_prepared(&ir.left, &ir.parts_left);
+        self.right.load_prepared(&ir.right, &ir.parts_right);
     }
 
     /// IR length trim in samples. Low-CPU mode is just a strong trim
@@ -354,5 +527,40 @@ mod tests {
         let (l, r) = c.process(0.0, 0.0);
         assert_eq!(l, 0.0);
         assert_eq!(r, 0.0);
+    }
+
+    /// The partitioned engine gives what a plain direct convolution gives,
+    /// sample for sample, for an impulse many partitions long, from the
+    /// first output sample (no added delay); and after a trim, only the
+    /// kept taps count.
+    #[test]
+    fn partitioned_matches_direct_convolution() {
+        let mut seed = 7u32;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        let ir: Vec<f32> = (0..5_000)
+            .map(|i| rnd() * (-(i as f32) / 1_500.0).exp())
+            .collect();
+        let input: Vec<f32> = (0..3_000).map(|_| rnd()).collect();
+        let direct = |taps: usize, n: usize| -> f32 {
+            (0..taps.min(n + 1)).map(|k| ir[k] * input[n - k]).sum()
+        };
+        let mut ch = ConvolutionChannel::new();
+        ch.load_ir(&ir);
+        let mut worst = 0.0_f32;
+        for (n, &x) in input.iter().enumerate() {
+            worst = worst.max((ch.process(x) - direct(ir.len(), n)).abs());
+        }
+        assert!(worst < 1e-3, "differs from direct convolution by {worst}");
+
+        ch.reset();
+        ch.set_trim(1_000);
+        let mut worst = 0.0_f32;
+        for (n, &x) in input.iter().enumerate() {
+            worst = worst.max((ch.process(x) - direct(1_000, n)).abs());
+        }
+        assert!(worst < 1e-3, "after a trim: {worst}");
     }
 }

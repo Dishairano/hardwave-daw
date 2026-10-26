@@ -4,7 +4,7 @@
 //! features level: pick a space, set mix, pre-delay, tail tone.
 
 use crate::format;
-use hardwave_dsp::convolution::ConvolutionReverb;
+use hardwave_dsp::convolution::{ConvolutionReverb, PreparedIr};
 use hardwave_dsp::ir_library::{synthesize_ir, IrPreset};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
@@ -84,6 +84,11 @@ pub struct NativeConvReverb {
     descriptor: PluginDescriptor,
     sample_rate: f32,
     rev: ConvolutionReverb,
+    /// Every space's impulse, worked out when the reverb starts or its
+    /// rate changes, so picking another space while playing is a copy.
+    /// It used to synthesize and transform the impulse on the audio
+    /// thread: allocations and hundreds of FFTs in one block.
+    bank: Vec<PreparedIr>,
     preset: IrPreset,
     pre_delay_ms: f32,
     low_cpu: f32,
@@ -116,8 +121,8 @@ impl NativeConvReverb {
     pub fn new() -> Self {
         let sr = 48_000.0_f32;
         let mut rev = ConvolutionReverb::new(sr);
-        let (l, r) = synthesize_ir(IrPreset::Plate, sr);
-        rev.load_ir_stereo(&l, &r);
+        let bank = prepare_bank(&mut rev, sr);
+        rev.load_prepared(&bank[preset_index(IrPreset::Plate)]);
         rev.set_mix(0.3);
         rev.set_pre_delay_ms(15.0);
         rev.set_stereo_width(1.0);
@@ -126,6 +131,7 @@ impl NativeConvReverb {
             descriptor: Self::descriptor(),
             sample_rate: sr,
             rev,
+            bank,
             preset: IrPreset::Plate,
             pre_delay_ms: 15.0,
             low_cpu: 1.0,
@@ -138,8 +144,8 @@ impl NativeConvReverb {
     }
 
     fn rebuild_ir(&mut self) {
-        let (l, r) = synthesize_ir(self.preset, self.sample_rate);
-        self.rev.load_ir_stereo(&l, &r);
+        self.rev
+            .load_prepared(&self.bank[preset_index(self.preset)]);
         self.rev.set_low_cpu_mode(self.low_cpu);
     }
 
@@ -149,6 +155,22 @@ impl NativeConvReverb {
         self.rev.set_stereo_width(self.width);
         self.rev.set_tail_eq(self.low_cut_hz, self.high_cut_hz);
     }
+}
+
+/// Every space's impulse at `sample_rate`, in `preset_index` order.
+fn prepare_bank(rev: &mut ConvolutionReverb, sample_rate: f32) -> Vec<PreparedIr> {
+    [
+        IrPreset::LargeHall,
+        IrPreset::SmallRoom,
+        IrPreset::Plate,
+        IrPreset::Spring,
+    ]
+    .into_iter()
+    .map(|p| {
+        let (l, r) = synthesize_ir(p, sample_rate);
+        rev.prepare_ir(&l, &r)
+    })
+    .collect()
 }
 
 impl Default for NativeConvReverb {
@@ -165,6 +187,7 @@ impl HostedPlugin for NativeConvReverb {
     fn activate(&mut self, sr: f64, _max: u32) -> Result<(), String> {
         self.sample_rate = sr.max(1.0) as f32;
         self.rev = ConvolutionReverb::new(self.sample_rate);
+        self.bank = prepare_bank(&mut self.rev, self.sample_rate);
         self.rebuild_ir();
         self.refresh();
         self.active = true;
@@ -414,5 +437,32 @@ mod tests {
                 "parameter {id} has no text"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+
+    /// Switching space while playing is a copy of what was worked out at
+    /// the start: the same sound as loading that space from scratch.
+    #[test]
+    fn a_space_picked_while_playing_sounds_as_loaded_fresh() {
+        let mut switched = NativeConvReverb::new();
+        switched.set_parameter_value(PARAM_PRESET, preset_to_norm(IrPreset::SmallRoom));
+        let mut fresh = NativeConvReverb::new();
+        let (l, r) = synthesize_ir(IrPreset::SmallRoom, 48_000.0);
+        fresh.rev.load_ir_stereo(&l, &r);
+        fresh.rev.set_low_cpu_mode(fresh.low_cpu);
+        let (mut a, mut b) = (0.0_f32, 0.0_f32);
+        for n in 0..4_000 {
+            let x = if n == 0 { 1.0 } else { 0.0 };
+            let (l1, _) = switched.rev.process(x, x);
+            let (l2, _) = fresh.rev.process(x, x);
+            a += l1.abs();
+            b += (l1 - l2).abs();
+        }
+        assert!(a > 0.01, "the room rings");
+        assert!(b < 1e-4, "same as loaded fresh: {b}");
     }
 }
