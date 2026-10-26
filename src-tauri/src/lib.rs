@@ -888,6 +888,17 @@ pub fn run() {
             // mapped values to the live engine state. Also handles learn-mode
             // capture in the same loop so there's no race with the main
             // meter/transport broadcast thread.
+            // While a control surface is on, what it reads (its buttons are
+            // notes, its faders pitch bends) goes to it alone, not to an armed
+            // instrument as well.
+            {
+                let surface = Arc::clone(&state.control_surface);
+                state.midi_input.lock().set_claim(Some(Arc::new(
+                    move |event: &hardwave_midi::MidiEvent| {
+                        surface.is_enabled() && control_surface::interpret(event).is_some()
+                    },
+                )));
+            }
             midi_map::spawn_dispatcher(
                 Arc::clone(&state.engine),
                 Arc::clone(&state.midi_mappings),
