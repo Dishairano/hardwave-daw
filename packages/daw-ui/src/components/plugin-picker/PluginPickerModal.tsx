@@ -5,6 +5,7 @@ import {
   type PickerCategory,
   type PluginDescriptor,
 } from '../../stores/pluginCatalogStore'
+import { t, useLanguage } from '../../i18n'
 import './picker.css'
 
 export interface PluginPickerModalProps {
@@ -35,6 +36,7 @@ export interface PluginPickerModalProps {
  */
 export const PluginPickerModal = memo(function PluginPickerModal(props: PluginPickerModalProps) {
   const { slotIndex, onPick, onClose } = props
+  useLanguage()
 
   const plugins = usePluginCatalogStore((s) => s.plugins)
   const loading = usePluginCatalogStore((s) => s.loading)
@@ -138,18 +140,20 @@ export const PluginPickerModal = memo(function PluginPickerModal(props: PluginPi
   const CATEGORIES: PickerCategory[] = [
     'All', 'Hardwave', 'Instrument', 'Effect', 'Analyzer', 'Other',
   ]
+  // The count sits in the sentence wherever the language puts it.
+  const [shownBefore, shownAfter] = t('Showing {n} plug-ins').split('{n}')
 
   return (
     <div className="hw-pm-scrim open" onMouseDown={(e) => {
       // Click on the scrim (not the modal itself) closes.
       if (e.target === e.currentTarget) onClose()
     }}>
-      <div className="hw-pm" role="dialog" aria-label="Add plug-in">
+      <div className="hw-pm" role="dialog" aria-label={t('Add plug-in')}>
         <div className="hw-pm-head">
           <div className="hw-pm-ttl">
-            Add plug-in <em>→ Slot {slotIndex + 1}</em>
+            {t('Add plug-in')} <em>→ Slot {slotIndex + 1}</em>
           </div>
-          <button className="hw-pm-x" onClick={onClose} aria-label="Close">×</button>
+          <button className="hw-pm-x" onClick={onClose} aria-label={t('Close')}>×</button>
         </div>
 
         <div className="hw-pm-search">
@@ -157,7 +161,7 @@ export const PluginPickerModal = memo(function PluginPickerModal(props: PluginPi
           <input
             ref={searchRef}
             type="text"
-            placeholder="Filter by name, type, vendor…"
+            placeholder={t('Filter by name, type, vendor…')}
             value={rawQuery}
             onChange={(e) => setRawQuery(e.target.value)}
             onKeyDown={onSearchKey}
@@ -173,7 +177,7 @@ export const PluginPickerModal = memo(function PluginPickerModal(props: PluginPi
                 className={'hw-pm-cat' + (activeCat === c ? ' on' : '')}
                 onClick={() => setActiveCat(c)}
               >
-                <span>{c}</span>
+                <span>{t(c)}</span>
                 <span className="hw-pm-ct">{counts[c]}</span>
               </div>
             ))}
@@ -181,10 +185,10 @@ export const PluginPickerModal = memo(function PluginPickerModal(props: PluginPi
 
           <div ref={listRef} className="hw-pm-list">
             {loading && filtered.length === 0 && (
-              <div className="hw-pm-empty">Scanning plug-ins…</div>
+              <div className="hw-pm-empty">{t('Scanning plug-ins…')}</div>
             )}
             {!loading && filtered.length === 0 && (
-              <div className="hw-pm-empty">No plug-ins match.</div>
+              <div className="hw-pm-empty">{t('No plug-ins match.')}</div>
             )}
             {filtered.map((p, i) => {
               const hw = isHardwaveNative(p)
@@ -206,7 +210,7 @@ export const PluginPickerModal = memo(function PluginPickerModal(props: PluginPi
                     <div className="hw-pm-row-nm">{p.name}</div>
                     <div className="hw-pm-row-vd">{p.vendor}</div>
                   </div>
-                  <span className="hw-pm-row-vd">{p.category}</span>
+                  <span className="hw-pm-row-vd">{t(p.category)}</span>
                   <span className="hw-pm-row-tg">{badge}</span>
                 </div>
               )
@@ -216,9 +220,9 @@ export const PluginPickerModal = memo(function PluginPickerModal(props: PluginPi
 
         <div className="hw-pm-foot">
           <span>
-            Showing <em className="hw-pm-foot-count">{filtered.length}</em> plug-ins
+            {shownBefore}<em className="hw-pm-foot-count">{filtered.length}</em>{shownAfter}
           </span>
-          <button className="hw-pm-btn" onClick={onClose}>Cancel</button>
+          <button className="hw-pm-btn" onClick={onClose}>{t('Cancel')}</button>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { hw } from '../theme'
 import { useNotificationStore } from '../stores/notificationStore'
+import { t, tf, useLanguage } from '../i18n'
 
 let clipboardValue: number | null = null
 
@@ -33,6 +34,7 @@ export interface ParameterContextMenuProps {
 }
 
 export function ParameterContextMenu(props: ParameterContextMenuProps) {
+  useLanguage()
   const { x, y, label, value, defaultValue, unit = '', min, max, decimals = 2, onSet, onClose, onMidiLearn, onAutomate } = props
   const [typing, setTyping] = useState(false)
   const [draft, setDraft] = useState(() => value.toFixed(decimals))
@@ -110,22 +112,22 @@ export function ParameterContextMenu(props: ParameterContextMenuProps) {
             }}
           />
           <div style={{ fontSize: 9, color: hw.textFaint, marginTop: 2 }}>
-            Range: {min} to {max}{unit}
+            {tf('Range: {min} to {max}', { min, max: `${max}${unit}` })}
           </div>
         </div>
       ) : (
         <>
-          <Item label="Reset to default" shortcut={defaultValue.toFixed(decimals) + unit} onClick={() => {
+          <Item label={t('Reset to default')} shortcut={defaultValue.toFixed(decimals) + unit} onClick={() => {
             onSet(defaultValue)
             onClose()
           }} />
-          <Item label="Copy value" onClick={() => {
+          <Item label={t('Copy value')} onClick={() => {
             copyParameterValue(value)
-            useNotificationStore.getState().push('info', `Copied ${value.toFixed(decimals)}${unit}`)
+            useNotificationStore.getState().push('info', tf('Copied {value}', { value: `${value.toFixed(decimals)}${unit}` }))
             onClose()
           }} />
           <Item
-            label="Paste value"
+            label={t('Paste value')}
             disabled={clipboardValue == null}
             shortcut={clipboardValue != null ? clipboardValue.toFixed(decimals) + unit : undefined}
             onClick={() => {
@@ -133,15 +135,15 @@ export function ParameterContextMenu(props: ParameterContextMenuProps) {
               onClose()
             }}
           />
-          <Item label="Type in value…" onClick={() => {
+          <Item label={t('Type in value…')} onClick={() => {
             setDraft(value.toFixed(decimals))
             setTyping(true)
           }} />
           <div style={{ height: 1, background: hw.border, margin: '3px 0' }} />
           <Item
-            label="Automate this"
+            label={t('Automate this')}
             disabled={!onAutomate}
-            shortcut={onAutomate ? undefined : 'soon'}
+            shortcut={onAutomate ? undefined : t('soon')}
             onClick={() => {
               if (onAutomate) {
                 onAutomate()
@@ -152,7 +154,7 @@ export function ParameterContextMenu(props: ParameterContextMenuProps) {
           <Item
             label="MIDI Learn"
             disabled={!onMidiLearn}
-            shortcut={onMidiLearn ? undefined : 'soon'}
+            shortcut={onMidiLearn ? undefined : t('soon')}
             onClick={() => {
               if (onMidiLearn) {
                 onMidiLearn()

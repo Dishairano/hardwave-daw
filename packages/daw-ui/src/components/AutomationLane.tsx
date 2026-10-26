@@ -20,6 +20,7 @@ import {
 } from '../stores/trackStore'
 import { snapToTicks, useTransportStore } from '../stores/transportStore'
 import { useAutomationTargetName } from './plugins/useParamName'
+import { t, tf, useLanguage } from '../i18n'
 
 const PPQ = 960
 
@@ -43,6 +44,7 @@ interface Props {
 }
 
 export function AutomationLane({ trackId, lane }: Props) {
+  useLanguage()
   const addPoint = useTrackStore(s => s.addAutomationPoint)
   const movePoint = useTrackStore(s => s.moveAutomationPoint)
   const deletePoint = useTrackStore(s => s.deleteAutomationPoint)
@@ -254,7 +256,7 @@ export function AutomationLane({ trackId, lane }: Props) {
         <button
           type="button"
           className="vis"
-          title={lane.visible ? 'Hide lane (bypass automation)' : 'Show lane (re-engage automation)'}
+          title={lane.visible ? t('Hide lane (bypass automation)') : t('Show lane (re-engage automation)')}
           onClick={() => setVisible(trackId, lane.id, !lane.visible)}
         >
           {lane.visible ? '◉' : '◌'}
@@ -263,7 +265,7 @@ export function AutomationLane({ trackId, lane }: Props) {
           <button
             type="button"
             className="vis"
-            title="LFO tool — bake a shape into this lane"
+            title={t('LFO tool — bake a shape into this lane')}
             onClick={() => setLfoOpen(v => !v)}
             style={{ fontSize: 9, fontWeight: 700 }}
           >
@@ -280,26 +282,26 @@ export function AutomationLane({ trackId, lane }: Props) {
                 borderRadius: 8, boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
               }}
             >
-              <div style={{ fontSize: 8, letterSpacing: 0.5, textTransform: 'uppercase', color: '#7a7a88' }}>LFO tool</div>
+              <div style={{ fontSize: 8, letterSpacing: 0.5, textTransform: 'uppercase', color: '#7a7a88' }}>{t('LFO tool')}</div>
               <select value={lfoShape} onChange={e => setLfoShape(e.target.value as typeof lfoShape)}
                 style={{ fontSize: 10, background: 'rgba(255,255,255,0.05)', color: '#e8e8ef', border: '1px solid #2a2a36', borderRadius: 5, padding: '3px 4px' }}>
-                <option value="Sine">Sine</option>
-                <option value="Triangle">Triangle</option>
-                <option value="Square">Square</option>
-                <option value="SawtoothUp">Saw ↑</option>
-                <option value="SawtoothDown">Saw ↓</option>
-                <option value="RandomSampleAndHold">Random S&amp;H</option>
+                <option value="Sine">{t('Sine')}</option>
+                <option value="Triangle">{t('Triangle')}</option>
+                <option value="Square">{t('Square')}</option>
+                <option value="SawtoothUp">{t('Saw ↑')}</option>
+                <option value="SawtoothDown">{t('Saw ↓')}</option>
+                <option value="RandomSampleAndHold">{t('Random S&H')}</option>
               </select>
               <div style={{ display: 'flex', gap: 6 }}>
                 <label style={{ flex: 1, fontSize: 9, color: '#9a9aa8' }}>
-                  Rate 1/
+                  {t('Rate 1/')}
                   <select value={lfoDen} onChange={e => setLfoDen(Number(e.target.value))}
                     style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: '#e8e8ef', border: '1px solid #2a2a36', borderRadius: 5, padding: '2px 3px' }}>
                     {[1, 2, 4, 8, 16].map(d => <option key={d} value={d}>{d}</option>)}
                   </select>
                 </label>
                 <label style={{ flex: 1, fontSize: 9, color: '#9a9aa8' }}>
-                  Bars
+                  {t('Bars')}
                   <input type="number" min={1} max={64} value={lfoBars}
                     onChange={e => setLfoBars(Math.max(1, Math.min(64, Number(e.target.value))))}
                     style={{ width: '100%', fontSize: 10, background: 'rgba(255,255,255,0.05)', color: '#e8e8ef', border: '1px solid #2a2a36', borderRadius: 5, padding: '2px 3px' }} />
@@ -307,14 +309,14 @@ export function AutomationLane({ trackId, lane }: Props) {
               </div>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#9a9aa8' }}>
-                  <span>Depth</span><span style={{ color: '#e8e8ef', fontWeight: 600 }}>{lfoDepth}%</span>
+                  <span>{t('Depth')}</span><span style={{ color: '#e8e8ef', fontWeight: 600 }}>{lfoDepth}%</span>
                 </div>
                 <input type="range" min={0} max={100} value={lfoDepth}
                   onChange={e => setLfoDepth(Number(e.target.value))} style={{ width: '100%' }} />
               </div>
               <button type="button" onClick={applyLfo}
                 style={{ padding: '5px', fontSize: 10, fontWeight: 700, color: '#fff', background: '#dc2626', border: 'none', borderRadius: 5, cursor: 'pointer' }}>
-                Apply LFO
+                {t('Apply LFO')}
               </button>
             </div>
           )}
@@ -322,7 +324,7 @@ export function AutomationLane({ trackId, lane }: Props) {
         <button
           type="button"
           className="del"
-          title="Delete automation lane"
+          title={t('Delete automation lane')}
           onClick={() => deleteLane(trackId, lane.id)}
         >
           ×
@@ -362,7 +364,7 @@ export function AutomationLane({ trackId, lane }: Props) {
                 e.stopPropagation()
                 deletePoint(trackId, lane.id, i)
               }}
-              title={`tick ${tick} · value ${(value * 100).toFixed(0)}% · ${p.curve} · right-click for curve modes · double-click to delete`}
+              title={tf('tick {tick} · value {value}% · {curve} · right-click for curve modes · double-click to delete', { tick, value: (value * 100).toFixed(0), curve: p.curve })}
             />
           )
         })}
@@ -380,7 +382,7 @@ export function AutomationLane({ trackId, lane }: Props) {
                   className={`item${active ? ' active' : ''}`}
                   onClick={() => setCurve(ctx.pointIndex, m.id)}
                 >
-                  <span>{m.label}</span>
+                  <span>{t(m.label)}</span>
                   <span className="check">{active ? '✓' : ''}</span>
                 </div>
               )
@@ -393,7 +395,7 @@ export function AutomationLane({ trackId, lane }: Props) {
                 setCtx(null)
               }}
             >
-              <span>Delete point</span>
+              <span>{t('Delete point')}</span>
               <span className="kbd">Del</span>
             </div>
           </div>
@@ -403,12 +405,12 @@ export function AutomationLane({ trackId, lane }: Props) {
   )
 }
 
-function describeTarget(t: AutomationTargetInfo): string {
-  switch (t.kind) {
+function describeTarget(target: AutomationTargetInfo): string {
+  switch (target.kind) {
     case 'track_volume': return 'VOLUME'
     case 'track_pan':    return 'PAN'
-    case 'track_mute':   return 'MUTE'
-    case 'plugin_param': return `PARAMETER ${t.paramId}`
-    case 'send_level':   return `SEND ${t.sendIndex}`
+    case 'track_mute':   return t('MUTE')
+    case 'plugin_param': return `PARAMETER ${target.paramId}`
+    case 'send_level':   return `SEND ${target.sendIndex}`
   }
 }

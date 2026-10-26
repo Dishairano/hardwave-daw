@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { hw } from '../../theme'
 import { analyseColours, rgbColour, type WaveColours } from '../../lib/waveformColour'
+import { t, tf, useLanguage } from '../../i18n'
 
 interface SampleEditorProps {
   path: string
@@ -17,6 +18,12 @@ interface Selection {
   end: number
 }
 
+/** What the banner says after a fade, by direction and curve. */
+const FADE_DONE: Record<'in' | 'out', Record<'linear' | 'exp', string>> = {
+  in: { linear: 'Fade in (linear)', exp: 'Fade in (exp)' },
+  out: { linear: 'Fade out (linear)', exp: 'Fade out (exp)' },
+}
+
 function emptySelection(): Selection { return { start: 0, end: 0 } }
 function selLength(s: Selection) { return Math.abs(s.end - s.start) }
 function normSel(s: Selection): Selection {
@@ -24,6 +31,7 @@ function normSel(s: Selection): Selection {
 }
 
 export function SampleEditor({ path, onClose }: SampleEditorProps) {
+  useLanguage()
   const [sample, setSample] = useState<Sample | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -112,7 +120,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
     if (undoStack.length === 0) return
     setSample(undoStack[undoStack.length - 1])
     setUndoStack(prev => prev.slice(0, -1))
-    setBanner({ kind: 'info', text: 'Undo' })
+    setBanner({ kind: 'info', text: t('Undo') })
   }
 
   // Selection in normalized 0-1, convert to sample index
@@ -178,7 +186,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
     commit(prev => ({
       ...prev,
       channels: prev.channels.map(ch => sliceRemove(ch, s, e)),
-    }), `Deleted ${formatRange(e - s, sample.sampleRate)}`)
+    }), tf('Deleted {value}', { value: formatRange(e - s, sample.sampleRate) }))
     setSelection(emptySelection())
   }
 
@@ -186,7 +194,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
     if (!sample || !selIndices) return
     const [s, e] = selIndices
     setClipboard(sample.channels.map(ch => ch.slice(s, e)))
-    setBanner({ kind: 'info', text: `Copied ${formatRange(e - s, sample.sampleRate)}` })
+    setBanner({ kind: 'info', text: tf('Copied {value}', { value: formatRange(e - s, sample.sampleRate) }) })
   }
 
   const cutSel = () => {
@@ -197,7 +205,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
 
   const pasteAtCursor = () => {
     if (!sample || !clipboard) {
-      setBanner({ kind: 'error', text: 'Clipboard is empty' })
+      setBanner({ kind: 'error', text: t('Clipboard is empty') })
       return
     }
     const pasteLen = clipboard[0].length
@@ -212,7 +220,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         out.set(ch.subarray(insertAt), insertAt + paste.length)
         return out
       }),
-    }), `Pasted ${formatRange(pasteLen, sample.sampleRate)}`)
+    }), tf('Pasted {value}', { value: formatRange(pasteLen, sample.sampleRate) }))
   }
 
   const normalizePeak = () => {
@@ -229,7 +237,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         ...prev,
         channels: prev.channels.map(ch => scaleRange(ch, s, e, gain)),
       }
-    }, 'Normalized to peak')
+    }, t('Normalized to peak'))
   }
 
   const normalizeRms = () => {
@@ -250,7 +258,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         ...prev,
         channels: prev.channels.map(ch => scaleRange(ch, s, e, gain)),
       }
-    }, 'Normalized to -14 dB RMS')
+    }, t('Normalized to -14 dB RMS'))
   }
 
   const applyFade = (inOut: 'in' | 'out', curve: 'linear' | 'exp') => {
@@ -273,7 +281,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
           return out
         }),
       }
-    }, `Fade ${inOut} (${curve})`)
+    }, t(FADE_DONE[inOut][curve]))
   }
 
   const reverseSel = () => {
@@ -288,7 +296,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         }
         return out
       }),
-    }), 'Reversed selection')
+    }), t('Reversed selection'))
   }
 
   const reverseAll = () => {
@@ -300,7 +308,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         for (let i = 0; i < ch.length; i++) out[i] = ch[ch.length - 1 - i]
         return out
       }),
-    }), 'Reversed entire file')
+    }), t('Reversed entire file'))
   }
 
   const applyGain = (db: number) => {
@@ -330,7 +338,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
           return out
         }),
       }
-    }, 'DC offset removed')
+    }, t('DC offset removed'))
   }
 
   const silenceSel = () => {
@@ -343,7 +351,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         for (let i = s; i < e; i++) out[i] = 0
         return out
       }),
-    }), 'Silenced selection')
+    }), t('Silenced selection'))
   }
 
   const trimSilence = () => {
@@ -370,7 +378,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         ...prev,
         channels: prev.channels.map(ch => ch.slice(firstNonZero, lastNonZero + 1)),
       }
-    }, 'Trimmed silence from start and end')
+    }, t('Trimmed silence from start and end'))
   }
 
   // ── Save ───────────────────────────────────────────────────────────────────
@@ -411,12 +419,18 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
       const savedName = saved.split(/[\\/]/).pop()
       if (useInSong) {
         const clips = await invoke<number>('use_edited_audio', { original: path, edited: saved })
-        setBanner({ kind: 'info', text: `Saved as ${savedName}; ${clips} clip${clips === 1 ? '' : 's'} in the song now play it` })
+        const file = savedName ?? ''
+        setBanner({
+          kind: 'info',
+          text: clips === 1
+            ? tf('Saved as {name}; 1 clip in the song now play it', { name: file })
+            : tf('Saved as {name}; {n} clips in the song now play it', { name: file, n: clips }),
+        })
       } else {
-        setBanner({ kind: 'info', text: `Saved as ${savedName}, next to the original` })
+        setBanner({ kind: 'info', text: tf('Saved as {name}, next to the original', { name: savedName ?? '' }) })
       }
     } catch (e) {
-      setBanner({ kind: 'error', text: `Could not save: ${String(e)}` })
+      setBanner({ kind: 'error', text: tf('Could not save: {error}', { error: String(e) }) })
     }
   }
 
@@ -483,7 +497,7 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: hw.accent, letterSpacing: 0.5 }}>
-              SAMPLE EDITOR
+              {t('SAMPLE EDITOR')}
             </div>
             <div style={{ fontSize: 10, color: hw.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {name}
@@ -491,14 +505,14 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Btn onClick={playing ? stopPlay : play} disabled={!sample} primary>
-              {playing ? '■ Stop' : '▶ Play'}
+              {playing ? `■ ${t('Stop')}` : `▶ ${t('Play')}`}
             </Btn>
-            <Btn onClick={undo} disabled={undoStack.length === 0}>Undo</Btn>
-            <Btn onClick={() => { void save(false) }} disabled={!sample}>Save</Btn>
+            <Btn onClick={undo} disabled={undoStack.length === 0}>{t('Undo')}</Btn>
+            <Btn onClick={() => { void save(false) }} disabled={!sample}>{t('Save')}</Btn>
             {clipsUsing > 0 && (
-              <Btn onClick={() => { void save(true) }} disabled={!sample}>Save and use in the song</Btn>
+              <Btn onClick={() => { void save(true) }} disabled={!sample}>{t('Save and use in the song')}</Btn>
             )}
-            <Btn onClick={onClose}>Close</Btn>
+            <Btn onClick={onClose}>{t('Close')}</Btn>
           </div>
         </div>
 
@@ -518,11 +532,11 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
         {/* Waveform canvas */}
         <div style={{ flex: 1, position: 'relative', padding: 10, background: hw.bg }}>
           {loading && (
-            <div style={{ color: hw.textMuted, fontSize: 11, padding: 24 }}>Loading audio…</div>
+            <div style={{ color: hw.textMuted, fontSize: 11, padding: 24 }}>{t('Loading audio…')}</div>
           )}
           {err && (
             <div style={{ color: hw.red, fontSize: 11, padding: 24 }}>
-              Could not decode: {err}
+              {tf('Could not decode: {error}', { error: err })}
             </div>
           )}
           {!loading && !err && sample && (
@@ -549,23 +563,23 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
               display: 'flex', alignItems: 'center', gap: 10,
               marginTop: 8, fontSize: 10, color: hw.textMuted,
             }}>
-              <span>Zoom: scroll on waveform · view {formatRange(
+              <span>{tf('Zoom: scroll on waveform · view {value}', { value: formatRange(
                 Math.round((view.end - view.start) * sample.channels[0].length),
                 sample.sampleRate,
-              )}</span>
+              ) })}</span>
               <div style={{ flex: 1 }} />
-              <Btn onClick={() => setView({ start: 0, end: 1 })}>Fit</Btn>
+              <Btn onClick={() => setView({ start: 0, end: 1 })}>{t('Fit')}</Btn>
               <Btn onClick={() => {
                 if (!selIndices || !sample) return
                 const n = sample.channels[0].length
                 setView({ start: selIndices[0] / n, end: selIndices[1] / n })
-              }} disabled={!hasSelection}>Zoom to selection</Btn>
+              }} disabled={!hasSelection}>{t('Zoom to selection')}</Btn>
               <span style={{ width: 12 }} />
               <span>{hasSelection
-                ? `Selection ${formatRange(selIndices![1] - selIndices![0], sample.sampleRate)}`
-                : 'No selection'}</span>
-              <Btn onClick={selectAll}>Select all</Btn>
-              <Btn onClick={deselect} disabled={!hasSelection}>Deselect</Btn>
+                ? tf('Selection {value}', { value: formatRange(selIndices![1] - selIndices![0], sample.sampleRate) })
+                : t('No selection')}</span>
+              <Btn onClick={selectAll}>{t('Select all')}</Btn>
+              <Btn onClick={deselect} disabled={!hasSelection}>{t('Deselect')}</Btn>
             </div>
           )}
         </div>
@@ -577,14 +591,14 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
           borderTop: `1px solid ${hw.border}`,
           display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6,
         }}>
-          <ToolbarGroup label="Clipboard">
-            <Btn onClick={cutSel} disabled={!hasSelection}>Cut</Btn>
-            <Btn onClick={copySel} disabled={!hasSelection}>Copy</Btn>
-            <Btn onClick={pasteAtCursor} disabled={!clipboard}>Paste</Btn>
-            <Btn onClick={deleteSel} disabled={!hasSelection}>Delete</Btn>
+          <ToolbarGroup label={t('Clipboard')}>
+            <Btn onClick={cutSel} disabled={!hasSelection}>{t('Cut')}</Btn>
+            <Btn onClick={copySel} disabled={!hasSelection}>{t('Copy')}</Btn>
+            <Btn onClick={pasteAtCursor} disabled={!clipboard}>{t('Paste')}</Btn>
+            <Btn onClick={deleteSel} disabled={!hasSelection}>{t('Delete')}</Btn>
           </ToolbarGroup>
-          <ToolbarGroup label="Normalize & gain">
-            <Btn onClick={normalizePeak}>Peak</Btn>
+          <ToolbarGroup label={t('Normalize & gain')}>
+            <Btn onClick={normalizePeak}>{t('Peak')}</Btn>
             <Btn onClick={normalizeRms}>RMS</Btn>
             <Btn onClick={() => applyGain(+3)}>+3 dB</Btn>
             <Btn onClick={() => applyGain(-3)}>-3 dB</Btn>
@@ -595,12 +609,12 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
             <Btn onClick={() => applyFade('out', 'linear')} disabled={!hasSelection}>Out lin</Btn>
             <Btn onClick={() => applyFade('out', 'exp')}    disabled={!hasSelection}>Out exp</Btn>
           </ToolbarGroup>
-          <ToolbarGroup label="Shape">
-            <Btn onClick={reverseSel} disabled={!hasSelection}>Rev sel</Btn>
-            <Btn onClick={reverseAll}>Rev all</Btn>
-            <Btn onClick={silenceSel} disabled={!hasSelection}>Silence</Btn>
-            <Btn onClick={removeDc}>DC off</Btn>
-            <Btn onClick={trimSilence}>Trim sil</Btn>
+          <ToolbarGroup label={t('Shape')}>
+            <Btn onClick={reverseSel} disabled={!hasSelection}>{t('Rev sel')}</Btn>
+            <Btn onClick={reverseAll}>{t('Rev all')}</Btn>
+            <Btn onClick={silenceSel} disabled={!hasSelection}>{t('Silence')}</Btn>
+            <Btn onClick={removeDc}>{t('DC off')}</Btn>
+            <Btn onClick={trimSilence}>{t('Trim sil')}</Btn>
           </ToolbarGroup>
         </div>
 
@@ -619,10 +633,10 @@ export function SampleEditor({ path, onClose }: SampleEditorProps) {
               <span>{duration.toFixed(3)} s</span>
               {hasSelection && <span style={{ color: hw.accent }}>sel {selDur.toFixed(3)} s</span>}
               <span style={{ flex: 1 }} />
-              <span>Scroll to zoom · drag to select · Fades and reverse act on selection</span>
+              <span>{t('Scroll to zoom · drag to select · Fades and reverse act on selection')}</span>
             </>
           ) : (
-            <span>Waiting for audio data…</span>
+            <span>{t('Waiting for audio data…')}</span>
           )}
         </div>
       </div>
