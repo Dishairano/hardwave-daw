@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTransportStore } from '../stores/transportStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * Scoring to picture.
@@ -25,6 +26,7 @@ const PPQ = 960
 const SLIP_SECONDS = 0.08
 
 export function VideoWindow({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [status, setStatus] = useState<VideoStatus | null>(null)
   const [src, setSrc] = useState<string | null>(null)
@@ -82,7 +84,7 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const picked = await open({
         multiple: false,
-        filters: [{ name: 'Video', extensions: ['mp4', 'webm', 'mov', 'm4v', 'mkv'] }],
+        filters: [{ name: t('Video'), extensions: ['mp4', 'webm', 'mov', 'm4v', 'mkv'] }],
       })
       if (typeof picked !== 'string') return
       const next = await invoke<VideoStatus>('set_video', { path: picked })
@@ -90,7 +92,7 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
       setError(null)
     } catch (e) {
       setError(String(e))
-      useNotificationStore.getState().push('warning', 'Could not open that video', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not open that video'), { detail: String(e) })
     }
   }, [load])
 
@@ -107,10 +109,10 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
         padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 10,
         background: hw.bgElevated, borderBottom: `1px solid ${hw.border}`,
       }}>
-        <div style={{ fontSize: 11, fontWeight: 600 }}>Video</div>
-        <div style={{ fontSize: 9, color: hw.textFaint }}>follows the playhead</div>
+        <div style={{ fontSize: 11, fontWeight: 600 }}>{t('Video')}</div>
+        <div style={{ fontSize: 9, color: hw.textFaint }}>{t('follows the playhead')}</div>
         <div style={{ flex: 1 }} />
-        <button onClick={() => void pick()} style={btn()}>{status ? 'Replace' : 'Open…'}</button>
+        <button onClick={() => void pick()} style={btn()}>{status ? t('Replace') : t('Open…')}</button>
         {status && (
           <button
             onClick={() => {
@@ -119,15 +121,15 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
               invoke('set_video_muted', { muted: next }).catch(() => {})
             }}
             style={btn()}
-          >{status.muted ? 'Sound off' : 'Sound on'}</button>
+          >{status.muted ? t('Sound off') : t('Sound on')}</button>
         )}
         {status && (
           <button
             onClick={() => { invoke('clear_video').catch(() => {}); void load(null) }}
             style={btn()}
-          >Remove</button>
+          >{t('Remove')}</button>
         )}
-        <button onClick={onClose} style={btn()}>Close</button>
+        <button onClick={onClose} style={btn()}>{t('Close')}</button>
       </div>
 
       {src ? (
@@ -140,7 +142,7 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
         />
       ) : (
         <div style={{ padding: 28, textAlign: 'center', fontSize: 11, color: hw.textFaint }}>
-          {error ?? 'Open a film or a capture and it plays against the song.'}
+          {error ?? t('Open a film or a capture and it plays against the song.')}
         </div>
       )}
 
@@ -149,7 +151,7 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
           padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 8,
           borderTop: `1px solid ${hw.border}`, fontSize: 10, color: hw.textFaint,
         }}>
-          <span>Starts at bar</span>
+          <span>{t('Starts at bar')}</span>
           <input
             type="number"
             min={1}
@@ -167,7 +169,7 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
             }}
           />
           <div style={{ flex: 1 }} />
-          <span>{wantedSeconds < 0 ? 'before the film' : `${wantedSeconds.toFixed(2)} s in`}</span>
+          <span>{wantedSeconds < 0 ? t('before the film') : tf('{seconds} s in', { seconds: wantedSeconds.toFixed(2) })}</span>
         </div>
       )}
     </div>

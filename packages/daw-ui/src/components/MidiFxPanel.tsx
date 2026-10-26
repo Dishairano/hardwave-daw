@@ -5,6 +5,7 @@ import { useTrackStore } from '../stores/trackStore'
 import { useNotificationStore } from '../stores/notificationStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn, sel } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * MIDI effects between the clips and the instrument.
@@ -63,6 +64,7 @@ function label(fx: MidiFx): string {
 }
 
 export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: () => void }) {
+  useLanguage()
   const tracks = useTrackStore(s => s.tracks)
   const track = tracks.find(t => t.id === trackId)
   const [chain, setChain] = useState<MidiFx[]>([])
@@ -81,7 +83,7 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
     try {
       await invoke('set_midi_fx', { trackId, chain: next })
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not change the chain', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not change the chain'), { detail: String(e) })
     }
   }, [trackId])
 
@@ -113,15 +115,15 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
 
   return (
     <DialogFrame
-      title={`MIDI effects · ${track?.name ?? 'track'}`}
-      subtitle="Between the notes you wrote and the instrument"
+      title={tf('MIDI effects · {name}', { name: track?.name ?? t('track') })}
+      subtitle={t('Between the notes you wrote and the instrument')}
       onClose={onClose}
       width={620}
     >
       <div style={{ overflowY: 'auto', flex: 1, padding: 10 }}>
         {loaded && chain.length === 0 && (
           <div style={{ fontSize: 12, color: hw.textFaint, padding: '6px 2px' }}>
-            Nothing in the chain. The instrument hears exactly what is in the clip.
+            {t('Nothing in the chain. The instrument hears exactly what is in the clip.')}
           </div>
         )}
 
@@ -135,16 +137,16 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <span style={{ fontSize: 11, color: hw.textFaint, width: 14 }}>{index + 1}</span>
-              <span style={{ fontSize: 12.5, fontWeight: 600 }}>{label(fx)}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 600 }}>{t(label(fx))}</span>
               <div style={{ flex: 1 }} />
-              <button onClick={() => move(index, -1)} disabled={index === 0} style={btn()}>up</button>
-              <button onClick={() => move(index, 1)} disabled={index === chain.length - 1} style={btn()}>down</button>
-              <button onClick={() => remove(index)} style={btn()}>remove</button>
+              <button onClick={() => move(index, -1)} disabled={index === 0} style={btn()}>{t('up')}</button>
+              <button onClick={() => move(index, 1)} disabled={index === chain.length - 1} style={btn()}>{t('down')}</button>
+              <button onClick={() => remove(index)} style={btn()}>{t('remove')}</button>
             </div>
 
             {'Arpeggiator' in fx && (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Field label="Step">
+                <Field label={t('Step')}>
                   <select
                     value={fx.Arpeggiator.step_ticks}
                     onChange={(e) => replace(index, {
@@ -157,7 +159,7 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
                     ))}
                   </select>
                 </Field>
-                <Field label="Order">
+                <Field label={t('Order')}>
                   <select
                     value={fx.Arpeggiator.mode}
                     onChange={(e) => replace(index, {
@@ -165,13 +167,13 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
                     })}
                     style={sel()}
                   >
-                    <option value="Up">Up</option>
-                    <option value="Down">Down</option>
-                    <option value="UpDown">Up and down</option>
-                    <option value="AsPlayed">As written</option>
+                    <option value="Up">{t('Up')}</option>
+                    <option value="Down">{t('Down')}</option>
+                    <option value="UpDown">{t('Up and down')}</option>
+                    <option value="AsPlayed">{t('As written')}</option>
                   </select>
                 </Field>
-                <Field label="Octaves">
+                <Field label={t('Octaves')}>
                   <select
                     value={fx.Arpeggiator.octaves}
                     onChange={(e) => replace(index, {
@@ -182,7 +184,7 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
                     {[1, 2, 3, 4].map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </Field>
-                <Field label={`Gate ${Math.round(fx.Arpeggiator.gate * 100)}%`}>
+                <Field label={tf('Gate {n}%', { n: Math.round(fx.Arpeggiator.gate * 100) })}>
                   <input
                     type="range" min={0.05} max={1} step={0.05}
                     value={fx.Arpeggiator.gate}
@@ -197,7 +199,7 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
 
             {'Chord' in fx && (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Field label="Shape">
+                <Field label={t('Shape')}>
                   <select
                     value={fx.Chord.intervals.join(',')}
                     onChange={(e) => replace(index, {
@@ -206,17 +208,17 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
                     style={sel()}
                   >
                     {CHORD_CHOICES.map(c => (
-                      <option key={c.label} value={c.intervals.join(',')}>{c.label}</option>
+                      <option key={c.label} value={c.intervals.join(',')}>{t(c.label)}</option>
                     ))}
                     {!CHORD_CHOICES.some(c => c.intervals.join(',') === fx.Chord.intervals.join(',')) && (
                       <option value={fx.Chord.intervals.join(',')}>
-                        Custom ({fx.Chord.intervals.join(', ')})
+                        {tf('Custom ({intervals})', { intervals: fx.Chord.intervals.join(', ') })}
                       </option>
                     )}
                   </select>
                 </Field>
                 <span style={{ fontSize: 11, color: hw.textFaint }}>
-                  Semitones above the note you played: {fx.Chord.intervals.join(', ') || 'none'}
+                  {tf('Semitones above the note you played: {intervals}', { intervals: fx.Chord.intervals.join(', ') || t('none') })}
                 </span>
               </div>
             )}
@@ -234,7 +236,7 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
                     {NOTE_NAMES.map((n, i) => <option key={n} value={i}>{n}</option>)}
                   </select>
                 </Field>
-                <Field label="Scale">
+                <Field label={t('Scale')}>
                   <select
                     value={fx.Scale.kind}
                     onChange={(e) => replace(index, {
@@ -243,19 +245,19 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
                     style={sel()}
                   >
                     {(Object.keys(SCALE_LABELS) as ScaleKind[]).map(k => (
-                      <option key={k} value={k}>{SCALE_LABELS[k]}</option>
+                      <option key={k} value={k}>{t(SCALE_LABELS[k])}</option>
                     ))}
                   </select>
                 </Field>
                 <span style={{ fontSize: 11, color: hw.textFaint }}>
-                  A note outside the scale moves to the nearest one that belongs.
+                  {t('A note outside the scale moves to the nearest one that belongs.')}
                 </span>
               </div>
             )}
 
             {'Transpose' in fx && (
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <Field label="Semitones">
+                <Field label={t('Semitones')}>
                   <input
                     type="number" min={-48} max={48}
                     value={fx.Transpose.semitones}
@@ -266,7 +268,7 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
                   />
                 </Field>
                 <span style={{ fontSize: 11, color: hw.textFaint }}>
-                  A note pushed past the end of the keyboard is dropped, not folded back.
+                  {t('A note pushed past the end of the keyboard is dropped, not folded back.')}
                 </span>
               </div>
             )}
@@ -278,14 +280,14 @@ export function MidiFxPanel({ trackId, onClose }: { trackId: string; onClose: ()
         padding: '8px 12px', display: 'flex', gap: 8, alignItems: 'center',
         background: hw.bgElevated, borderTop: `1px solid ${hw.border}`, flexWrap: 'wrap',
       }}>
-        <span style={{ fontSize: 12, color: hw.textSecondary }}>Add:</span>
-        <button onClick={() => add('arp')} style={btn()}>Arpeggiator</button>
-        <button onClick={() => add('chord')} style={btn()}>Chord</button>
-        <button onClick={() => add('scale')} style={btn()}>Scale</button>
-        <button onClick={() => add('transpose')} style={btn()}>Transpose</button>
+        <span style={{ fontSize: 12, color: hw.textSecondary }}>{t('Add:')}</span>
+        <button onClick={() => add('arp')} style={btn()}>{t('Arpeggiator')}</button>
+        <button onClick={() => add('chord')} style={btn()}>{t('Chord')}</button>
+        <button onClick={() => add('scale')} style={btn()}>{t('Scale')}</button>
+        <button onClick={() => add('transpose')} style={btn()}>{t('Transpose')}</button>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: hw.textFaint }}>
-          Live playing goes through chord, scale and transpose. The arpeggiator needs a clock of its own, so it works on what is written in a clip.
+          {t('Live playing goes through chord, scale and transpose. The arpeggiator needs a clock of its own, so it works on what is written in a clip.')}
         </span>
       </div>
     </DialogFrame>

@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { getVersion } from '@tauri-apps/api/app'
 import { HwLogo } from './HwLogo'
 import { hw } from '../theme'
+import { t, tf, useLanguage } from '../i18n'
 
 interface AboutDialogProps {
   onClose: () => void
 }
 
 export function AboutDialog({ onClose }: AboutDialogProps) {
+  useLanguage()
   const [version, setVersion] = useState<string>('')
   const [tauriVersion, setTauriVersion] = useState<string>('')
 
@@ -63,9 +65,9 @@ export function AboutDialog({ onClose }: AboutDialogProps) {
             v{version || '...'}
           </div>
           <div style={{ fontSize: 11, color: hw.textMuted, marginTop: 12, textAlign: 'center', lineHeight: 1.5 }}>
-            A modern, open digital audio workstation
-            <br />
-            built for producers who care about the craft.
+            {t('A modern, open digital audio workstation\nbuilt for producers who care about the craft.').split('\n').map((line, i) => (
+              <span key={i}>{i > 0 && <br />}{line}</span>
+            ))}
           </div>
         </div>
 
@@ -76,10 +78,10 @@ export function AboutDialog({ onClose }: AboutDialogProps) {
           border: `1px solid ${hw.border}`,
           borderRadius: 10,
         }}>
-          <Row label="Version" value={version || '—'} />
+          <Row label={t('Version')} value={version || '—'} />
           {tauriVersion && <Row label="Tauri" value={tauriVersion} />}
-          <Row label="Engine" value="Rust + nih-plug" />
-          <Row label="License" value="Proprietary" />
+          <Row label={t('Engine')} value="Rust + nih-plug" />
+          <Row label={t('License')} value={t('Proprietary')} />
         </div>
 
         <div style={{
@@ -89,7 +91,7 @@ export function AboutDialog({ onClose }: AboutDialogProps) {
           textAlign: 'center',
           lineHeight: 1.6,
         }}>
-          © {new Date().getFullYear()} Hardwave Studios. All rights reserved.
+          {tf('© {year} Hardwave Studios. All rights reserved.', { year: new Date().getFullYear() })}
         </div>
 
         <div style={{
@@ -111,7 +113,7 @@ export function AboutDialog({ onClose }: AboutDialogProps) {
               e.currentTarget.style.background = `linear-gradient(135deg, ${hw.secondary}, ${hw.accent})`
             }}
           >
-            Close
+            {t('Close')}
           </button>
         </div>
       </div>

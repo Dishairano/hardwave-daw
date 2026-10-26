@@ -5,6 +5,7 @@ import {
   type WizardStep,
   useSetupWizardStore,
 } from '../stores/setupWizardStore'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * First-run MIDI Setup Wizard. Five steps walk the user through MIDI
@@ -51,6 +52,7 @@ export function SetupWizard() {
     setMidiMasterEnabled,
     setVelocityCurve,
   } = useSetupWizardStore()
+  useLanguage()
 
   const [ports, setPorts] = useState<string[]>([])
   const [enabledPorts, setEnabledPorts] = useState<Set<string>>(new Set())
@@ -131,9 +133,9 @@ export function SetupWizard() {
     <div className="hw-setup-wizard-backdrop" role="dialog" aria-modal="true">
       <div className="hw-setup-wizard">
         <header className="hw-setup-wizard-head">
-          <h3>Setup Wizard</h3>
+          <h3>{t('Setup Wizard')}</h3>
           <button type="button" className="hw-setup-wizard-skip" onClick={skipForever}>
-            Skip — won't ask again
+            {t("Skip — won't ask again")}
           </button>
         </header>
 
@@ -148,7 +150,7 @@ export function SetupWizard() {
               }
               onClick={() => i <= stepIdx && setStep(s.id)}
             >
-              {s.label}
+              {t(s.label)}
             </div>
           ))}
         </div>
@@ -182,12 +184,12 @@ export function SetupWizard() {
 
         <footer className="hw-setup-wizard-foot">
           <span className="hw-setup-wizard-meta">
-            Step {stepIdx + 1} of {STEPS.length}
+            {tf('Step {n} of {total}', { n: stepIdx + 1, total: STEPS.length })}
           </span>
           <div className="hw-setup-wizard-actions">
             {stepIdx > 0 && step !== 'done' && (
               <button type="button" className="hw-btn" onClick={back}>
-                Back
+                {t('Back')}
               </button>
             )}
             {(step === 'welcome' || step === 'devices') && (
@@ -197,12 +199,12 @@ export function SetupWizard() {
                 onClick={() => void rescan()}
                 disabled={scanning}
               >
-                {scanning ? 'Scanning…' : 'Rescan'}
+                {scanning ? t('Scanning…') : t('Rescan')}
               </button>
             )}
             {step === 'done' ? (
               <button type="button" className="hw-btn hw-btn-primary" onClick={markComplete}>
-                Open Hardwave
+                {t('Open Hardwave')}
               </button>
             ) : (
               <button
@@ -210,12 +212,12 @@ export function SetupWizard() {
                 className="hw-btn hw-btn-primary"
                 onClick={() => (step === 'test' ? next() : next())}
               >
-                Continue
+                {t('Continue')}
               </button>
             )}
             {step === 'done' && (
               <button type="button" className="hw-btn hw-btn-ghost" onClick={close}>
-                Close
+                {t('Close')}
               </button>
             )}
           </div>
@@ -241,6 +243,7 @@ const BUFFER_CHOICES = [128, 256, 512, 1024]
  * commands as File → Audio settings; applying here writes the same
  * persisted prefs, so the two stay in sync. */
 function AudioStep() {
+  useLanguage()
   const [devices, setDevices] = useState<WizardAudioDevice[]>([])
   const [device, setDevice] = useState<string | null>(null)
   const [sampleRate, setSampleRate] = useState(48000)
@@ -264,6 +267,8 @@ function AudioStep() {
   }, [])
 
   const latencyMs = ((bufferSize / sampleRate) * 1000).toFixed(1)
+  // The menu path sits in the sentence wherever the language puts it.
+  const [changeBefore, changeAfter] = t('You can change this any time under {where}.').split('{where}')
   const selected = devices.find((d) => d.name === device)
   const rates = selected?.sample_rates?.length ? selected.sample_rates : [44100, 48000]
 
@@ -272,7 +277,7 @@ function AudioStep() {
     setError(null)
     try {
       await invoke('set_audio_config', { device, sampleRate, bufferSize })
-      setApplied(`${device ?? 'Default device'} @ ${sampleRate} Hz / ${bufferSize} samples`)
+      setApplied(tf('{device} @ {rate} Hz / {buffer} samples', { device: device ?? t('Default device'), rate: sampleRate, buffer: bufferSize }))
     } catch (e) {
       setError(String(e))
     } finally {
@@ -282,28 +287,28 @@ function AudioStep() {
 
   return (
     <>
-      <h4>Where should Hardwave play audio?</h4>
+      <h4>{t('Where should Hardwave play audio?')}</h4>
       <p className="hw-setup-wizard-muted">
-        Pick your audio interface (not the system speakers, if you have one) and a buffer size.
-        You can change this any time under <strong>File → Audio settings</strong>.
+        {t('Pick your audio interface (not the system speakers, if you have one) and a buffer size.')}{' '}
+        {changeBefore}<strong>{t('File → Audio settings')}</strong>{changeAfter}
       </p>
 
       <div className="hw-setup-wizard-audio-grid">
         <label>
-          Output device
+          {t('Output device')}
           <select
             value={device ?? ''}
             onChange={(e) => setDevice(e.target.value || null)}
           >
             {devices.map((d) => (
               <option key={d.name} value={d.name}>
-                {d.name}{d.is_default ? ' (system default)' : ''}
+                {d.is_default ? tf('{name} (system default)', { name: d.name }) : d.name}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Sample rate
+          {t('Sample rate')}
           <select value={sampleRate} onChange={(e) => setSampleRate(Number(e.target.value))}>
             {rates.map((r) => (
               <option key={r} value={r}>{r} Hz</option>
@@ -311,34 +316,33 @@ function AudioStep() {
           </select>
         </label>
         <label>
-          Buffer size
+          {t('Buffer size')}
           <select value={bufferSize} onChange={(e) => setBufferSize(Number(e.target.value))}>
             {BUFFER_CHOICES.map((b) => (
-              <option key={b} value={b}>{b} samples</option>
+              <option key={b} value={b}>{tf('{n} samples', { n: b })}</option>
             ))}
           </select>
         </label>
       </div>
 
       <p className="hw-setup-wizard-muted">
-        <strong>Latency ≈ {latencyMs} ms.</strong>{' '}
-        512 samples is a safe default; drop to 256/128 for recording if your machine keeps up
-        (crackles mean the buffer is too small).
+        <strong>{tf('Latency ≈ {ms} ms.', { ms: latencyMs })}</strong>{' '}
+        {t('512 samples is a safe default; drop to 256/128 for recording if your machine keeps up (crackles mean the buffer is too small).')}
       </p>
 
       <div className="hw-setup-wizard-actions" style={{ justifyContent: 'flex-start' }}>
         <button type="button" className="hw-btn hw-btn-primary" onClick={() => void apply()} disabled={busy || devices.length === 0}>
-          {busy ? 'Applying…' : 'Apply & test'}
+          {busy ? t('Applying…') : t('Apply & test')}
         </button>
         {applied && !error && (
           <span className="hw-setup-wizard-muted" style={{ alignSelf: 'center' }}>
-            ✓ Active: {applied}
+            ✓ {tf('Active: {setting}', { setting: applied })}
           </span>
         )}
       </div>
       {error && (
         <p className="hw-setup-wizard-muted" style={{ color: 'var(--brand, #e94560)' }}>
-          Could not apply: {error}
+          {tf('Could not apply: {error}', { error })}
         </p>
       )}
     </>
@@ -356,12 +360,14 @@ function WelcomeStep({
   /** null while the check is still running. */
   driver: { ok: boolean; detail: string } | null
 }) {
+  useLanguage()
+  // The button's name sits in the sentence wherever the language puts it.
+  const [rescanBefore, rescanAfter] = t('Hardwave detected the following ports. If your controller is missing, plug it in now — click {rescan} when ready.').split('{rescan}')
   return (
     <>
-      <h4>Connect your MIDI controller</h4>
+      <h4>{t('Connect your MIDI controller')}</h4>
       <p>
-        Hardwave detected the following ports. If your controller is missing, plug it in now —
-        click <strong>Rescan</strong> when ready.
+        {rescanBefore}<strong>{t('Rescan')}</strong>{rescanAfter}
       </p>
       <div className="hw-setup-wizard-checklist">
         <div className="hw-setup-wizard-check">
@@ -369,12 +375,11 @@ function WelcomeStep({
             {ports.length > 0 ? '✓' : '!'}
           </span>
           <div>
-            <b>{ports.length} MIDI input{ports.length === 1 ? '' : 's'} found</b>
+            <b>{ports.length === 1 ? tf('{n} MIDI input found', { n: ports.length }) : tf('{n} MIDI inputs found', { n: ports.length })}</b>
             <div className="hw-setup-wizard-muted">
               {ports.length === 0 && !scanning ? (
                 <>
-                  No ports detected. Connect a controller and hit Rescan, or skip if you only plan
-                  to use the typing keyboard / on-screen Touch Controller.
+                  {t('No ports detected. Connect a controller and hit Rescan, or skip if you only plan to use the typing keyboard / on-screen Touch Controller.')}
                 </>
               ) : (
                 ports.join(' · ')
@@ -389,24 +394,23 @@ function WelcomeStep({
           <div>
             <b>
               {driver == null
-                ? 'Checking the MIDI driver'
+                ? t('Checking the MIDI driver')
                 : driver.ok
-                  ? 'MIDI driver working'
-                  : 'MIDI driver not available'}
+                  ? t('MIDI driver working')
+                  : t('MIDI driver not available')}
             </b>
             <div className="hw-setup-wizard-muted">
               {driver == null
-                ? 'One moment.'
+                ? t('One moment.')
                 : driver.ok
-                  ? 'The system MIDI service answered, so controllers can be opened.'
-                  : `Controllers cannot be opened on this machine: ${driver.detail}`}
+                  ? t('The system MIDI service answered, so controllers can be opened.')
+                  : tf('Controllers cannot be opened on this machine: {detail}', { detail: driver.detail })}
             </div>
           </div>
         </div>
       </div>
       <p className="hw-setup-wizard-muted">
-        Right after this step you can enable or disable each input individually, and set how hard
-        each one has to be hit.
+        {t('Right after this step you can enable or disable each input individually, and set how hard each one has to be hit.')}
       </p>
     </>
   )
@@ -429,18 +433,18 @@ function DevicesStep({
   rescan: () => void
   scanning: boolean
 }) {
+  useLanguage()
   return (
     <>
-      <h4>Enable inputs</h4>
+      <h4>{t('Enable inputs')}</h4>
       <p className="hw-setup-wizard-muted">
-        Each row maps to a connected MIDI device. Toggle off any port you don't want feeding
-        Hardwave — useful for virtual loopback ports or noisy hardware.
+        {t("Each row maps to a connected MIDI device. Toggle off any port you don't want feeding Hardwave — useful for virtual loopback ports or noisy hardware.")}
       </p>
 
       <label className="hw-setup-wizard-master">
         <span>
-          <strong>Master — Enable MIDI remote control</strong>
-          <small>When off, no MIDI input reaches the audio thread.</small>
+          <strong>{t('Master — Enable MIDI remote control')}</strong>
+          <small>{t('When off, no MIDI input reaches the audio thread.')}</small>
         </span>
         <input
           type="checkbox"
@@ -452,8 +456,8 @@ function DevicesStep({
       <div className="hw-setup-wizard-devices">
         {ports.length === 0 && (
           <div className="hw-setup-wizard-empty">
-            No ports detected. {scanning ? 'Scanning…' : (
-              <a onClick={rescan} role="button">Rescan</a>
+            {t('No ports detected.')} {scanning ? t('Scanning…') : (
+              <a onClick={rescan} role="button">{t('Rescan')}</a>
             )}
           </div>
         )}
@@ -464,13 +468,13 @@ function DevicesStep({
               <span className="hw-setup-wizard-led" aria-hidden />
               <div className="hw-setup-wizard-device-name">
                 <strong>{port}</strong>
-                <small>{isOn ? 'Listening' : 'Disabled'}</small>
+                <small>{isOn ? t('Listening') : t('Disabled')}</small>
               </div>
               <button
                 type="button"
                 className={`hw-setup-wizard-toggle${isOn ? ' is-on' : ''}`}
                 onClick={() => onToggle(port)}
-                aria-label={`Toggle ${port}`}
+                aria-label={tf('Toggle {name}', { name: port })}
               />
             </div>
           )
@@ -496,6 +500,7 @@ function VelocityStep({
   curves: Record<string, VelocityCurve>
   onChange: (port: string, curve: VelocityCurve) => void
 }) {
+  useLanguage()
   const [activePort, setActivePort] = useState<string | null>(ports[0] ?? null)
   useEffect(() => {
     if (!activePort && ports.length > 0) setActivePort(ports[0])
@@ -504,11 +509,9 @@ function VelocityStep({
   if (ports.length === 0) {
     return (
       <>
-        <h4>Velocity curve</h4>
+        <h4>{t('Velocity curve')}</h4>
         <p className="hw-setup-wizard-muted">
-          No hardware inputs to calibrate. The typing keyboard + Touch Controller already use a
-          fixed default velocity (or position-based when enabled in Touch settings). Skip ahead to
-          the activity test.
+          {t('No hardware inputs to calibrate. The typing keyboard + Touch Controller already use a fixed default velocity (or position-based when enabled in Touch settings). Skip ahead to the activity test.')}
         </p>
       </>
     )
@@ -518,10 +521,9 @@ function VelocityStep({
 
   return (
     <>
-      <h4>Velocity curve</h4>
+      <h4>{t('Velocity curve')}</h4>
       <p className="hw-setup-wizard-muted">
-        Pick a preset that matches your controller's velocity feel. Curves are per-input, so a
-        light-action Novation can run Soft while a heavier MPC stays Linear.
+        {t("Pick a preset that matches your controller's velocity feel. Curves are per-input, so a light-action Novation can run Soft while a heavier MPC stays Linear.")}
       </p>
 
       {ports.length > 1 && (
@@ -550,8 +552,8 @@ function VelocityStep({
               }`}
               onClick={() => activePort && onChange(activePort, c.id)}
             >
-              <strong>{c.label}</strong>
-              <small>{c.desc}</small>
+              <strong>{t(c.label)}</strong>
+              <small>{t(c.desc)}</small>
             </button>
           ))}
         </div>
@@ -572,9 +574,7 @@ function VelocityStep({
       </div>
 
       <p className="hw-setup-wizard-muted">
-        The curve applies to this port as soon as you pick it, and is remembered for the next time
-        you start Hardwave. Every curve leaves your softest and hardest hits where they are and
-        only moves what is in between, so nothing you can play becomes unreachable.
+        {t('The curve applies to this port as soon as you pick it, and is remembered for the next time you start Hardwave. Every curve leaves your softest and hardest hits where they are and only moves what is in between, so nothing you can play becomes unreachable.')}
       </p>
     </>
   )
@@ -600,66 +600,70 @@ function curvePath(curve: VelocityCurve): string {
 }
 
 function TestStep({ activity }: { activity: MidiActivitySnapshot | null }) {
+  useLanguage()
   const fresh = activity != null && activity.ms_since_last_event != null && activity.ms_since_last_event < 800
   return (
     <>
-      <h4>Play a note — Hardwave is listening</h4>
+      <h4>{t('Play a note — Hardwave is listening')}</h4>
       <div className="hw-setup-wizard-activity">
         <div className={`hw-setup-wizard-led-large${fresh ? ' is-fresh' : ''}`} aria-hidden />
         <div>
           <h5>
             {fresh
-              ? 'MIDI activity detected — you are connected'
-              : 'Waiting for input…'}
+              ? t('MIDI activity detected — you are connected')
+              : t('Waiting for input…')}
           </h5>
           <p className="hw-setup-wizard-muted">
-            The big LED pulses every time the engine receives a MIDI message. Notes play through
-            Hardwave's default sine voice so you hear what you're playing.
+            {t("The big LED pulses every time the engine receives a MIDI message. Notes play through Hardwave's default sine voice so you hear what you're playing.")}
           </p>
           {activity && (
             <p className="hw-setup-wizard-muted" style={{ fontSize: 11 }}>
-              {activity.open_ports.length} port{activity.open_ports.length === 1 ? '' : 's'} open ·
+              {activity.open_ports.length === 1
+                ? tf('{n} port open', { n: activity.open_ports.length })
+                : tf('{n} ports open', { n: activity.open_ports.length })}
+              {' · '}
               {activity.ms_since_last_event == null
-                ? ' no events yet'
-                : ` last event ${activity.ms_since_last_event} ms ago`}
+                ? t('no events yet')
+                : tf('last event {ms} ms ago', { ms: activity.ms_since_last_event })}
             </p>
           )}
         </div>
       </div>
       <p className="hw-setup-wizard-muted">
-        No activity? Click Back to recheck your devices, or run Rescan from the Tools menu later.
+        {t('No activity? Click Back to recheck your devices, or run Rescan from the Tools menu later.')}
       </p>
     </>
   )
 }
 
 function DoneStep() {
+  useLanguage()
   return (
     <>
-      <h4>You're set 🎹</h4>
-      <p>Hardwave will remember your choices for the next time you open the app. To change them later:</p>
+      <h4>{t("You're set")} 🎹</h4>
+      <p>{t('Hardwave will remember your choices for the next time you open the app. To change them later:')}</p>
       <div className="hw-setup-wizard-checklist">
         <div className="hw-setup-wizard-check">
           <span className="hw-check-icon arrow">→</span>
           <div>
-            <b>Tools → MIDI mappings…</b>
-            <div className="hw-setup-wizard-muted">Per-CC mappings + the Learn flow</div>
+            <b>{t('Tools → MIDI mappings…')}</b>
+            <div className="hw-setup-wizard-muted">{t('Per-CC mappings + the Learn flow')}</div>
           </div>
         </div>
         <div className="hw-setup-wizard-check">
           <span className="hw-check-icon arrow">→</span>
           <div>
-            <b>File → Audio settings…</b>
+            <b>{t('File → Audio settings…')}</b>
             <div className="hw-setup-wizard-muted">
-              Input / output ports + velocity curves (permanent panel)
+              {t('Input / output ports + velocity curves (permanent panel)')}
             </div>
           </div>
         </div>
         <div className="hw-setup-wizard-check">
           <span className="hw-check-icon arrow">→</span>
           <div>
-            <b>Help → Re-run setup wizard</b>
-            <div className="hw-setup-wizard-muted">Walks through this flow again</div>
+            <b>{t('Help → Re-run setup wizard')}</b>
+            <div className="hw-setup-wizard-muted">{t('Walks through this flow again')}</div>
           </div>
         </div>
       </div>

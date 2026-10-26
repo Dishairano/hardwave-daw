@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 interface SpectrumAnalyzerProps {
   onClose: () => void
@@ -134,6 +135,7 @@ function xToFreq(x: number, sampleRate: number, scale: FreqScale, w: number): nu
 }
 
 export function SpectrumAnalyzer({ onClose }: SpectrumAnalyzerProps) {
+  useLanguage()
   const [fftSize, setFftSize] = useState<FftSize>(4096)
   const [windowType, setWindowType] = useState<WindowType>('hanning')
   const [displayStyle, setDisplayStyle] = useState<DisplayStyle>('line')
@@ -244,14 +246,14 @@ export function SpectrumAnalyzer({ onClose }: SpectrumAnalyzerProps) {
 
   return (
     <DialogFrame
-      title="Spectrum Analyzer"
-      subtitle={`Master bus · ${sampleRate} Hz · ${fftSize}-point FFT`}
+      title={t('Spectrum Analyzer')}
+      subtitle={tf('Master bus · {rate} Hz · {size}-point FFT', { rate: sampleRate, size: fftSize })}
       onClose={onClose}
       width={680}
       headerActions={<>
-          <button onClick={resetPeaks} style={btn(false)}>Reset peaks</button>
+          <button onClick={resetPeaks} style={btn(false)}>{t('Reset peaks')}</button>
           <button onClick={() => setFreeze(v => !v)} style={btn(freeze)}>
-            {freeze ? 'Frozen' : 'Freeze'}
+            {freeze ? t('Frozen') : t('Freeze')}
           </button>
       </>}
     >
@@ -289,24 +291,26 @@ export function SpectrumAnalyzer({ onClose }: SpectrumAnalyzerProps) {
           onChange={v => setFftSize(parseInt(v, 10) as FftSize)}
           options={[['1024','1024'],['2048','2048'],['4096','4096'],['8192','8192']]} />
 
-        <LabeledSelect label="Window" value={windowType}
+        <LabeledSelect label={t('Window')} value={windowType}
           onChange={v => setWindowType(v as WindowType)}
           options={[['hanning','Hanning'],['blackman-harris','Blackman-Harris'],['flat-top','Flat-top']]} />
 
-        <LabeledSelect label="Style" value={displayStyle}
+        {/* "Bars" and "Scale" stay English here: as translation keys they
+            already mean musical bars and a musical scale. */}
+        <LabeledSelect label={t('Style')} value={displayStyle}
           onChange={v => setDisplayStyle(v as DisplayStyle)}
-          options={[['line','Line'],['bars','Bars']]} />
+          options={[['line', t('Line')], ['bars', 'Bars']]} />
 
         <LabeledSelect label="Scale" value={freqScale}
           onChange={v => setFreqScale(v as FreqScale)}
-          options={[['log','Log'],['linear','Linear']]} />
+          options={[['log', 'Log'], ['linear', t('Linear')]]} />
 
-        <LabeledSelect label="Channels" value={channelMode}
+        <LabeledSelect label={t('Channels')} value={channelMode}
           onChange={v => setChannelMode(v as ChannelMode)}
           options={[['lr','L / R'],['mid-side','Mid / Side']]} />
 
         <label style={labelStyle}>
-          <span>Smooth</span>
+          <span>{t('Smooth')}</span>
           <input type="range" min={0} max={0.95} step={0.05} value={smoothing}
             onChange={e => setSmoothing(parseFloat(e.target.value))}
             style={{ width: 80 }} />
@@ -317,7 +321,7 @@ export function SpectrumAnalyzer({ onClose }: SpectrumAnalyzerProps) {
 
         <label style={labelStyle}>
           <input type="checkbox" checked={peakHold} onChange={e => setPeakHold(e.target.checked)} />
-          <span>Peak hold</span>
+          <span>{t('Peak hold')}</span>
         </label>
       </div>
     </DialogFrame>

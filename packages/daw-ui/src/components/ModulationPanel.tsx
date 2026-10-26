@@ -6,6 +6,7 @@ import { useNotificationStore } from '../stores/notificationStore'
 import { useSendStore } from '../stores/sendStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn, sel, th, td } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * The modulation matrix: a source that keeps running, wired to a knob.
@@ -76,24 +77,26 @@ const RATES: { label: string; num: number; den: number }[] = [
 ]
 
 function rateLabel(route: ModRoute): string {
-  if ('Envelope' in route.source) return `falls in ${route.source.Envelope.release_ms} ms`
+  if ('Envelope' in route.source) return tf('falls in {ms} ms', { ms: route.source.Envelope.release_ms })
   if (!('Lfo' in route.source)) return ''
   const rate = route.source.Lfo.rate
   if (rate.Hz !== undefined) return `${rate.Hz} Hz`
   const sync = rate.TempoSync
-  if (!sync) return 'free'
+  if (!sync) return t('free')
   const match = RATES.find(r => r.num === sync.num && r.den === sync.den)
-  return match ? match.label : `${sync.num}/${sync.den}`
+  return match ? t(match.label) : `${sync.num}/${sync.den}`
 }
 
 function shapeLabel(route: ModRoute, trackName: (id: string) => string): string {
   const source = route.source
-  if ('Envelope' in source) return `Level of ${trackName(source.Envelope.track_id)}`
-  if ('MidiCc' in source) return source.MidiCc.cc === 1 ? 'Mod wheel (CC 1)' : `Controller ${source.MidiCc.cc}`
-  return SHAPES.find(s => s.stored === source.Lfo.shape)?.label ?? source.Lfo.shape
+  if ('Envelope' in source) return tf('Level of {name}', { name: trackName(source.Envelope.track_id) })
+  if ('MidiCc' in source) return source.MidiCc.cc === 1 ? t('Mod wheel (CC 1)') : tf('Controller {n}', { n: source.MidiCc.cc })
+  const shape = SHAPES.find(s => s.stored === source.Lfo.shape)
+  return shape ? t(shape.label) : source.Lfo.shape
 }
 
 export function ModulationPanel({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const tracks = useTrackStore(s => s.tracks)
   const [routes, setRoutes] = useState<ModRoute[]>([])
   const [trackId, setTrackId] = useState('')
@@ -127,7 +130,7 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
   const track = tracks.find(t => t.id === trackId)
   const slots = useMemo(() => track?.inserts ?? [], [track])
   const sends = sendsByTrack[trackId] ?? []
-  const trackName = useCallback((id: string) => tracks.find(t => t.id === id)?.name ?? 'a track', [tracks])
+  const trackName = useCallback((id: string) => tracks.find(x => x.id === id)?.name ?? t('a track'), [tracks])
 
   // The followed track is another one: a track's volume can't follow its
   // own level, and following yourself is rarely what anyone means.
@@ -179,7 +182,7 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
       ? Math.max(0, Math.min(1, param?.value ?? 0.5))
       : targetKey === 'pan' ? 0.5 : restTop
     const sourceLabel = sourceKind === 'envelope'
-      ? `from ${trackName(followId)}`
+      ? `from ${tracks.find(x => x.id === followId)?.name ?? 'a track'}`
       : sourceKind === 'cc' ? `CC ${cc}` : rate.label
     const targetLabel = targetKey === 'plugin' ? param?.name ?? 'Knob'
       : targetKey === 'volume' ? 'Volume' : targetKey === 'pan' ? 'Pan' : 'Send'
@@ -204,9 +207,9 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
       })
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not add that route', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not add that route'), { detail: String(e) })
     }
-  }, [track, slotId, paramId, params, shape, rateIndex, depth, refresh, sourceKind, followId, releaseMs, cc, targetKey, trackName])
+  }, [track, slotId, paramId, params, shape, rateIndex, depth, refresh, sourceKind, followId, releaseMs, cc, targetKey, tracks])
 
   const update = useCallback(async (id: string, patch: Record<string, unknown>) => {
     setRoutes(prev => prev.map(r => (r.id === id ? { ...r, ...patch } as ModRoute : r)))
@@ -220,24 +223,27 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
       await invoke('delete_modulation', { id })
       await refresh()
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not remove that route', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not remove that route'), { detail: String(e) })
     }
   }, [refresh])
 
   const targetLabel = useCallback((route: ModRoute) => {
-    const t = tracks.find(x => x.id === route.track_id)
+    const owner = tracks.find(x => x.id === route.track_id)
+    const track = owner?.name ?? t('track')
     const target = route.target
-    if (target === 'TrackVolume') return `${t?.name ?? 'track'} · volume`
-    if (target === 'TrackPan') return `${t?.name ?? 'track'} · pan`
-    if ('SendLevel' in target) return `${t?.name ?? 'track'} · send ${target.SendLevel.send_index + 1}`
-    const slot = t?.inserts.find(i => i.id === target.PluginParam.slot_id)
-    return `${t?.name ?? 'track'} · ${slot?.pluginName ?? 'plug-in'} · parameter ${target.PluginParam.param_id}`
+    if (target === 'TrackVolume') return tf('{track} · volume', { track })
+    if (target === 'TrackPan') return tf('{track} · pan', { track })
+    if ('SendLevel' in target) return tf('{track} · send {n}', { track, n: target.SendLevel.send_index + 1 })
+    const slot = owner?.inserts.find(i => i.id === target.PluginParam.slot_id)
+    return tf('{track} · {plugin} · parameter {n}', {
+      track, plugin: slot?.pluginName ?? t('plug-in'), n: target.PluginParam.param_id,
+    })
   }, [tracks])
 
   return (
     <DialogFrame
-      title="Modulation"
-      subtitle="A shape, a track's level or a controller, wired to a knob, a fader, a pan or a send"
+      title={t('Modulation')}
+      subtitle={t("A shape, a track's level or a controller, wired to a knob, a fader, a pan or a send")}
       onClose={onClose}
       width={720}
     >
@@ -245,12 +251,12 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ color: hw.textSecondary, borderBottom: `1px solid ${hw.border}` }}>
-              <th style={th()}>On</th>
-              <th style={th()}>Moves</th>
-              <th style={th()}>From</th>
-              <th style={th()}>Rate</th>
-              <th style={th()}>Centre</th>
-              <th style={th()}>Depth</th>
+              <th style={th()}>{t('On')}</th>
+              <th style={th()}>{t('Moves')}</th>
+              <th style={th()}>{t('From')}</th>
+              <th style={th()}>{t('Rate')}</th>
+              <th style={th()}>{t('Centre')}</th>
+              <th style={th()}>{t('Depth')}</th>
               <th style={th()} />
             </tr>
           </thead>
@@ -258,7 +264,7 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
             {routes.length === 0 && (
               <tr><td style={td()} colSpan={7}>
                 <span style={{ color: hw.textFaint }}>
-                  Nothing wired yet. Pick what moves below and where it moves from.
+                  {t('Nothing wired yet. Pick what moves below and where it moves from.')}
                 </span>
               </td></tr>
             )}
@@ -292,7 +298,7 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
                   />
                 </td>
                 <td style={{ ...td(), textAlign: 'right' }}>
-                  <button onClick={() => { void remove(route.id) }} style={btn()}>Remove</button>
+                  <button onClick={() => { void remove(route.id) }} style={btn()}>{t('Remove')}</button>
                 </td>
               </tr>
             ))}
@@ -304,44 +310,44 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
         padding: '8px 12px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
         background: hw.bgElevated, borderTop: `1px solid ${hw.border}`,
       }}>
-        <span style={{ fontSize: 12, color: hw.textSecondary }}>Moves:</span>
+        <span style={{ fontSize: 12, color: hw.textSecondary }}>{t('Moves:')}</span>
         <select value={trackId} onChange={e => setTrackId(e.target.value)} style={sel()}>
-          {tracks.length === 0 && <option value="">(no tracks)</option>}
+          {tracks.length === 0 && <option value="">{t('(no tracks)')}</option>}
           {tracks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
         <select value={targetKey} onChange={e => setTargetKey(e.target.value)} style={sel()}>
-          <option value="plugin">A plug-in knob</option>
-          <option value="volume">Volume</option>
-          <option value="pan">Pan</option>
+          <option value="plugin">{t('A plug-in knob')}</option>
+          <option value="volume">{t('Volume')}</option>
+          <option value="pan">{t('Pan')}</option>
           {sends.map(s => (
-            <option key={s.index} value={`send:${s.index}`}>Send {s.index + 1} to {trackName(s.target)}</option>
+            <option key={s.index} value={`send:${s.index}`}>{tf('Send {n} to {name}', { n: s.index + 1, name: trackName(s.target) })}</option>
           ))}
         </select>
         {targetKey === 'plugin' && (
           <>
             <select value={slotId} onChange={e => setSlotId(e.target.value)} style={sel()}>
-              {slots.length === 0 && <option value="">(no plug-ins on that track)</option>}
+              {slots.length === 0 && <option value="">{t('(no plug-ins on that track)')}</option>}
               {slots.map(s => <option key={s.id} value={s.id}>{s.pluginName}</option>)}
             </select>
             <select value={paramId} onChange={e => setParamId(Number(e.target.value))} style={sel()}>
-              {params.length === 0 && <option value={-1}>(no parameters)</option>}
+              {params.length === 0 && <option value={-1}>{t('(no parameters)')}</option>}
               {params.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </>
         )}
-        <span style={{ fontSize: 12, color: hw.textSecondary, marginLeft: 6 }}>From:</span>
+        <span style={{ fontSize: 12, color: hw.textSecondary, marginLeft: 6 }}>{t('From:')}</span>
         <select value={sourceKind} onChange={e => setSourceKind(e.target.value as SourceKind)} style={sel()}>
-          <option value="lfo">A shape (LFO)</option>
-          <option value="envelope">Another track's level</option>
-          <option value="cc">A MIDI controller</option>
+          <option value="lfo">{t('A shape (LFO)')}</option>
+          <option value="envelope">{t("Another track's level")}</option>
+          <option value="cc">{t('A MIDI controller')}</option>
         </select>
         {sourceKind === 'lfo' && (
           <>
             <select value={shape} onChange={e => setShape(e.target.value)} style={sel()}>
-              {SHAPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              {SHAPES.map(s => <option key={s.value} value={s.value}>{t(s.label)}</option>)}
             </select>
             <select value={rateIndex} onChange={e => setRateIndex(Number(e.target.value))} style={sel()}>
-              {RATES.map((r, i) => <option key={r.label} value={i}>{r.label}</option>)}
+              {RATES.map((r, i) => <option key={r.label} value={i}>{t(r.label)}</option>)}
             </select>
           </>
         )}
@@ -350,8 +356,8 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
             <select value={followId} onChange={e => setFollowId(e.target.value)} style={sel()}>
               {tracks.filter(t => t.id !== trackId).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <select value={releaseMs} onChange={e => setReleaseMs(Number(e.target.value))} style={sel()} title="How fast it lets go after the track gets quieter">
-              {RELEASES.map(ms => <option key={ms} value={ms}>falls in {ms} ms</option>)}
+            <select value={releaseMs} onChange={e => setReleaseMs(Number(e.target.value))} style={sel()} title={t('How fast it lets go after the track gets quieter')}>
+              {RELEASES.map(ms => <option key={ms} value={ms}>{tf('falls in {ms} ms', { ms })}</option>)}
             </select>
           </>
         )}
@@ -363,12 +369,12 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
               value={cc}
               onChange={e => setCc(Math.max(0, Math.min(127, Math.round(Number(e.target.value) || 0))))}
               style={{ ...sel(), width: 56 }}
-              title="1 is the mod wheel"
+              title={t('1 is the mod wheel')}
             />
           </label>
         )}
         <label style={{ fontSize: 12, color: hw.textSecondary, display: 'flex', alignItems: 'center', gap: 4 }}>
-          Depth
+          {t('Depth')}
           <input
             type="range" min={-1} max={1} step={0.05}
             value={depth}
@@ -376,13 +382,13 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
             style={{ width: 90, accentColor: hw.accent }}
           />
         </label>
-        <button onClick={() => { void add() }} style={btn(true)}>Add</button>
+        <button onClick={() => { void add() }} style={btn(true)}>{t('Add')}</button>
         <span style={{ fontSize: 11, color: hw.textFaint }}>
           {targetKey === 'plugin'
-            ? "The knob's own value becomes the middle of the swing, so switching a route on does not jump the sound."
+            ? t("The knob's own value becomes the middle of the swing, so switching a route on does not jump the sound.")
             : targetKey === 'pan'
-              ? 'Moves the pan from where the pan knob has it.'
-              : 'Turns the level down from where the fader has it, never past it. A negative depth with a level ducks: louder there, quieter here.'}
+              ? t('Moves the pan from where the pan knob has it.')
+              : t('Turns the level down from where the fader has it, never past it. A negative depth with a level ducks: louder there, quieter here.')}
         </span>
       </div>
     </DialogFrame>

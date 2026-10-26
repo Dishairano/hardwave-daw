@@ -5,6 +5,7 @@ import { useMeterStore } from '../stores/meterStore'
 import { useNotificationStore } from '../stores/notificationStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn } from './ui/dialogStyles'
+import { t, tf, useLanguage } from '../i18n'
 
 /**
  * A record to mix against.
@@ -25,6 +26,7 @@ interface ReferenceStatus {
 }
 
 export function ReferencePanel({ onClose }: { onClose: () => void }) {
+  useLanguage()
   const [status, setStatus] = useState<ReferenceStatus>({
     loaded: false, playing: false, gainDb: 0, lufs: -Infinity, name: '',
   })
@@ -43,16 +45,16 @@ export function ReferencePanel({ onClose }: { onClose: () => void }) {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const picked = await open({
         multiple: false,
-        filters: [{ name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a', 'aiff'] }],
+        filters: [{ name: t('Audio'), extensions: ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a', 'aiff'] }],
       })
       if (typeof picked !== 'string') return
       const next = await invoke<ReferenceStatus>('load_reference', { path: picked })
       setStatus(next)
-      useNotificationStore.getState().push('info', `Reference: ${next.name}`, {
-        detail: `${next.lufs.toFixed(1)} LUFS. Match the loudness before you compare.`,
+      useNotificationStore.getState().push('info', tf('Reference: {name}', { name: next.name }), {
+        detail: tf('{lufs} LUFS. Match the loudness before you compare.', { lufs: next.lufs.toFixed(1) }),
       })
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not load that track', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not load that track'), { detail: String(e) })
     }
   }, [])
 
@@ -68,11 +70,13 @@ export function ReferencePanel({ onClose }: { onClose: () => void }) {
     try {
       const gain = await invoke<number>('match_reference_loudness', { mixLufs })
       setStatus(s => ({ ...s, gainDb: gain }))
-      useNotificationStore.getState().push('info', 'Loudness matched', {
-        detail: `The reference plays ${gain >= 0 ? '+' : ''}${gain.toFixed(1)} dB, so it sits where your mix does.`,
+      useNotificationStore.getState().push('info', t('Loudness matched'), {
+        detail: tf('The reference plays {gain} dB, so it sits where your mix does.', {
+          gain: `${gain >= 0 ? '+' : ''}${gain.toFixed(1)}`,
+        }),
       })
     } catch (e) {
-      useNotificationStore.getState().push('warning', 'Could not match the loudness', { detail: String(e) })
+      useNotificationStore.getState().push('warning', t('Could not match the loudness'), { detail: String(e) })
     }
   }, [mixLufs])
 
@@ -90,27 +94,27 @@ export function ReferencePanel({ onClose }: { onClose: () => void }) {
     } catch { /* ignore */ }
   }, [refresh])
 
-  const mixText = Number.isFinite(mixLufs) ? `${(mixLufs as number).toFixed(1)} LUFS` : 'not measured yet'
+  const mixText = Number.isFinite(mixLufs) ? `${(mixLufs as number).toFixed(1)} LUFS` : t('not measured yet')
 
   return (
     <DialogFrame
-      title="Reference track"
-      subtitle="Compare at the same loudness, not the same fader"
+      title={t('Reference track')}
+      subtitle={t('Compare at the same loudness, not the same fader')}
       onClose={onClose}
       width={520}
     >
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button onClick={() => { void pick() }} style={btn(true)}>
-            {status.loaded ? 'Choose another track…' : 'Choose a track…'}
+            {status.loaded ? t('Choose another track…') : t('Choose a track…')}
           </button>
           <span style={{ fontSize: 12.5, color: hw.textSecondary }}>
-            {status.loaded ? status.name : 'nothing loaded'}
+            {status.loaded ? status.name : t('nothing loaded')}
           </span>
           {status.loaded && (
             <>
               <div style={{ flex: 1 }} />
-              <button onClick={() => { void clear() }} style={btn()}>Remove</button>
+              <button onClick={() => { void clear() }} style={btn()}>{t('Remove')}</button>
             </>
           )}
         </div>
@@ -118,10 +122,10 @@ export function ReferencePanel({ onClose }: { onClose: () => void }) {
         {status.loaded && (
           <>
             <div style={{ display: 'flex', gap: 18, fontSize: 12.5, color: hw.textSecondary }}>
-              <span>Reference: <b style={{ color: hw.textPrimary }}>
+              <span>{t('Reference:')} <b style={{ color: hw.textPrimary }}>
                 {Number.isFinite(status.lufs) ? `${status.lufs.toFixed(1)} LUFS` : '—'}
               </b></span>
-              <span>Your mix: <b style={{ color: hw.textPrimary }}>{mixText}</b></span>
+              <span>{t('Your mix:')} <b style={{ color: hw.textPrimary }}>{mixText}</b></span>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -134,12 +138,12 @@ export function ReferencePanel({ onClose }: { onClose: () => void }) {
                   color: status.playing ? '#fff' : hw.textSecondary,
                   fontFamily: 'inherit',
                 }}
-              >{status.playing ? 'Hearing the reference' : 'Hearing your mix'}</button>
-              <button onClick={() => { void match() }} style={btn()}>Match loudness</button>
+              >{status.playing ? t('Hearing the reference') : t('Hearing your mix')}</button>
+              <button onClick={() => { void match() }} style={btn()}>{t('Match loudness')}</button>
             </div>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: hw.textSecondary }}>
-              Reference gain
+              {t('Reference gain')}
               <input
                 type="range" min={-24} max={24} step={0.1}
                 value={status.gainDb}
@@ -152,9 +156,7 @@ export function ReferencePanel({ onClose }: { onClose: () => void }) {
             </label>
 
             <div style={{ fontSize: 11, color: hw.textFaint, lineHeight: 1.5 }}>
-              The reference plays instead of the mix and skips the master chain
-              and the master fader, so what you hear is the record itself. It
-              follows the playhead, so moving in the song moves in the record.
+              {t('The reference plays instead of the mix and skips the master chain and the master fader, so what you hear is the record itself. It follows the playhead, so moving in the song moves in the record.')}
             </div>
           </>
         )}

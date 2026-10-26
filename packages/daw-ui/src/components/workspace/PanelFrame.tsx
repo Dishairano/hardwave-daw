@@ -4,6 +4,7 @@ import {
   type Area, type DockSide, type Guide, type PanelGeometry, type PanelKey, type Rect, type ResizeDir,
 } from '../../lib/workspaceLayout'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
+import { t, useLanguage } from '../../i18n'
 
 /**
  * One panel in the work area, as in FL: a title bar to drag it by, edges
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export function PanelFrame({ id, title, head, geometry, area, others, onHints, onClose, onDetach, testId, children }: Props) {
+  useLanguage()
   const setRect = useWorkspaceStore((s) => s.setRect)
   const dock = useWorkspaceStore((s) => s.dock)
   const float = useWorkspaceStore((s) => s.float)
@@ -156,36 +158,36 @@ export function PanelFrame({ id, title, head, geometry, area, others, onHints, o
           if (!(e.target as HTMLElement).closest('button, select, input, [data-nodrag]')) toggleMax(id)
         }}
       >
-        <button type="button" className="hw-panel-menu-btn" title="Panel menu" onClick={() => setMenu((m) => !m)}>
+        <button type="button" className="hw-panel-menu-btn" title={t('Panel menu')} onClick={() => setMenu((m) => !m)}>
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
         </button>
-        <span className="hw-panel-title">{head ?? title}</span>
-        {(docked || geometry.max) && <span className="hw-panel-tag">{geometry.max ? 'max' : 'docked'}</span>}
+        <span className="hw-panel-title">{head ?? t(title)}</span>
+        {(docked || geometry.max) && <span className="hw-panel-tag">{geometry.max ? t('max') : t('docked')}</span>}
         <span className="hw-panel-sp" />
         {onDetach && (
-          <button type="button" title="Detached: open in its own window (another screen)" onClick={onDetach}>
+          <button type="button" title={t('Detached: open in its own window (another screen)')} onClick={onDetach}>
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="5.5" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="1.3" /><path d="M6 2.5h7.5V10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></svg>
           </button>
         )}
-        <button type="button" title={geometry.max ? 'Restore' : 'Maximize'} onClick={() => toggleMax(id)}>
+        <button type="button" title={geometry.max ? t('Restore') : t('Maximize')} onClick={() => toggleMax(id)}>
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><rect x="3" y="3" width="10" height="10" stroke="currentColor" strokeWidth="1.4" /></svg>
         </button>
-        <button type="button" className="x" title="Close" onClick={onClose}>
+        <button type="button" className="x" title={t('Close')} onClick={onClose}>
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
         </button>
       </div>
       {menu && (
         <div className="hw-panel-menu" role="menu">
-          {onDetach && <button type="button" className="hl" onClick={pick(onDetach)}>Detached</button>}
-          <button type="button" onClick={pick(() => toggleMax(id))}>{geometry.max ? 'Restore' : 'Maximize'}</button>
+          {onDetach && <button type="button" className="hl" onClick={pick(onDetach)}>{t('Detached')}</button>}
+          <button type="button" onClick={pick(() => toggleMax(id))}>{geometry.max ? t('Restore') : t('Maximize')}</button>
           <hr />
-          <button type="button" onClick={pick(() => dock(id, 'left'))}>Dock left</button>
-          <button type="button" onClick={pick(() => dock(id, 'right'))}>Dock right</button>
-          <button type="button" onClick={pick(() => dock(id, 'top'))}>Dock top</button>
-          <button type="button" onClick={pick(() => dock(id, 'bottom'))}>Dock bottom</button>
-          <button type="button" onClick={pick(() => float(id))}>Float</button>
+          <button type="button" onClick={pick(() => dock(id, 'left'))}>{t('Dock left')}</button>
+          <button type="button" onClick={pick(() => dock(id, 'right'))}>{t('Dock right')}</button>
+          <button type="button" onClick={pick(() => dock(id, 'top'))}>{t('Dock top')}</button>
+          <button type="button" onClick={pick(() => dock(id, 'bottom'))}>{t('Dock bottom')}</button>
+          <button type="button" onClick={pick(() => float(id))}>{t('Float')}</button>
           <hr />
-          <button type="button" onClick={pick(onClose)}>Close</button>
+          <button type="button" onClick={pick(onClose)}>{t('Close')}</button>
         </div>
       )}
       <div className="hw-panel-body">{children}</div>

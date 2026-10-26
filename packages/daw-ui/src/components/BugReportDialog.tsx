@@ -16,6 +16,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useNotificationStore } from '../stores/notificationStore'
 import { useProjectStore } from '../stores/projectStore'
+import { t, tf, useLanguage } from '../i18n'
 
 const BUG_API = 'https://hardwavestudios.com/api/bugs'
 const MIN_DESCRIPTION = 10
@@ -46,6 +47,7 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
   /** Set when the report follows a crash: the log is then worth attaching. */
   afterCrash?: boolean
 }) {
+  useLanguage()
   const [env, setEnv] = useState<BugReportEnv | null>(null)
   const [what, setWhat] = useState('')
   const [expected, setExpected] = useState('')
@@ -110,8 +112,8 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
         body: JSON.stringify(payload),
       })
       if (resp.status === 429) {
-        push('warning', 'Too many reports for now', {
-          detail: 'The bug form accepts six reports an hour. Try again a little later, or use hardwavestudios.com/report-a-bug.',
+        push('warning', t('Too many reports for now'), {
+          detail: t('The bug form accepts six reports an hour. Try again a little later, or use hardwavestudios.com/report-a-bug.'),
         })
         return
       }
@@ -119,22 +121,22 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
         // Say what came back rather than a generic failure: a rejected report
         // usually means a field the user can fix.
         const detail = await resp.text().catch(() => '')
-        push('error', 'Could not send the report', {
-          detail: detail.slice(0, 300) || `The server answered ${resp.status}.`,
+        push('error', t('Could not send the report'), {
+          detail: detail.slice(0, 300) || tf('The server answered {status}.', { status: resp.status }),
           sticky: true,
         })
         return
       }
       const body = await resp.json() as { ok?: boolean; id?: number | string }
-      push('info', body?.id ? `Reported as #${body.id}` : 'Report sent', {
-        detail: 'Thank you. If you left an email we may come back to you about it.',
+      push('info', body?.id ? tf('Reported as #{id}', { id: body.id }) : t('Report sent'), {
+        detail: t('Thank you. If you left an email we may come back to you about it.'),
       })
       setWhat('')
       setExpected('')
       onClose()
     } catch (e) {
-      push('error', 'Could not reach the bug report service', {
-        detail: `${String(e)}\nYou can report it at hardwavestudios.com/report-a-bug instead.`,
+      push('error', t('Could not reach the bug report service'), {
+        detail: `${String(e)}\n${t('You can report it at hardwavestudios.com/report-a-bug instead.')}`,
         sticky: true,
       })
     } finally {
@@ -174,34 +176,34 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
         }}
       >
         <div style={{ fontSize: 13, color: hw.textPrimary, fontWeight: 600, marginBottom: 2 }}>
-          Report a bug
+          {t('Report a bug')}
         </div>
         <div style={{ fontSize: 10, color: hw.textFaint, marginBottom: 12 }}>
           {env
-            ? `Hardwave DAW ${env.version} on ${env.os}. Sent to the Hardwave bug tracker.`
-            : 'Sent to the Hardwave bug tracker.'}
+            ? tf('Hardwave DAW {version} on {os}. Sent to the Hardwave bug tracker.', { version: env.version, os: env.os })
+            : t('Sent to the Hardwave bug tracker.')}
         </div>
 
-        <label style={label}>What happened</label>
+        <label style={label}>{t('What happened')}</label>
         <textarea
           autoFocus
           rows={5}
           value={what}
           maxLength={MAX_DESCRIPTION}
           onChange={e => setWhat(e.target.value)}
-          placeholder="What you did, and what the DAW did instead."
+          placeholder={t('What you did, and what the DAW did instead.')}
           style={field}
         />
         <div style={{ fontSize: 9, color: tooShort && what.length > 0 ? hw.yellow : hw.textFaint, margin: '3px 0 10px' }}>
           {tooShort && what.length > 0
-            ? `A few more words, please (at least ${MIN_DESCRIPTION} characters).`
+            ? tf('A few more words, please (at least {n} characters).', { n: MIN_DESCRIPTION })
             : `${what.length} / ${MAX_DESCRIPTION}`}
         </div>
 
-        <label style={label}>What you expected (optional)</label>
+        <label style={label}>{t('What you expected (optional)')}</label>
         <textarea rows={2} value={expected} maxLength={600} onChange={e => setExpected(e.target.value)} style={{ ...field, marginBottom: 10 }} />
 
-        <label style={label}>Your email (optional, so we can come back to you)</label>
+        <label style={label}>{t('Your email (optional, so we can come back to you)')}</label>
         <input value={email} maxLength={255} onChange={e => setEmail(e.target.value)} style={{ ...field, marginBottom: 12 }} />
 
         <div style={{
@@ -218,17 +220,18 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
               style={{ marginTop: 2 }}
             />
             <span style={{ fontSize: 10, color: hw.textSecondary }}>
-              Attach the end of this session's log
-              {projectName ? ' and the project name' : ''}
+              {projectName
+                ? t("Attach the end of this session's log and the project name")
+                : t("Attach the end of this session's log")}
               {afterCrash && (
                 <span style={{ color: hw.yellow }}>
-                  {' '}— ticked because this follows a crash, where the log usually holds the cause
+                  {' '}{t('— ticked because this follows a crash, where the log usually holds the cause')}
                 </span>
               )}
               <div style={{ color: hw.textFaint, marginTop: 3 }}>
                 {env && !env.logAvailable
-                  ? 'No session log was created for this run.'
-                  : 'It can contain file paths and sample folder names from your computer.'}
+                  ? t('No session log was created for this run.')
+                  : t('It can contain file paths and sample folder names from your computer.')}
               </div>
             </span>
           </label>
@@ -241,7 +244,7 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
                   border: 'none', cursor: 'pointer', padding: 0,
                 }}
               >
-                {showLog ? 'Hide what will be sent' : 'Show exactly what will be sent'}
+                {showLog ? t('Hide what will be sent') : t('Show exactly what will be sent')}
               </button>
               {showLog && (
                 <pre style={{
@@ -258,7 +261,7 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
           <span style={{ flex: 1, fontSize: 9, color: hw.textFaint }}>
-            Also at hardwavestudios.com/report-a-bug
+            {t('Also at hardwavestudios.com/report-a-bug')}
           </span>
           <button
             onClick={onClose}
@@ -268,7 +271,7 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
               borderRadius: hw.radius.md, cursor: 'pointer',
             }}
           >
-            Cancel
+            {t('Cancel')}
           </button>
           <button
             onClick={send}
@@ -282,7 +285,7 @@ export function BugReportDialog({ open, onClose, afterCrash = false }: {
               cursor: tooShort || sending ? 'default' : 'pointer',
             }}
           >
-            {sending ? 'Sending…' : 'Send report'}
+            {sending ? t('Sending…') : t('Send report')}
           </button>
         </div>
       </div>

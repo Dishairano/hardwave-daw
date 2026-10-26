@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
 import { useNotificationStore } from '../stores/notificationStore'
+import { t, tf, useLanguage } from '../i18n'
 
 interface TrackTemplateEntry {
   name: string
@@ -18,6 +19,7 @@ interface TrackTemplateEntry {
  * song; here each one adds a track after the selected one.
  */
 export function TrackTemplateManager({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useLanguage()
   const [templates, setTemplates] = useState<TrackTemplateEntry[]>([])
   const reload = () => {
     invoke<TrackTemplateEntry[]>('list_track_templates').then(setTemplates).catch(() => setTemplates([]))
@@ -32,14 +34,14 @@ export function TrackTemplateManager({ open, onClose }: { open: boolean; onClose
       const afterTrackId = useTrackStore.getState().selectedTrackId ?? null
       await invoke<string>('add_track_from_template', { name, afterTrackId })
       await useTrackStore.getState().fetchTracks()
-      push('info', `Added "${name}"`)
+      push('info', tf('Added "{name}"', { name }))
       onClose()
     } catch (err) {
-      push('warning', 'The track was not added', { detail: String(err) })
+      push('warning', t('The track was not added'), { detail: String(err) })
     }
   }
   const remove = async (name: string) => {
-    if (!window.confirm(`Delete the track template "${name}"?`)) return
+    if (!window.confirm(tf('Delete the track template "{name}"?', { name }))) return
     await invoke('delete_track_template', { name }).catch(() => {})
     reload()
   }
@@ -67,7 +69,7 @@ export function TrackTemplateManager({ open, onClose }: { open: boolean; onClose
           display: 'flex', alignItems: 'center',
         }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: hw.textPrimary, marginRight: 'auto' }}>
-            Track templates
+            {t('Track templates')}
           </div>
           <button
             onClick={onClose}
@@ -76,18 +78,18 @@ export function TrackTemplateManager({ open, onClose }: { open: boolean; onClose
               color: hw.textMuted, background: hw.bgInput,
               border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm, cursor: 'pointer',
             }}
-          >Close</button>
+          >{t('Close')}</button>
         </div>
 
         <div style={{ overflowY: 'auto', padding: 12 }}>
           {templates.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: hw.textFaint, fontSize: 11 }}>
-              No templates saved yet. Right-click a track and choose "Save as track template…".
+              {t('No templates saved yet. Right-click a track and choose "Save as track template…".')}
             </div>
           )}
-          {templates.map(t => (
+          {templates.map(tpl => (
             <div
-              key={t.name}
+              key={tpl.name}
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 padding: '6px 10px', borderRadius: hw.radius.sm,
@@ -101,28 +103,30 @@ export function TrackTemplateManager({ open, onClose }: { open: boolean; onClose
                   fontSize: 12, fontWeight: 500, color: hw.textPrimary,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>
-                  {t.name}
+                  {tpl.name}
                 </div>
                 <div style={{ fontSize: 9, color: hw.textFaint, marginTop: 2 }}>
-                  {t.kind === 'Midi' ? 'Instrument track' : 'Audio track'} · {t.plugins} plug-in{t.plugins === 1 ? '' : 's'}
+                  {tpl.kind === 'Midi' ? t('Instrument track') : t('Audio track')} · {tpl.plugins === 1
+                    ? tf('{n} plug-in', { n: tpl.plugins })
+                    : tf('{n} plug-ins', { n: tpl.plugins })}
                 </div>
               </div>
               <button
-                onClick={() => { void add(t.name) }}
+                onClick={() => { void add(tpl.name) }}
                 style={{
                   padding: '3px 8px', fontSize: 10, fontWeight: 600,
                   color: '#fff', background: hw.accent,
                   border: `1px solid ${hw.accent}`, borderRadius: hw.radius.sm, cursor: 'pointer',
                 }}
-              >Add track</button>
+              >{t('Add track')}</button>
               <button
-                onClick={() => { void remove(t.name) }}
+                onClick={() => { void remove(tpl.name) }}
                 style={{
                   padding: '3px 8px', fontSize: 10, fontWeight: 600,
                   color: hw.red, background: hw.redDim,
                   border: `1px solid ${hw.red}40`, borderRadius: hw.radius.sm, cursor: 'pointer',
                 }}
-              >Delete</button>
+              >{t('Delete')}</button>
             </div>
           ))}
         </div>
