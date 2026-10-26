@@ -869,7 +869,8 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
           onToggle={() => {}}
           actionLabel="Add folder"
           onAction={pickDiskRoot}
-          secondLabel="Install pack…"
+          secondLabel="Add pack"
+          secondTitle="Install a sample pack from its .zip into your library"
           onSecond={() => { void installPack() }}
         >
           {diskRoots.map(root => (
@@ -1150,11 +1151,11 @@ function DiskFolder({ path, name, depth, generation = 0, onRemoveRoot, onRemoveC
   )
 }
 
-function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, onAction, secondLabel, onSecond }: {
+function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, onAction, secondLabel, secondTitle, onSecond }: {
   label: string; count: number; expanded: boolean; onToggle: () => void;
   children: React.ReactNode;
   actionLabel?: string; onAction?: () => void;
-  secondLabel?: string; onSecond?: () => void;
+  secondLabel?: string; secondTitle?: string; onSecond?: () => void;
 }) {
   return (
     <div>
@@ -1184,6 +1185,7 @@ function TreeGroup({ label, count, expanded, onToggle, children, actionLabel, on
         {secondLabel && onSecond && (
           <span
             onClick={(e) => { e.stopPropagation(); onSecond() }}
+            title={secondTitle}
             style={{
               marginLeft: 4,
               fontSize: 11,
