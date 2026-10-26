@@ -242,9 +242,9 @@ test.describe('Piano Roll — FL Studio layout', () => {
   test('has header with tool selector and snap dropdown', async ({ page }) => {
     const pr = page.getByTestId('panel-piano-roll')
     await expect(pr).toBeVisible()
-    await expect(pr.getByRole('button', { name: 'draw', exact: true })).toBeVisible()
-    await expect(pr.getByRole('button', { name: 'select', exact: true })).toBeVisible()
-    await expect(pr.getByRole('button', { name: 'erase', exact: true })).toBeVisible()
+    await expect(pr.getByRole('button', { name: 'Draw', exact: true })).toBeVisible()
+    await expect(pr.getByRole('button', { name: 'Select', exact: true })).toBeVisible()
+    await expect(pr.getByRole('button', { name: 'Erase', exact: true })).toBeVisible()
   })
 
   test('has snap options', async ({ page }) => {
