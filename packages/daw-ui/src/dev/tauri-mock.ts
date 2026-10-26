@@ -371,6 +371,9 @@ const mock: TauriInternals = {
         return { input: 0, output: 0 }
       case 'set_channel_offsets':
         return null
+      case 'get_click_output':
+      case 'set_click_output':
+        return { requested: null, active: null }
       case 'drain_plugin_knob_moves':
       case 'drain_midi_mapped_moves':
         return []

@@ -39,6 +39,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
         release_device_in_background: crate::audio_focus::enabled(),
         take_bits_24: crate::commands::transport::take_format().bits_24,
         take_folder: crate::commands::transport::take_format().folder,
+        click_channel_offset: engine.click_output().0,
     };
     drop(engine);
     prefs.save();
@@ -659,6 +660,32 @@ pub fn get_channel_offsets(state: State<AppState>) -> ChannelOffsets {
 pub fn set_channel_offsets(state: State<AppState>, input: u16, output: u16) {
     state.engine.lock().set_channel_offsets(input, output);
     persist_audio_prefs(&state);
+}
+
+/// Where the metronome goes: the output pair asked for (none is with the
+/// mix), and the pair it really goes out of, which is none when the
+/// interface has no such pair or runs in exclusive mode.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClickOutput {
+    pub requested: Option<u16>,
+    pub active: Option<u16>,
+}
+
+#[tauri::command]
+pub fn get_click_output(state: State<AppState>) -> ClickOutput {
+    let (requested, active) = state.engine.lock().click_output();
+    ClickOutput { requested, active }
+}
+
+/// Send the metronome out of an output pair of its own, so a drummer's
+/// headphones get the click and the mix does not; none puts it back in the
+/// mix. The stream restarts on the new layout.
+#[tauri::command]
+pub fn set_click_output(state: State<AppState>, offset: Option<u16>) -> ClickOutput {
+    state.engine.lock().set_click_output(offset);
+    persist_audio_prefs(&state);
+    get_click_output(state)
 }
 
 /// How many threads share the audio work, and how many the machine has.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-click-output"
+description = "Enables the get_click_output command without any pre-configured scope."
+commands.allow = ["get_click_output"]
+
+[[permission]]
+identifier = "deny-get-click-output"
+description = "Denies the get_click_output command without any pre-configured scope."
+commands.deny = ["get_click_output"]

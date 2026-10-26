@@ -51,6 +51,15 @@ pub trait AudioCallback: Send + 'static {
     /// Called on the real-time audio thread with output buffer to fill.
     /// `output` is interleaved stereo (L, R, L, R, ...).
     fn process(&mut self, output: &mut [f32], num_frames: usize, num_channels: u16);
+
+    /// The mix into `main` and the click into `click`, both interleaved
+    /// stereo, for a stream that sends the click out of a pair of its own
+    /// (a drummer's headphones, a click track to the stage). The default
+    /// keeps the click in the mix and leaves `click` silent.
+    fn process_split(&mut self, main: &mut [f32], click: &mut [f32], num_frames: usize) {
+        click[..num_frames * 2].fill(0.0);
+        self.process(main, num_frames, 2);
+    }
 }
 
 /// The callback as the stream runs it: as it is, or raised to the device's
@@ -75,6 +84,13 @@ impl<C: AudioCallback> AudioCallback for Raised<C> {
         match self {
             Raised::Plain(c) => c.process(output, num_frames, num_channels),
             Raised::Up(c) => c.process(output, num_frames, num_channels),
+        }
+    }
+
+    fn process_split(&mut self, main: &mut [f32], click: &mut [f32], num_frames: usize) {
+        match self {
+            Raised::Plain(c) => c.process_split(main, click, num_frames),
+            Raised::Up(c) => c.process_split(main, click, num_frames),
         }
     }
 }
@@ -207,6 +223,12 @@ pub struct AudioDeviceManager {
     /// Which output of the interface the mix is sent to, as the first of
     /// a pair. Zero is the usual main out.
     pub output_channel_offset: u16,
+    /// Which output pair the metronome goes out of, when not with the mix.
+    /// None (or the mix's own pair) keeps the click in the mix.
+    pub click_channel_offset: Option<u16>,
+    /// The click pair the running stream really opened with: None when the
+    /// interface has no such pair, so the click stayed in the mix.
+    active_click_offset: Option<u16>,
     /// Request WASAPI exclusive mode (Windows only). When true and the active
     /// host is WASAPI, the next stream start tries to acquire the endpoint
     /// exclusively for lower latency and bit-perfect output. No effect on
@@ -291,6 +313,8 @@ impl AudioDeviceManager {
             input_channels: 2,
             input_channel_offset: 0,
             output_channel_offset: 0,
+            click_channel_offset: None,
+            active_click_offset: None,
             wasapi_exclusive: false,
             active_exclusive: false,
             input_stream: None,
@@ -614,10 +638,17 @@ impl AudioDeviceManager {
             .default_output_config()
             .map(|c| c.channels())
             .unwrap_or(2);
-        let stream_channels = if out_offset == 0 {
+        // A click pair of its own only on an interface that has it, and
+        // not on the mix's own pair.
+        let click_offset = self
+            .click_channel_offset
+            .filter(|&c| c != out_offset && c + 2 <= device_out_channels);
+        let stream_channels = if out_offset == 0 && click_offset.is_none() {
             2
         } else {
-            device_out_channels.max(out_offset + 2)
+            device_out_channels
+                .max(out_offset + 2)
+                .max(click_offset.map_or(0, |c| c + 2))
         };
         let config = StreamConfig {
             channels: stream_channels,
@@ -631,6 +662,12 @@ impl AudioDeviceManager {
         } else {
             vec![0.0; device_buffer as usize * 2]
         };
+        let mut click_scatter: Vec<f32> = if click_offset.is_some() {
+            vec![0.0; device_buffer as usize * 2]
+        } else {
+            Vec::new()
+        };
+        self.active_click_offset = click_offset;
         let running = Arc::clone(&self.running);
         let stream_error = Arc::clone(&self.stream_error);
         let latency = Arc::clone(&self.latency);
@@ -680,12 +717,18 @@ impl AudioDeviceManager {
                     if stream_channels == 2 {
                         cb.process(data, num_frames, 2);
                     } else {
-                        play_on_pair(
+                        let click =
+                            click_offset.map(|c| (c as usize, click_scatter.as_mut_slice()));
+                        play_on_pairs(
                             data,
                             stream_channels as usize,
                             out_offset as usize,
+                            click,
                             &mut scatter,
-                            |block, frames| cb.process(block, frames, 2),
+                            |main, click, frames| match click {
+                                Some(click) => cb.process_split(main, click, frames),
+                                None => cb.process(main, frames, 2),
+                            },
                         );
                     }
                 },
@@ -733,6 +776,7 @@ impl AudioDeviceManager {
         }
         self.active_device_name = None;
         self.active_exclusive = false;
+        self.active_click_offset = None;
         log::info!("Audio stream stopped");
     }
 
@@ -913,6 +957,12 @@ impl AudioDeviceManager {
         Ok(())
     }
 
+    /// The pair the click goes out of in the running stream, or None when
+    /// it is in the mix (not asked for, or the interface has no such pair).
+    pub fn active_click_offset(&self) -> Option<u16> {
+        self.active_click_offset
+    }
+
     /// The most channels an input stream opens, whatever the interface
     /// offers: past this the ring between the input and the engine grows
     /// for inputs nobody records.
@@ -1027,24 +1077,33 @@ pub fn default_output_name(windows_default: &str, names: &[String]) -> String {
 
 /// Render the mix as stereo and put it on the pair `offset`, `offset + 1`
 /// of an interleaved stream `channels` wide, with the rest of the
-/// interface silent. `scratch` is the stereo buffer the mix is rendered
-/// into, allocated with the stream; a block bigger than it is rendered in
-/// pieces rather than allocating on the audio thread.
+/// interface silent; with `click` (its pair and its scratch), the click is
+/// rendered apart and put on that pair. `scratch` is the stereo buffer the
+/// mix is rendered into, allocated with the stream; a block bigger than it
+/// is rendered in pieces rather than allocating on the audio thread.
 ///
 /// The frame count used to be the buffer's length over two whatever the
 /// stream's width, so on a four-channel interface every block looked twice
 /// its size, failed the "fits in the scratch" check and played as silence:
 /// picking outputs 3/4 gave no sound at all.
-fn play_on_pair(
+fn play_on_pairs(
     data: &mut [f32],
     channels: usize,
     offset: usize,
+    mut click: Option<(usize, &mut [f32])>,
     scratch: &mut [f32],
-    mut render: impl FnMut(&mut [f32], usize),
+    mut render: impl FnMut(&mut [f32], Option<&mut [f32]>, usize),
 ) {
     data.fill(0.0);
     let frames = data.len() / channels.max(1);
-    let piece = scratch.len() / 2;
+    let mut piece = scratch.len() / 2;
+    if let Some((at, c)) = click.as_ref() {
+        if at + 1 >= channels {
+            click = None;
+        } else {
+            piece = piece.min(c.len() / 2);
+        }
+    }
     if piece == 0 || offset + 1 >= channels {
         return;
     }
@@ -1053,7 +1112,19 @@ fn play_on_pair(
         let n = (frames - done).min(piece);
         let block = &mut scratch[..n * 2];
         block.fill(0.0);
-        render(block, n);
+        match click.as_mut() {
+            Some((at, c)) => {
+                let cblock = &mut c[..n * 2];
+                cblock.fill(0.0);
+                render(block, Some(&mut *cblock), n);
+                for f in 0..n {
+                    let base = (done + f) * channels + *at;
+                    data[base] = cblock[f * 2];
+                    data[base + 1] = cblock[f * 2 + 1];
+                }
+            }
+            None => render(block, None, n),
+        }
         for f in 0..n {
             let base = (done + f) * channels + offset;
             data[base] = block[f * 2];
@@ -1065,7 +1136,39 @@ fn play_on_pair(
 
 #[cfg(test)]
 mod pair_tests {
-    use super::play_on_pair;
+    use super::play_on_pairs;
+
+    /// The mix on 1/2 and the click on 3/4, each on its own pair.
+    #[test]
+    fn the_click_goes_out_of_its_own_pair() {
+        let frames = 6;
+        let mut data = vec![0.0_f32; frames * 4];
+        let mut scratch = vec![0.0_f32; frames * 2];
+        let mut click_scratch = vec![0.0_f32; frames * 2];
+        play_on_pairs(
+            &mut data,
+            4,
+            0,
+            Some((2, click_scratch.as_mut_slice())),
+            &mut scratch,
+            |main, click, n| {
+                let click = click.expect("a click buffer");
+                for f in 0..n {
+                    main[f * 2] = 0.25;
+                    main[f * 2 + 1] = 0.25;
+                    click[f * 2] = 1.0;
+                    click[f * 2 + 1] = 1.0;
+                }
+            },
+        );
+        for f in 0..frames {
+            assert_eq!(
+                &data[f * 4..f * 4 + 4],
+                &[0.25, 0.25, 1.0, 1.0],
+                "frame {f}"
+            );
+        }
+    }
 
     /// The mix lands on outputs 3/4 of a four-channel stream, every frame,
     /// with 1/2 silent; it was all silence before.
@@ -1074,7 +1177,7 @@ mod pair_tests {
         let frames = 8;
         let mut data = vec![9.0_f32; frames * 4];
         let mut scratch = vec![0.0_f32; frames * 2];
-        play_on_pair(&mut data, 4, 2, &mut scratch, |block, n| {
+        play_on_pairs(&mut data, 4, 2, None, &mut scratch, |block, _, n| {
             for f in 0..n {
                 block[f * 2] = 0.5;
                 block[f * 2 + 1] = -0.5;
@@ -1092,7 +1195,7 @@ mod pair_tests {
         let mut data = vec![0.0_f32; frames * 4];
         let mut scratch = vec![0.0_f32; 4 * 2];
         let mut next = 0.0_f32;
-        play_on_pair(&mut data, 4, 2, &mut scratch, |block, n| {
+        play_on_pairs(&mut data, 4, 2, None, &mut scratch, |block, _, n| {
             for f in 0..n {
                 next += 1.0;
                 block[f * 2] = next;

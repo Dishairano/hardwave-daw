@@ -168,6 +168,8 @@ permissions = [
   "allow-set-worker-threads",
   "allow-get-channel-offsets",
   "allow-set-channel-offsets",
+  "allow-get-click-output",
+  "allow-set-click-output",
   "allow-drain-plugin-knob-moves",
   "allow-freeze-track",
   "allow-unfreeze-track",
