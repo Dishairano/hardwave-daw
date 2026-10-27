@@ -72,6 +72,9 @@ pub struct LiveMidiFx {
     /// The chain changed under held keys: let every note go and play the
     /// keys again through the new chain.
     release_all: bool,
+    /// Releases that came while the track was muted, so never reached the
+    /// instrument: sent when it plays again. One bit per pitch, per channel.
+    owed: [u128; 16],
 }
 
 impl Default for LiveMidiFx {
@@ -87,6 +90,7 @@ impl Default for LiveMidiFx {
             sounding: KeyNotes::EMPTY,
             off_at: None,
             release_all: false,
+            owed: [0; 16],
         }
     }
 }
@@ -166,7 +170,28 @@ fn emit(out: &mut Vec<MidiEvent>, event: MidiEvent) {
 impl LiveMidiFx {
     /// Whether a key is down or a note is sounding.
     pub fn busy(&self) -> bool {
-        self.sounding.count > 0 || self.keys.iter().any(|k| k.count > 0)
+        self.sounding.count > 0
+            || self.keys.iter().any(|k| k.count > 0)
+            || self.owed.iter().any(|row| *row != 0)
+    }
+
+    /// The track is muted: the releases among `events` never reach the
+    /// instrument, so they are kept and sent when it plays again. (Muting
+    /// rebuilds the graph, and this is what a rebuild carries over.)
+    pub fn owe_releases(&mut self, events: &[MidiEvent]) {
+        for event in events {
+            let (channel, note) = match *event {
+                MidiEvent::NoteOff { channel, note, .. } => (channel, note),
+                MidiEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                    ..
+                } if velocity <= 0.0 => (channel, note),
+                _ => continue,
+            };
+            self.owed[(channel & 0x0F) as usize] |= 1u128 << (note & 0x7F);
+        }
     }
 
     pub fn set_chain(&mut self, chain: Vec<MidiFx>) {
@@ -192,6 +217,7 @@ impl LiveMidiFx {
         self.sounding = old.sounding;
         self.off_at = old.off_at;
         self.release_all = release;
+        self.owed = old.owed;
     }
 
     /// Forget the keys and the arpeggio without letting anything go: the
@@ -247,6 +273,16 @@ impl LiveMidiFx {
         samples_per_tick: f64,
     ) {
         out.clear();
+        // Releases owed from a muted stretch go first. Still muted, they
+        // are owed again by the caller.
+        for (channel, row) in self.owed.iter_mut().enumerate() {
+            let mut bits = std::mem::take(row);
+            while bits != 0 {
+                let note = bits.trailing_zeros() as u8;
+                bits &= bits - 1;
+                emit(out, note_off(0, channel as u8, note));
+            }
+        }
         if self.release_all {
             self.release_all = false;
             self.rekey(out);
@@ -753,6 +789,23 @@ mod tests {
         // existed) maps to 60 too, and must not cut the key still down.
         run(&mut fx, &[on(0, 60)], 64);
         assert!(run(&mut fx, &[off(0, 61)], 64).is_empty());
+    }
+
+    #[test]
+    fn a_release_while_muted_is_sent_when_the_track_plays_again() {
+        let mut fx = LiveMidiFx::default();
+        run(&mut fx, &[on(0, 60)], 64);
+        // Muted: the release goes nowhere, so it is owed.
+        let mut out = Vec::with_capacity(16);
+        fx.process(&[off(0, 60)], &mut out, 64, 1.0);
+        fx.owe_releases(&out);
+        assert!(fx.busy(), "a rebuild carries what is owed");
+        // Still muted the next block: owed again, not lost.
+        fx.process(&[], &mut out, 64, 1.0);
+        fx.owe_releases(&out);
+        // Playing again: the release goes out.
+        assert_eq!(run(&mut fx, &[], 64), vec![(0, 60, false)]);
+        assert!(!fx.busy());
     }
 
     #[test]

@@ -1001,15 +1001,10 @@ impl AudioNode for MidiTrackNode {
             .process(midi_in, &mut self.live_events, block_len, samples_per_tick);
         if self.muted {
             // Silence. A key let go while muted would never reach the
-            // instrument, and its note would sound again on unmuting with
-            // nobody holding it: everything held is let go when the track
-            // plays again, the built-in voices and the plug-in alike.
-            if self.live_events.iter().any(|e| {
-                matches!(e, hardwave_midi::MidiEvent::NoteOff { .. })
-                    || matches!(e, hardwave_midi::MidiEvent::NoteOn { velocity, .. } if *velocity <= 0.0)
-            }) {
-                self.release_live = true;
-            }
+            // instrument, and a plug-in's note would sound again on
+            // unmuting with nobody holding it: the releases are kept and
+            // sent when the track plays again.
+            self.live_fx.owe_releases(&self.live_events);
             return;
         }
 
