@@ -1,5 +1,5 @@
-//! Mackie Control (MCU): a desk with real faders driving the mixer. HUI,
-//! which speaks a different protocol, is not handled yet.
+//! Control surfaces: a desk with real faders driving the mixer, speaking
+//! Mackie Control (MCU) or HUI.
 //!
 //! A control surface speaks ordinary MIDI, but not the MIDI Learn kind:
 //! the faders are pitch bend, one channel each, and the buttons are
@@ -14,9 +14,17 @@
 //! each track's name and level on the scribble strips. A fader with a
 //! hand on it (the desk says so with its touch notes) is left alone, so
 //! the motor never fights the hand.
+//!
+//! HUI carries the same things in other messages, all controllers on the
+//! first channel: a button is a zone (a row of up to eight) and then a
+//! port in it, a fader its high bits and then its low ones. Its scribble
+//! strips hold four characters, so they show the name only. A HUI desk
+//! counts itself off line unless the host pings it once a second
+//! ([`HUI_PING`]).
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use hardwave_midi::MidiEvent;
 use hardwave_project::Project;
@@ -40,6 +48,46 @@ const NOTE_TOUCH_FIRST: u8 = 104; // 104..111 a hand on the fader
 const CC_VPOT_FIRST: u8 = 16; // 16..23 V-pot turned, relative
 const CC_RING_FIRST: u8 = 48; // 48..55 V-pot LED ring
 
+/// Controller numbers a HUI desk uses, all on the first channel.
+const HUI_CC_FADER_HIGH: u8 = 0x00; // 0x00..0x07, and 0x08 for a master (iCON desks)
+const HUI_CC_FADER_HIGH_LAST: u8 = 0x08;
+const HUI_CC_FADER_LOW: u8 = 0x20; // 0x20..0x28, the low bits after the high
+const HUI_CC_FADER_LOW_LAST: u8 = 0x28;
+const HUI_CC_ZONE_OUT: u8 = 0x0C; // which row of lights the next message is for
+const HUI_CC_ZONE_IN: u8 = 0x0F; // which row the next button is in
+const HUI_CC_RING_FIRST: u8 = 0x10; // 0x10..0x17 V-pot LED ring
+const HUI_CC_PORT_OUT: u8 = 0x2C; // a light in that row on or off
+const HUI_CC_PORT_IN: u8 = 0x2F; // a button in that row down or up
+const HUI_CC_VPOT_FIRST: u8 = 0x40; // 0x40..0x47 V-pot turned, relative
+const HUI_CC_VPOT_LAST: u8 = 0x47;
+/// Zones 0..7 are the strips; in each, a port per button.
+const HUI_PORT_TOUCH: u8 = 0;
+const HUI_PORT_MUTE: u8 = 2;
+const HUI_PORT_SOLO: u8 = 3;
+const HUI_PORT_VPOT_PUSH: u8 = 5;
+const HUI_PORT_ARM: u8 = 7;
+const HUI_ZONE_BANK: u8 = 0x0A; // port 1 bank left, 3 bank right
+const HUI_ZONE_TRANSPORT: u8 = 0x0E; // 1 rewind, 2 forward, 3 stop, 4 play, 5 record
+
+/// What the host sends a HUI desk once a second so it stays on line. The
+/// desk answers with the same note at full velocity.
+pub const HUI_PING: [u8; 3] = [0x90, 0x00, 0x00];
+/// A ping answered after this long without one is a desk that was
+/// switched off or unplugged, and shows nothing until it is sent again.
+const HUI_SILENCE: Duration = Duration::from_secs(3);
+
+/// Which language the desk speaks. Both carry the same things: eight
+/// faders with their buttons and lights, the V-pots, the transport keys
+/// and the banks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[repr(u8)]
+pub enum DeskProtocol {
+    #[default]
+    Mackie = 0,
+    Hui = 1,
+}
+
 /// What the desk is doing: whether it is listened to at all, and which
 /// eight tracks its strips are on.
 #[derive(Default)]
@@ -51,6 +99,8 @@ pub struct ControlSurface {
     pub touched: std::sync::atomic::AtomicU8,
     /// What the desk was last sent; none sends everything next time.
     pub shown: std::sync::Mutex<Option<DeskFrame>>,
+    /// The desk's [`DeskProtocol`], as its number.
+    protocol: AtomicU8,
 }
 
 impl ControlSurface {
@@ -68,6 +118,22 @@ impl ControlSurface {
         if let Ok(mut shown) = self.shown.lock() {
             *shown = None;
         }
+    }
+
+    pub fn protocol(&self) -> DeskProtocol {
+        if self.protocol.load(Ordering::Relaxed) == DeskProtocol::Hui as u8 {
+            DeskProtocol::Hui
+        } else {
+            DeskProtocol::Mackie
+        }
+    }
+
+    /// Speak another protocol: the desk is sent everything again in it,
+    /// and no fader counts as held until the new desk says so.
+    pub fn set_protocol(&self, protocol: DeskProtocol) {
+        self.protocol.store(protocol as u8, Ordering::Relaxed);
+        self.touched.store(0, Ordering::Relaxed);
+        self.redraw();
     }
 
     pub fn set_touched(&self, strip: usize, on: bool) {
@@ -136,6 +202,9 @@ pub enum SurfaceAction {
     Goto {
         beats: f64,
     },
+    /// The desk is back (a HUI answering the ping after a silence) and
+    /// shows nothing: send it everything.
+    Hello,
 }
 
 /// Read one MIDI message as a desk message, or nothing when it is not
@@ -215,6 +284,218 @@ pub fn interpret(event: &MidiEvent) -> Option<SurfaceAction> {
     }
 }
 
+/// Whether `event` is the desk's, so it plays no instrument and is not
+/// learned: for HUI, also the halves (a zone, a fader's high bits) that
+/// mean something only with what follows them.
+pub fn claims(protocol: DeskProtocol, event: &MidiEvent) -> bool {
+    match protocol {
+        DeskProtocol::Mackie => interpret(event).is_some(),
+        DeskProtocol::Hui => match *event {
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 0,
+                ..
+            }
+            | MidiEvent::NoteOff {
+                channel: 0,
+                note: 0,
+                ..
+            } => true,
+            MidiEvent::ControlChange { channel: 0, cc, .. } => matches!(
+                cc,
+                HUI_CC_FADER_HIGH..=HUI_CC_FADER_HIGH_LAST
+                    | HUI_CC_FADER_LOW..=HUI_CC_FADER_LOW_LAST
+                    | HUI_CC_ZONE_IN
+                    | HUI_CC_PORT_IN
+                    | HUI_CC_VPOT_FIRST..=HUI_CC_VPOT_LAST
+            ),
+            _ => false,
+        },
+    }
+}
+
+/// Reads a desk in its protocol. A Mackie message stands on its own; a
+/// HUI button is a zone and then a port, and a HUI fader its high bits and
+/// then its low ones, so the reader keeps the first half until the second
+/// comes.
+#[derive(Default)]
+pub struct DeskReader {
+    hui_zone: u8,
+    hui_fader_high: [u8; STRIPS + 1],
+    /// When the HUI desk last answered a ping.
+    hui_answered: Option<Instant>,
+}
+
+impl DeskReader {
+    pub fn read(&mut self, protocol: DeskProtocol, event: &MidiEvent) -> Option<SurfaceAction> {
+        match protocol {
+            DeskProtocol::Mackie => interpret(event),
+            DeskProtocol::Hui => self.read_hui(event),
+        }
+    }
+
+    fn read_hui(&mut self, event: &MidiEvent) -> Option<SurfaceAction> {
+        let (cc, value) = match *event {
+            MidiEvent::NoteOn {
+                channel: 0,
+                note: 0,
+                velocity,
+                ..
+            } if velocity > 0.0 => {
+                let now = Instant::now();
+                let back = self
+                    .hui_answered
+                    .is_none_or(|at| now.duration_since(at) > HUI_SILENCE);
+                self.hui_answered = Some(now);
+                return back.then_some(SurfaceAction::Hello);
+            }
+            MidiEvent::ControlChange {
+                channel: 0,
+                cc,
+                value,
+                ..
+            } => (cc, value),
+            _ => return None,
+        };
+        let raw = (value.clamp(0.0, 1.0) * 127.0).round() as u8;
+        match cc {
+            HUI_CC_FADER_HIGH..=HUI_CC_FADER_HIGH_LAST => {
+                self.hui_fader_high[(cc - HUI_CC_FADER_HIGH) as usize] = raw;
+                None
+            }
+            HUI_CC_FADER_LOW..=HUI_CC_FADER_LOW_LAST => {
+                let strip = (cc - HUI_CC_FADER_LOW) as usize;
+                let position = (u16::from(self.hui_fader_high[strip]) << 7) | u16::from(raw);
+                let value = f32::from(position) / 16383.0;
+                Some(if strip < STRIPS {
+                    SurfaceAction::Fader { strip, value }
+                } else {
+                    SurfaceAction::MasterFader { value }
+                })
+            }
+            HUI_CC_ZONE_IN => {
+                self.hui_zone = raw;
+                None
+            }
+            HUI_CC_PORT_IN => hui_button(self.hui_zone, raw & 0x07, raw & 0x40 != 0),
+            HUI_CC_VPOT_FIRST..=HUI_CC_VPOT_LAST => {
+                // Relative, the other way round from Mackie: bit 6 set is
+                // clockwise, the rest how many clicks.
+                let clicks = i32::from(raw & 0x3F);
+                (clicks != 0).then(|| SurfaceAction::VPot {
+                    strip: (cc - HUI_CC_VPOT_FIRST) as usize,
+                    clicks: if raw & 0x40 != 0 { clicks } else { -clicks },
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A HUI button going down or up. As with Mackie, only the press acts,
+/// except a fader's touch, whose release matters too.
+fn hui_button(zone: u8, port: u8, down: bool) -> Option<SurfaceAction> {
+    let strip = zone as usize;
+    if strip < STRIPS && port == HUI_PORT_TOUCH {
+        return Some(SurfaceAction::Touch { strip, on: down });
+    }
+    if !down {
+        return None;
+    }
+    if strip < STRIPS {
+        return match port {
+            HUI_PORT_MUTE => Some(SurfaceAction::Mute { strip }),
+            HUI_PORT_SOLO => Some(SurfaceAction::Solo { strip }),
+            HUI_PORT_VPOT_PUSH => Some(SurfaceAction::VPotPush { strip }),
+            HUI_PORT_ARM => Some(SurfaceAction::Arm { strip }),
+            _ => None,
+        };
+    }
+    match (zone, port) {
+        (HUI_ZONE_BANK, 1) => Some(SurfaceAction::BankLeft),
+        (HUI_ZONE_BANK, 3) => Some(SurfaceAction::BankRight),
+        (HUI_ZONE_TRANSPORT, 1) => Some(SurfaceAction::Rewind),
+        (HUI_ZONE_TRANSPORT, 2) => Some(SurfaceAction::Forward),
+        (HUI_ZONE_TRANSPORT, 3) => Some(SurfaceAction::Stop),
+        (HUI_ZONE_TRANSPORT, 4) => Some(SurfaceAction::Play),
+        (HUI_ZONE_TRANSPORT, 5) => Some(SurfaceAction::Record),
+        _ => None,
+    }
+}
+
+/// A strip button with a light.
+#[derive(Clone, Copy)]
+enum StripButton {
+    Arm,
+    Solo,
+    Mute,
+}
+
+impl DeskProtocol {
+    /// A fader moved to `value` (0..1); strip eight is the master.
+    fn fader(self, strip: usize, value: f32, out: &mut Vec<Vec<u8>>) {
+        match self {
+            DeskProtocol::Mackie => out.push(fader_feedback(strip, value).to_vec()),
+            DeskProtocol::Hui => {
+                let raw = (value.clamp(0.0, 1.0) * 16383.0).round() as u16;
+                let strip = strip.min(STRIPS) as u8;
+                out.push(vec![
+                    0xB0,
+                    HUI_CC_FADER_HIGH + strip,
+                    ((raw >> 7) & 0x7F) as u8,
+                ]);
+                out.push(vec![0xB0, HUI_CC_FADER_LOW + strip, (raw & 0x7F) as u8]);
+            }
+        }
+    }
+
+    fn light(self, button: StripButton, strip: usize, lit: bool, out: &mut Vec<Vec<u8>>) {
+        let strip = strip as u8 & 0x07;
+        match self {
+            DeskProtocol::Mackie => {
+                let first = match button {
+                    StripButton::Arm => NOTE_REC_FIRST,
+                    StripButton::Solo => NOTE_SOLO_FIRST,
+                    StripButton::Mute => NOTE_MUTE_FIRST,
+                };
+                out.push(button_feedback(first + strip, lit).to_vec());
+            }
+            DeskProtocol::Hui => {
+                let port = match button {
+                    StripButton::Arm => HUI_PORT_ARM,
+                    StripButton::Solo => HUI_PORT_SOLO,
+                    StripButton::Mute => HUI_PORT_MUTE,
+                };
+                out.push(vec![0xB0, HUI_CC_ZONE_OUT, strip]);
+                out.push(vec![
+                    0xB0,
+                    HUI_CC_PORT_OUT,
+                    if lit { 0x40 } else { 0 } | port,
+                ]);
+            }
+        }
+    }
+
+    /// A V-pot ring; both protocols read the value the same way.
+    fn ring(self, strip: usize, value: u8, out: &mut Vec<Vec<u8>>) {
+        let first = match self {
+            DeskProtocol::Mackie => CC_RING_FIRST,
+            DeskProtocol::Hui => HUI_CC_RING_FIRST,
+        };
+        out.push(vec![0xB0, first + (strip as u8 & 0x07), value]);
+    }
+
+    /// Text on a scribble strip. A HUI strip has one row of four, so the
+    /// second row (the level) is not shown there.
+    fn text(self, strip: usize, row: usize, text: &str, out: &mut Vec<Vec<u8>>) {
+        match self {
+            DeskProtocol::Mackie => out.push(scribble(strip, row, text)),
+            DeskProtocol::Hui if row == 0 => out.push(hui_scribble(strip, text)),
+            DeskProtocol::Hui => {}
+        }
+    }
+}
+
 /// A fader position as the three bytes a desk expects back, so a
 /// motorised fader moves when the mix changes rather than sitting where
 /// the hand left it.
@@ -231,11 +512,6 @@ pub fn fader_feedback(strip: usize, value: f32) -> [u8; 3] {
 /// A lit or dark button, as the desk expects it back.
 pub fn button_feedback(note: u8, lit: bool) -> [u8; 3] {
     [0x90, note, if lit { 127 } else { 0 }]
-}
-
-/// The note that lights a strip's mute button.
-pub fn mute_note(strip: usize) -> u8 {
-    NOTE_MUTE_FIRST + (strip as u8 & 0x07)
 }
 
 /// Which tracks the eight strips are on, as ids.
@@ -329,7 +605,12 @@ pub fn desk_frame(project: &Project, bank: usize, master_db: f64) -> DeskFrame {
 /// The messages that take the desk from what it showed (`old`, none for
 /// a blank desk) to `new`: only what changed, and nothing for a fader with
 /// a hand on it (`touched`, one bit per strip).
-pub fn frame_messages(old: Option<&DeskFrame>, new: &DeskFrame, touched: u8) -> Vec<Vec<u8>> {
+pub fn frame_messages(
+    protocol: DeskProtocol,
+    old: Option<&DeskFrame>,
+    new: &DeskFrame,
+    touched: u8,
+) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for strip in 0..STRIPS {
         let now = new.strips.get(strip);
@@ -354,33 +635,29 @@ pub fn frame_messages(old: Option<&DeskFrame>, new: &DeskFrame, touched: u8) -> 
         if touched & (1 << strip) == 0
             && was.is_none_or(|w| fader_feedback(strip, w.fader) != fader_feedback(strip, v.fader))
         {
-            out.push(fader_feedback(strip, v.fader).to_vec());
+            protocol.fader(strip, v.fader, &mut out);
         }
         if changed(&|s| s.armed) {
-            out.push(button_feedback(NOTE_REC_FIRST + strip as u8, v.armed).to_vec());
+            protocol.light(StripButton::Arm, strip, v.armed, &mut out);
         }
         if changed(&|s| s.soloed) {
-            out.push(button_feedback(NOTE_SOLO_FIRST + strip as u8, v.soloed).to_vec());
+            protocol.light(StripButton::Solo, strip, v.soloed, &mut out);
         }
         if changed(&|s| s.muted) {
-            out.push(button_feedback(mute_note(strip), v.muted).to_vec());
+            protocol.light(StripButton::Mute, strip, v.muted, &mut out);
         }
         if was.is_none_or(|w| w.pan != v.pan) {
-            out.push(vec![
-                0xB0,
-                CC_RING_FIRST + strip as u8,
-                pan_ring(v.pan, now.is_some()),
-            ]);
+            protocol.ring(strip, pan_ring(v.pan, now.is_some()), &mut out);
         }
         if was.is_none_or(|w| w.name != v.name) {
-            out.push(scribble(strip, 0, &v.name));
+            protocol.text(strip, 0, &v.name, &mut out);
         }
         if was.is_none_or(|w| w.level != v.level) {
-            out.push(scribble(strip, 1, &v.level));
+            protocol.text(strip, 1, &v.level, &mut out);
         }
     }
     if old.is_none_or(|o| o.master != new.master) {
-        out.push(fader_feedback(STRIPS, new.master).to_vec());
+        protocol.fader(STRIPS, new.master, &mut out);
     }
     out
 }
@@ -446,13 +723,7 @@ pub fn scribble(strip: usize, row: usize, text: &str) -> Vec<u8> {
     let mut msg = vec![0xF0, 0x00, 0x00, 0x66, 0x14, 0x12, offset];
     let cells: Vec<u8> = text
         .chars()
-        .map(|c| {
-            if c.is_ascii() && !c.is_ascii_control() {
-                c as u8
-            } else {
-                b'?'
-            }
-        })
+        .map(display_char)
         .chain(std::iter::repeat(b' '))
         .take(7)
         .enumerate()
@@ -461,6 +732,38 @@ pub fn scribble(strip: usize, row: usize, text: &str) -> Vec<u8> {
     msg.extend(cells);
     msg.push(0xF7);
     msg
+}
+
+/// A strip's name on a HUI scribble strip: four characters.
+pub fn hui_scribble(strip: usize, text: &str) -> Vec<u8> {
+    let mut msg = vec![
+        0xF0,
+        0x00,
+        0x00,
+        0x66,
+        0x05,
+        0x00,
+        0x10,
+        strip.min(STRIPS - 1) as u8,
+    ];
+    msg.extend(
+        text.chars()
+            .map(display_char)
+            .chain(std::iter::repeat(b' '))
+            .take(4),
+    );
+    msg.push(0xF7);
+    msg
+}
+
+/// A character as a desk's display shows it: plain ASCII, anything else
+/// a question mark.
+fn display_char(c: char) -> u8 {
+    if c.is_ascii() && !c.is_ascii_control() {
+        c as u8
+    } else {
+        b'?'
+    }
 }
 
 /// Shared handle for the app and the dispatcher.
@@ -632,7 +935,7 @@ mod tests {
             strips: vec![strip("Kick", -6.0), strip("Bass", 0.0)],
             master: 1.0,
         };
-        let all = frame_messages(None, &first, 0);
+        let all = frame_messages(DeskProtocol::Mackie, None, &first, 0);
         assert!(all.contains(&scribble(0, 0, "Kick")), "names on the strips");
         assert!(
             all.contains(&fader_feedback(1, 1.0).to_vec()),
@@ -645,8 +948,11 @@ mod tests {
 
         let mut next = first.clone();
         next.strips[1].muted = true;
-        let changes = frame_messages(Some(&first), &next, 0);
-        assert_eq!(changes, vec![button_feedback(mute_note(1), true).to_vec()]);
+        let changes = frame_messages(DeskProtocol::Mackie, Some(&first), &next, 0);
+        assert_eq!(
+            changes,
+            vec![button_feedback(NOTE_MUTE_FIRST + 1, true).to_vec()]
+        );
     }
 
     #[test]
@@ -657,7 +963,7 @@ mod tests {
         };
         let mut next = first.clone();
         next.strips[0] = strip("Kick", -3.0);
-        let changes = frame_messages(Some(&first), &next, 0b0000_0001);
+        let changes = frame_messages(DeskProtocol::Mackie, Some(&first), &next, 0b0000_0001);
         assert!(
             !changes.iter().any(|m| m[0] == 0xE0),
             "no fader message while touched"
@@ -707,6 +1013,221 @@ mod tests {
         };
         // The fader itself (touched here) is a real step on a 14-bit desk;
         // the level text reads -6.0 both times and is not sent again.
-        assert!(frame_messages(Some(&first), &next, 0b1).is_empty());
+        assert!(frame_messages(DeskProtocol::Mackie, Some(&first), &next, 0b1).is_empty());
+    }
+
+    fn hui_cc(cc: u8, raw: u8) -> MidiEvent {
+        MidiEvent::ControlChange {
+            timing: 0,
+            channel: 0,
+            cc,
+            value: raw as f32 / 127.0,
+        }
+    }
+
+    /// A HUI button: its zone, then its port with bit 6 for down.
+    fn hui_press(reader: &mut DeskReader, zone: u8, port: u8, down: bool) -> Option<SurfaceAction> {
+        let first = reader.read(DeskProtocol::Hui, &hui_cc(0x0F, zone));
+        assert_eq!(first, None, "a zone alone does nothing");
+        reader.read(
+            DeskProtocol::Hui,
+            &hui_cc(0x2F, if down { 0x40 } else { 0 } | port),
+        )
+    }
+
+    #[test]
+    fn a_hui_button_is_a_zone_then_a_port() {
+        let mut r = DeskReader::default();
+        assert_eq!(
+            hui_press(&mut r, 2, 2, true),
+            Some(SurfaceAction::Mute { strip: 2 })
+        );
+        assert_eq!(
+            hui_press(&mut r, 2, 2, false),
+            None,
+            "the release does nothing"
+        );
+        assert_eq!(
+            hui_press(&mut r, 5, 3, true),
+            Some(SurfaceAction::Solo { strip: 5 })
+        );
+        assert_eq!(
+            hui_press(&mut r, 0, 7, true),
+            Some(SurfaceAction::Arm { strip: 0 })
+        );
+        assert_eq!(
+            hui_press(&mut r, 7, 5, true),
+            Some(SurfaceAction::VPotPush { strip: 7 })
+        );
+        assert_eq!(hui_press(&mut r, 0x0E, 4, true), Some(SurfaceAction::Play));
+        assert_eq!(hui_press(&mut r, 0x0E, 3, true), Some(SurfaceAction::Stop));
+        assert_eq!(
+            hui_press(&mut r, 0x0E, 5, true),
+            Some(SurfaceAction::Record)
+        );
+        assert_eq!(
+            hui_press(&mut r, 0x0E, 1, true),
+            Some(SurfaceAction::Rewind)
+        );
+        assert_eq!(
+            hui_press(&mut r, 0x0A, 1, true),
+            Some(SurfaceAction::BankLeft)
+        );
+        assert_eq!(
+            hui_press(&mut r, 0x0A, 3, true),
+            Some(SurfaceAction::BankRight)
+        );
+    }
+
+    #[test]
+    fn a_hui_touch_counts_going_down_and_coming_up() {
+        let mut r = DeskReader::default();
+        assert_eq!(
+            hui_press(&mut r, 4, 0, true),
+            Some(SurfaceAction::Touch { strip: 4, on: true })
+        );
+        assert_eq!(
+            hui_press(&mut r, 4, 0, false),
+            Some(SurfaceAction::Touch {
+                strip: 4,
+                on: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_hui_fader_is_its_high_bits_then_its_low() {
+        let mut r = DeskReader::default();
+        assert_eq!(r.read(DeskProtocol::Hui, &hui_cc(0x03, 0x40)), None);
+        assert_eq!(
+            r.read(DeskProtocol::Hui, &hui_cc(0x23, 0x00)),
+            Some(SurfaceAction::Fader {
+                strip: 3,
+                value: 8192.0 / 16383.0
+            })
+        );
+        r.read(DeskProtocol::Hui, &hui_cc(0x00, 0x7F));
+        assert_eq!(
+            r.read(DeskProtocol::Hui, &hui_cc(0x20, 0x7F)),
+            Some(SurfaceAction::Fader {
+                strip: 0,
+                value: 1.0
+            })
+        );
+    }
+
+    #[test]
+    fn a_hui_fader_sent_back_is_the_same_position_it_came_in_at() {
+        for value in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            let mut out = Vec::new();
+            DeskProtocol::Hui.fader(6, value, &mut out);
+            assert_eq!(out.len(), 2);
+            assert_eq!(&out[0][..2], &[0xB0, 0x06]);
+            assert_eq!(&out[1][..2], &[0xB0, 0x26]);
+            let mut r = DeskReader::default();
+            r.read(DeskProtocol::Hui, &hui_cc(out[0][1], out[0][2]));
+            let Some(SurfaceAction::Fader {
+                strip: 6,
+                value: back,
+            }) = r.read(DeskProtocol::Hui, &hui_cc(out[1][1], out[1][2]))
+            else {
+                panic!("not read back as fader 6");
+            };
+            assert!((back - value).abs() < 0.001, "{value} came back as {back}");
+        }
+    }
+
+    #[test]
+    fn a_hui_v_pot_turns_clockwise_with_bit_six_set() {
+        let mut r = DeskReader::default();
+        assert_eq!(
+            r.read(DeskProtocol::Hui, &hui_cc(0x41, 0x42)),
+            Some(SurfaceAction::VPot {
+                strip: 1,
+                clicks: 2
+            })
+        );
+        assert_eq!(
+            r.read(DeskProtocol::Hui, &hui_cc(0x41, 0x01)),
+            Some(SurfaceAction::VPot {
+                strip: 1,
+                clicks: -1
+            })
+        );
+    }
+
+    #[test]
+    fn a_hui_desk_answering_the_ping_after_a_silence_is_sent_everything() {
+        let mut r = DeskReader::default();
+        let answer = MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 0,
+            velocity: 1.0,
+        };
+        assert_eq!(
+            r.read(DeskProtocol::Hui, &answer),
+            Some(SurfaceAction::Hello)
+        );
+        assert_eq!(
+            r.read(DeskProtocol::Hui, &answer),
+            None,
+            "a second later: still there"
+        );
+        assert!(
+            claims(DeskProtocol::Hui, &answer),
+            "the answer plays no note"
+        );
+        // To a Mackie desk the same note is strip one's arm button.
+        assert_eq!(interpret(&answer), Some(SurfaceAction::Arm { strip: 0 }));
+    }
+
+    #[test]
+    fn hui_claims_its_controllers_on_the_first_channel_only() {
+        assert!(claims(DeskProtocol::Hui, &hui_cc(0x0F, 3)));
+        assert!(claims(DeskProtocol::Hui, &hui_cc(0x25, 3)));
+        let other_channel = MidiEvent::ControlChange {
+            timing: 0,
+            channel: 1,
+            cc: 0x0F,
+            value: 0.0,
+        };
+        assert!(!claims(DeskProtocol::Hui, &other_channel));
+        // Pitch bend is a keyboard's, not a HUI desk's.
+        assert!(!claims(DeskProtocol::Hui, &bend(0, 0.0)));
+        assert!(claims(DeskProtocol::Mackie, &bend(0, 0.0)));
+    }
+
+    #[test]
+    fn a_hui_desk_gets_lights_as_zone_and_port_and_four_letter_names() {
+        let first = DeskFrame {
+            strips: vec![strip("Kick", -6.0), strip("Bassline", 0.0)],
+            master: 1.0,
+        };
+        let all = frame_messages(DeskProtocol::Hui, None, &first, 0);
+        assert!(all.contains(&hui_scribble(0, "Kick")));
+        assert!(all.contains(&vec![
+            0xF0, 0x00, 0x00, 0x66, 0x05, 0x00, 0x10, 1, b'B', b'a', b's', b's', 0xF7
+        ]));
+        assert!(
+            !all.iter().any(|m| m.len() > 5 && m[4] == 0x14),
+            "no Mackie display messages"
+        );
+        let mut next = first.clone();
+        next.strips[1].soloed = true;
+        assert_eq!(
+            frame_messages(DeskProtocol::Hui, Some(&first), &next, 0),
+            vec![vec![0xB0, 0x0C, 1], vec![0xB0, 0x2C, 0x43]]
+        );
+        let mut held = first.clone();
+        held.strips[0] = strip("Kick", -3.0);
+        let changes = frame_messages(DeskProtocol::Hui, Some(&first), &held, 0b1);
+        assert!(
+            !changes
+                .iter()
+                .any(|m| m[0] == 0xB0 && (m[1] == 0x00 || m[1] == 0x20)),
+            "no fader message while touched"
+        );
+        assert!(changes.is_empty(), "the level row is not on a HUI desk");
     }
 }

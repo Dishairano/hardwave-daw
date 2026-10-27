@@ -463,6 +463,7 @@ pub fn run() {
             commands::midi_input::get_control_surface,
             commands::midi_input::set_control_surface_enabled,
             commands::midi_input::set_control_surface_bank,
+            commands::midi_input::set_control_surface_protocol,
             commands::midi::get_mpe,
             commands::midi::set_mpe,
             commands::midi::load_tuning_file,
@@ -900,7 +901,7 @@ pub fn run() {
                 let surface = Arc::clone(&state.control_surface);
                 state.midi_input.lock().set_claim(Some(Arc::new(
                     move |event: &hardwave_midi::MidiEvent| {
-                        surface.is_enabled() && control_surface::interpret(event).is_some()
+                        surface.is_enabled() && control_surface::claims(surface.protocol(), event)
                     },
                 )));
             }
