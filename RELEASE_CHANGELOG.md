@@ -1,56 +1,10 @@
-### New features
-- feat: the whole app is in Dutch when it is set to Dutch (Settings, language): the playlist, piano roll, mixer, channel rack, plug-in windows, browser, every settings page, the sample window and editors, the panels and dialogs, and every menu
-- feat: capture what you just played (Tools) also works with the song stopped: the notes are laid out as you played them, from the playhead. It takes your last phrase, what came after the last pause of ten seconds
-- feat: right-click a note in the piano roll, Pan and tuning to automation: the notes' own pan becomes the track's pan lane and their detune pitch bend, for plug-ins and hardware that do not read per-note expression
-- feat: colours from FL come across: channels, patterns, playlist tracks and mixer inserts
-- feat: MPE out: with MPE on for a track, every note goes to a plug-in instrument on a channel of its own, with its own bend, so one note of a chord can slide while the others hold. The instrument is told the zone when playing starts
-- feat: Higher contrast (Settings, Theme): brighter hints, labels and borders, easier to read; on by itself when Windows asks for more contrast
-
 ### Bug fixes
-- fix: plug-ins on instrument (MIDI) tracks were taken off again by the next edit that rebuilt the song (drawing a note, adding a track, even adding another plug-in): the instrument went quiet and the built-in synth played in its place, and a plug-in in its own process was never run at all. They now stay
-- fix: changing the sound card, sample rate, buffer size, driver or output pair, the card coming back after it was lost, and the window coming back to the front (with "release the device" on) left the song without its plug-ins until it was opened again: silent instruments, effects gone. They are loaded again, with their settings as they were. Switching the theme no longer restarts the audio engine at all
-- fix: with the song stopped and no track armed, a MIDI keyboard played nothing, and the notes held back all sounded at once when play was pressed; it now plays the picked instrument at once, stopped or not
-- fix: the beat slicer finds hits with the engine's detection (the warp editor's): its own judged every hit against the loudest one, so a loud first kick hid the quieter hits after it
-- fix: slip editing slid the audio many times further than the mouse went, with an undo step for every move; it now slides by the distance dragged, as one undo step
-- fix: the channel rack's mixer track column showed the channel's place in the rack; it shows the mixer track the channel plays into
-- fix: an FL project with several arrangements had all of them stacked on one playlist, so a radio edit and an extended mix played at once. Each FL arrangement is now an arrangement here, with its own clips; the one open in FL opens first
-- fix: an FL layer channel came in silent; it now plays its notes on its children, each on a track of its own
-- fix: an FL playlist row with samples routed to different mixer inserts played them all through one; it becomes a track per insert
-- fix: an FL pattern clip trimmed at its start played from the pattern's start; it now starts where FL starts it
-- fix: an FL mixer insert routed to the master below full played at full; its fader is now that much lower
-- fix: a note recorded on its own MIDI channel (an MPE part, or a split keyboard) went to a plug-in on the first channel; it now keeps its channel, note-off included
-- fix: a CLAP plug-in could get a controller value one step low
-- fix: a plug-in in its own process that crashed and was started again lost the log lines saying how it ended; its logs are now added to
-- fix: the zstd library that reads and writes song files is updated for four security advisories published on 26 Oct
+- fix: a note drawn in the piano roll stayed silent, and a moved or deleted note kept playing where it was, until something else changed the song (adding a track, for one). Drawing, moving, resizing and deleting notes is now heard at once
+- fix: on an instrument (MIDI) track the mixer's polarity, left/right swap and track delay, and the channel rack's filter (cutoff and resonance), did nothing. They now act on instrument tracks as on audio tracks, after the instrument and its effects and before the width and the fader
+- fix: unfreezing a track brought it back without its plug-ins: its effects and instrument were gone until the song was opened again. They are kept while the track is frozen and come back on unfreezing, with their settings; saving a song with a frozen track keeps them too
 
 ### Improvements
-- chore(permissions): the three new commands in the app's permission set
-- chore(deps): zstd 0.14.3 (zstd-safe 8.2.0, zstd-sys 2.1.2)
-- fix(engine): plug-ins on MIDI tracks survive a graph rebuild
-- feat(sandbox): count what happens to each plug-in's audio blocks
-- fix(engine): live MIDI is read with the song stopped and no track armed
-- feat(piano roll): a clip's note pan and tuning to automation
-- fix(slicer): the beat slicer finds hits with the engine's detection
-- feat(i18n): Dutch for the rest of the menus
-- fix(i18n): one Dutch word for Smooth
-- fix(engine): plug-ins survive the audio engine restarting
-- feat(i18n): Dutch for the remaining panels and small windows
-- feat(capture): capture what was just played, also with the song stopped
-- feat(i18n): Dutch for the sample window, the editors and the plug-in picker
-- fix(playlist): slip editing slides by the distance dragged, as one undo step
-- fix(fl-import): a playlist row with samples on different inserts splits
-- fix(rack): the mixer track column shows where the channel's sound goes
-- fix(fl-import): a layer plays its notes on its children
-- chore(i18n): tables for the editors and the panels
-- feat(settings): Higher contrast switch on the theme page
-- fix(i18n): one Dutch word for Start and for the folder prompt
-- fix(fl-import): arrangements, trimmed patterns, master levels and colours
-- fix(sandbox): a plug-in's logs are added to at each start, not wiped
-- feat(i18n): Dutch for the mixer, the channel rack and the plug-in windows
-- feat(i18n): Dutch for the playlist and the piano roll
-- feat(i18n): Dutch for the browser, the settings and the main dialogs
-- feat(ui): higher contrast colours, on when Windows asks for them
-- feat(engine): notes keep their MIDI channel, and MPE out to plug-ins
-- fix(clap): controller values rounded, not cut down
-- feat(i18n): tf() for sentences with blanks
-- chore(i18n): Dutch kept in one file per part of the app
+- fix(piano roll): a note drawn, moved or deleted is heard at once
+- fix(engine): unfreezing a track gives its plug-ins back
+- fix(engine): polarity, swap, delay and filter act on instrument tracks
+- chore(fl-import): flp_structure, an FL project's structure as FL has it and as imported
