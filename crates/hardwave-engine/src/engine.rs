@@ -7396,10 +7396,13 @@ mod wait_for_input_tests {
             captured[0].sample_pos, captured[1].sample_pos,
             "the playhead stood still"
         );
-        assert_eq!(
-            captured[1].clock - captured[0].clock,
-            5 * 256,
-            "the clock says how far apart they were played"
+        // How long each event waited for its block is measured on the wall
+        // clock, so the two can differ by a sample or so (a busy Windows
+        // runner put them 1281 apart); a block's worth would be a real fault.
+        let apart = captured[1].clock - captured[0].clock;
+        assert!(
+            apart.abs_diff(5 * 256) <= 48,
+            "the clock says how far apart they were played: {apart}"
         );
     }
 
