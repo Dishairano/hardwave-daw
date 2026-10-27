@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-control-surface-protocol"
+description = "Enables the set_control_surface_protocol command without any pre-configured scope."
+commands.allow = ["set_control_surface_protocol"]
+
+[[permission]]
+identifier = "deny-set-control-surface-protocol"
+description = "Denies the set_control_surface_protocol command without any pre-configured scope."
+commands.deny = ["set_control_surface_protocol"]
