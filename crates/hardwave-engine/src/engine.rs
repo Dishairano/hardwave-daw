@@ -2999,6 +2999,10 @@ struct EngineCallback {
     /// Frames left to keep processing with the song stopped, after the last
     /// live MIDI event (see `LIVE_MIDI_HOLD_SECONDS`).
     live_midi_hold: u64,
+    /// Live keys down, one bit per note for each channel, and the sustain
+    /// pedal per channel: while any is held the engine keeps running.
+    live_keys_down: [u128; 16],
+    live_sustain: [bool; 16],
     /// Which graph edges carry each send, filled at rebuild so a SendLevel
     /// automation lane can move a send's gain per block.
     send_edges: Vec<SendEdges>,
@@ -3209,6 +3213,8 @@ impl EngineCallback {
             capture_clock: 0,
             parked_chains: HashMap::new(),
             live_midi_hold: 0,
+            live_keys_down: [0; 16],
+            live_sustain: [false; 16],
             send_edges: Vec::with_capacity(64),
             mod_env: vec![0.0; MAX_MOD_ROUTES],
             mod_cc: [0.0; 128],
@@ -5280,7 +5286,35 @@ impl EngineCallback {
         // below, so with no track armed a keyboard played nothing while
         // stopped, its notes waited and all sounded at once on play, and
         // capture had nothing to capture.
-        if self.midi_event_scratch.is_empty() {
+        // A key still down (or the sustain pedal) keeps it running too: the
+        // hold counted from the last event, so a pad held longer than that
+        // with the song stopped went silent while the key was down.
+        for ev in &self.midi_event_scratch {
+            match *ev {
+                hardwave_midi::MidiEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                    ..
+                } if velocity > 0.0 => {
+                    self.live_keys_down[(channel & 0x0F) as usize] |= 1u128 << (note & 0x7F);
+                }
+                hardwave_midi::MidiEvent::NoteOn { channel, note, .. }
+                | hardwave_midi::MidiEvent::NoteOff { channel, note, .. } => {
+                    self.live_keys_down[(channel & 0x0F) as usize] &= !(1u128 << (note & 0x7F));
+                }
+                hardwave_midi::MidiEvent::ControlChange {
+                    channel,
+                    cc: 64,
+                    value,
+                    ..
+                } => self.live_sustain[(channel & 0x0F) as usize] = value >= 0.5,
+                _ => {}
+            }
+        }
+        let held = self.live_keys_down.iter().any(|row| *row != 0)
+            || self.live_sustain.iter().any(|down| *down);
+        if self.midi_event_scratch.is_empty() && !held {
             self.live_midi_hold = self.live_midi_hold.saturating_sub(num_frames as u64);
         } else {
             self.live_midi_hold = self.sample_rate as u64 * LIVE_MIDI_HOLD_SECONDS;
@@ -7419,6 +7453,37 @@ mod wait_for_input_tests {
             apart.abs_diff(5 * 256) <= 48,
             "the clock says how far apart they were played: {apart}"
         );
+    }
+
+    /// A key held longer than the hold with the song stopped keeps the
+    /// engine running: it went silent ten seconds after the press while
+    /// the key was still down.
+    #[test]
+    fn a_key_held_with_the_song_stopped_keeps_sounding() {
+        let midi = Arc::new(Mutex::new(MidiInputManager::new()));
+        let (mut cb, _tx) = make_callback(Arc::clone(&midi));
+        let mut out = vec![0.0f32; 512];
+        midi.lock().inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.9,
+        });
+        let blocks = (cb.sample_rate as u64 * (LIVE_MIDI_HOLD_SECONDS + 2)) / 256 + 1;
+        for _ in 0..blocks {
+            cb.process(&mut out, 256, 2);
+        }
+        assert!(cb.live_midi_hold > 0, "still running with the key down");
+        midi.lock().inject(hardwave_midi::MidiEvent::NoteOff {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.0,
+        });
+        for _ in 0..blocks {
+            cb.process(&mut out, 256, 2);
+        }
+        assert_eq!(cb.live_midi_hold, 0, "and stops once it is let go");
     }
 
     #[test]

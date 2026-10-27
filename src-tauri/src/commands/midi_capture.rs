@@ -340,7 +340,56 @@ fn last_phrase(
     {
         start -= 1;
     }
-    &captured[start.saturating_sub(1).min(captured.len())..]
+    let mut start = start.saturating_sub(1).min(captured.len());
+    // A key held through the pause: its note-on is before it and its
+    // note-off after, so the phrase began with a release and a chord held
+    // longer than the pause captured as nothing. The phrase starts at
+    // the note-on of every note it lets go of.
+    loop {
+        let mut open = [0u128; 16];
+        let mut earliest = start;
+        for c in &captured[start..] {
+            match c.event {
+                hardwave_midi::MidiEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                    ..
+                } if velocity > 0.0 => open[(channel & 0x0F) as usize] |= 1u128 << (note & 0x7F),
+                hardwave_midi::MidiEvent::NoteOn { channel, note, .. }
+                | hardwave_midi::MidiEvent::NoteOff { channel, note, .. } => {
+                    let bit = 1u128 << (note & 0x7F);
+                    if open[(channel & 0x0F) as usize] & bit == 0 {
+                        // Released here, pressed before: find the press.
+                        if let Some(i) = captured[..start].iter().rposition(|p| {
+                            matches!(p.event, hardwave_midi::MidiEvent::NoteOn {
+                                channel: ch, note: n, velocity, ..
+                            } if ch == channel && n == note && velocity > 0.0)
+                        }) {
+                            earliest = earliest.min(i);
+                        }
+                    }
+                    open[(channel & 0x0F) as usize] &= !bit;
+                }
+                _ => {}
+            }
+        }
+        if earliest == start {
+            break;
+        }
+        // Playing went on while the key was held: what led up to its
+        // press, without a pause, is part of the phrase too.
+        start = earliest;
+        while start > 0
+            && captured[start]
+                .clock
+                .saturating_sub(captured[start - 1].clock)
+                < gap
+        {
+            start -= 1;
+        }
+    }
+    &captured[start..]
 }
 
 /// Commit a slice of the rolling capture into a MIDI clip placed on the/// Commit a slice of the rolling capture into a MIDI clip placed on the
@@ -550,7 +599,9 @@ fn commit_takes(
                 MidiEvent::Aftertouch { .. } | MidiEvent::NoteExpression { .. } => {}
             }
         }
-        recorder.stop();
+        // A key still down when capture was pressed lasts to the end of
+        // the take, not one tick.
+        recorder.stop_at(length_ticks);
         let notes = recorder.take_notes();
         if notes.is_empty() && controls.is_empty() {
             continue;
@@ -804,6 +855,25 @@ mod capture_tests {
         assert_eq!(last_phrase(&played, gap).len(), 2);
         assert_eq!(last_phrase(&played[..2], gap).len(), 2);
         assert!(last_phrase(&[], gap).is_empty());
+    }
+
+    /// A chord held longer than the pause: the phrase starts at its
+    /// note-on, not at its release, which captured as nothing.
+    #[test]
+    fn a_key_held_through_the_pause_is_in_the_phrase() {
+        let gap = 480_000;
+        let played = [
+            at(0, 0, true),
+            at(0, 1_000, false),
+            at(0, 2_000, true),
+            // Held for longer than the gap, then let go.
+            at(0, 600_000, false),
+        ];
+        let phrase = last_phrase(&played, gap);
+        // The held key's press, and what was played without a pause
+        // before it.
+        assert_eq!(phrase.len(), 4);
+        assert_eq!(phrase[0].clock, 0);
     }
 
     /// With the song stopped every event has the same playhead position;
