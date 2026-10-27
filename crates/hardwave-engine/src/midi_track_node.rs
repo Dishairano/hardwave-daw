@@ -400,7 +400,10 @@ impl MidiTrackNode {
             controls: Vec::new(),
             next_control_idx: 0,
             control_scratch: Vec::with_capacity(64),
-            block_midi_scratch: Vec::with_capacity(256),
+            // Room for the live keys (live_events), the held-note releases
+            // and a block of clip and controller events, so it never grows
+            // on the audio thread.
+            block_midi_scratch: Vec::with_capacity(1024),
             tuning_table: None,
             mpe: false,
             live_channel: 0,
@@ -997,7 +1000,16 @@ impl AudioNode for MidiTrackNode {
         self.live_fx
             .process(midi_in, &mut self.live_events, block_len, samples_per_tick);
         if self.muted {
-            // Emit silence; the effects above kept the keys' state.
+            // Silence. A key let go while muted would never reach the
+            // instrument, and its note would sound again on unmuting with
+            // nobody holding it: everything held is let go when the track
+            // plays again, the built-in voices and the plug-in alike.
+            if self.live_events.iter().any(|e| {
+                matches!(e, hardwave_midi::MidiEvent::NoteOff { .. })
+                    || matches!(e, hardwave_midi::MidiEvent::NoteOn { velocity, .. } if *velocity <= 0.0)
+            }) {
+                self.release_live = true;
+            }
             return;
         }
 
@@ -1096,7 +1108,16 @@ impl AudioNode for MidiTrackNode {
         // (envelope release) but skip the clip-schedule path so we
         // don't fire stale clip notes from a paused playhead.
         // (A loop from the launcher still sounding is let go below first.)
-        if !ctx.playing && self.voices.is_empty() && self.session_was.is_none() {
+        // Not while live keys are going to a plug-in instrument, which
+        // the built-in voices say nothing about: a kick-synth track, or a
+        // release after the voices died out, would never reach it.
+        if !ctx.playing
+            && self.voices.is_empty()
+            && self.session_was.is_none()
+            && self.live_events.is_empty()
+            && !self.release_live
+            && !self.live_fx.busy()
+        {
             return;
         }
 
