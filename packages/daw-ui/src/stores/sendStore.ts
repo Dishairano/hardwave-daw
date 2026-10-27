@@ -4,9 +4,10 @@ import { useProjectStore } from './projectStore'
 import { useHistoryStore } from './historyStore'
 
 async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: string): Promise<T> {
+  const since = Date.now()
   const r = await invoke<T>(cmd, args)
   useProjectStore.getState().markDirty()
-  if (label) useHistoryStore.getState().push(label)
+  if (label) useHistoryStore.getState().push(label, since)
   return r
 }
 

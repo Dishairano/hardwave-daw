@@ -42,21 +42,24 @@ export const useVcaStore = create<VcaState>((set, get) => ({
 
   add: async () => {
     const name = `VCA ${get().vcas.length + 1}`
+    const since = Date.now()
     await invoke('add_vca', { name })
-    useHistoryStore.getState().push(`Add ${name}`)
+    useHistoryStore.getState().push(`Add ${name}`, since)
     await get().fetch()
   },
 
   rename: async (id, name) => {
+    const since = Date.now()
     await invoke('rename_vca', { id, name })
-    useHistoryStore.getState().push(`Rename VCA to "${name}"`)
+    useHistoryStore.getState().push(`Rename VCA to "${name}"`, since)
     await get().fetch()
   },
 
   remove: async (id) => {
     const name = get().vcas.find(v => v.id === id)?.name ?? 'VCA'
+    const since = Date.now()
     await invoke('delete_vca', { id })
-    useHistoryStore.getState().push(`Delete ${name}`)
+    useHistoryStore.getState().push(`Delete ${name}`, since)
     await get().fetch()
   },
 
@@ -72,8 +75,9 @@ export const useVcaStore = create<VcaState>((set, get) => ({
 
   setMembers: async (id, members) => {
     set(s => ({ vcas: s.vcas.map(v => (v.id === id ? { ...v, members } : v)) }))
+    const since = Date.now()
     await invoke('set_vca_members', { id, members })
-    useHistoryStore.getState().push('Change VCA members')
+    useHistoryStore.getState().push('Change VCA members', since)
     await get().fetch()
   },
 }))

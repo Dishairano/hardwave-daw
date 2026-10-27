@@ -162,9 +162,9 @@ pub struct History {
     undo: Vec<Step>,
     /// The song after each undone edit, the next one to redo last.
     redo: Vec<Step>,
-    /// The newest step was taken since the last label, undo or redo, so a
-    /// label that comes now is for it.
-    fresh: bool,
+    /// Steps were dropped off the bottom (past the cap), so the oldest
+    /// one kept is not the song as it was opened.
+    trimmed: bool,
 }
 
 /// One edit: a song it can be undone or redone to, and what the edit was.
@@ -177,7 +177,6 @@ struct Step {
     described: Option<hardwave_project::describe::Change>,
     /// When the edit was made, in milliseconds since 1970.
     at_ms: u64,
-    taken: std::time::Instant,
 }
 
 /// One row of the history list: the app's own name for the edit, or a
@@ -189,11 +188,6 @@ pub struct HistoryEntry {
     pub time: u64,
 }
 
-/// How long after its snapshot an edit can still be labelled. The app
-/// labels a step right after the command that took it returns; a label
-/// that comes later belongs to a command that took no step.
-const LABEL_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
-
 impl Step {
     fn new(project: Project) -> Self {
         Self {
@@ -204,7 +198,6 @@ impl Step {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
-            taken: std::time::Instant::now(),
         }
     }
 
@@ -251,7 +244,7 @@ impl History {
         Self {
             undo: Vec::new(),
             redo: Vec::new(),
-            fresh: false,
+            trimmed: false,
         }
     }
 
@@ -259,15 +252,15 @@ impl History {
         self.undo.push(Step::new(snapshot));
         if self.undo.len() > HISTORY_CAP {
             self.undo.remove(0);
+            self.trimmed = true;
         }
         self.redo.clear();
-        self.fresh = true;
     }
 
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
-        self.fresh = false;
+        self.trimmed = false;
     }
 
     pub fn undo(&mut self, current: Project) -> Option<Project> {
@@ -276,7 +269,6 @@ impl History {
         if self.redo.len() > HISTORY_CAP {
             self.redo.remove(0);
         }
-        self.fresh = false;
         Some(project)
     }
 
@@ -285,8 +277,8 @@ impl History {
         self.undo.push(step);
         if self.undo.len() > HISTORY_CAP {
             self.undo.remove(0);
+            self.trimmed = true;
         }
-        self.fresh = false;
         Some(project)
     }
 
@@ -294,25 +286,23 @@ impl History {
         (self.undo.len(), self.redo.len())
     }
 
-    /// The gesture that took the newest step has ended: the app's name
-    /// for it comes now, so the time to name it starts now.
-    pub fn gesture_ended(&mut self) {
-        if let Some(step) = self.undo.last_mut() {
-            step.taken = std::time::Instant::now();
-        }
-    }
-
-    /// Name the newest edit, if it was just made and has no name yet.
-    /// Returns whether it was named.
-    pub fn label_newest(&mut self, label: String) -> bool {
-        let fresh = std::mem::take(&mut self.fresh);
+    /// Name the newest edit, if it was made at or after `since_ms` (when
+    /// the app started the command the name is for, in milliseconds since
+    /// 1970) and has no name yet. A command that took no step finds an
+    /// older one and names nothing. Returns whether it was named.
+    pub fn label_newest(&mut self, label: String, since_ms: u64) -> bool {
         match self.undo.last_mut() {
-            Some(step) if fresh && step.label.is_none() && step.taken.elapsed() < LABEL_WINDOW => {
+            Some(step) if step.label.is_none() && step.at_ms >= since_ms => {
                 step.label = Some(label);
                 true
             }
             _ => false,
         }
+    }
+
+    /// Whether the oldest step kept is the song as it was opened.
+    pub fn starts_at_open(&self) -> bool {
+        !self.trimmed
     }
 
     /// Every edit, oldest first, and how many of them are applied: the
@@ -387,7 +377,7 @@ mod history_list_tests {
         let mut h = History::new();
         // Edit one, named by the app; edit two, not named.
         h.push(song(120.0));
-        assert!(h.label_newest("Set tempo".into()));
+        assert!(h.label_newest("Set tempo".into(), 0));
         h.push(song(130.0));
         let current = song(140.0);
         let (rows, applied) = h.entries(&current);
@@ -411,32 +401,34 @@ mod history_list_tests {
     }
 
     #[test]
-    fn a_long_gesture_is_named_when_it_ends() {
+    fn a_name_is_only_for_an_edit_made_since_its_command_started() {
         let mut h = History::new();
+        assert!(!h.label_newest("Nothing to name".into(), 0), "no edit yet");
         h.push(song(120.0));
-        // Taken long ago, as the first pass of a long recording is.
-        h.undo.last_mut().unwrap().taken -= LABEL_WINDOW * 4;
-        h.gesture_ended();
-        assert!(h.label_newest("Record 3 loop passes".into()));
-    }
-
-    #[test]
-    fn a_name_is_only_for_an_edit_just_made() {
-        let mut h = History::new();
-        assert!(!h.label_newest("Nothing to name".into()), "no edit yet");
-        h.push(song(120.0));
-        assert!(h.label_newest("First".into()));
-        assert!(
-            !h.label_newest("Second".into()),
-            "a second name has no edit of its own and does not rename the first"
-        );
+        let made = h.undo.last().unwrap().at_ms;
+        // A command started after the step and took none of its own: its
+        // name must not land on the step before it.
+        assert!(!h.label_newest("Set volume".into(), made + 1));
+        assert!(h.label_newest("First".into(), made));
+        assert!(!h.label_newest("Second".into(), made), "named once");
         let current = song(125.0);
         let back = h.undo(current).unwrap();
         h.redo(back).unwrap();
         assert!(
-            !h.label_newest("After redo".into()),
+            !h.label_newest("After redo".into(), made + 1),
             "a redo is not a new edit"
         );
+    }
+
+    #[test]
+    fn the_oldest_step_says_whether_it_is_the_song_as_opened() {
+        let mut h = History::new();
+        h.push(song(120.0));
+        assert!(h.starts_at_open());
+        for i in 0..HISTORY_CAP {
+            h.push(song(120.0 + i as f64));
+        }
+        assert!(!h.starts_at_open(), "the first step went past the cap");
     }
 }
 
@@ -837,11 +829,7 @@ impl DawEngine {
     pub fn end_history_group(&self) {
         use std::sync::atomic::Ordering::Relaxed;
         self.history_group_open.store(false, Relaxed);
-        // The app names a group's step when the gesture ends, which for
-        // three loop passes recorded is long after the step was taken.
-        if self.history_group_taken.swap(false, Relaxed) {
-            self.history.lock().gesture_ended();
-        }
+        self.history_group_taken.store(false, Relaxed);
     }
 
     pub fn history_group_open(&self) -> bool {
@@ -876,15 +864,24 @@ impl DawEngine {
 
     /// Name the edit just made, for the history list. See
     /// [`History::label_newest`].
-    pub fn label_newest_edit(&self, label: String) -> bool {
-        self.history.lock().label_newest(label)
+    pub fn label_newest_edit(&self, label: String, since_ms: u64) -> bool {
+        self.history.lock().label_newest(label, since_ms)
     }
 
     /// The history list: every edit, oldest first, and how many are
     /// applied.
-    pub fn history_entries(&self) -> (Vec<HistoryEntry>, usize) {
-        let current = self.project.lock().clone();
-        self.history.lock().entries(&current)
+    ///
+    /// Takes the song and the history by their own locks, not the
+    /// engine's: describing a step reads two whole songs, and the History
+    /// panel asks once a second while it is open.
+    pub fn history_entries(
+        project: &Mutex<Project>,
+        history: &Mutex<History>,
+    ) -> (Vec<HistoryEntry>, usize, bool) {
+        let current = project.lock().clone();
+        let mut history = history.lock();
+        let (entries, applied) = history.entries(&current);
+        (entries, applied, history.starts_at_open())
     }
 
     /// Reset the history — e.g. after loading or creating a new project.

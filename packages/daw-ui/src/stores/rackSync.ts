@@ -40,6 +40,7 @@ export function startRackSync(): void {
       timer = null
       const undoable = edited
       edited = false
+      const since = Date.now()
       invoke<boolean>('set_channel_rack_state', {
         payload: usePatternStore.getState().serialize(),
         from: thisWindow(),
@@ -48,7 +49,7 @@ export function startRackSync(): void {
         .then((recorded) => {
           if (!recorded) return
           useProjectStore.getState().markDirty()
-          useHistoryStore.getState().push('Edit the channel rack')
+          useHistoryStore.getState().push('Edit the channel rack', since)
         })
         .catch(() => { /* outside the app */ })
     }, 120)

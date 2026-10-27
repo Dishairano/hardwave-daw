@@ -2810,8 +2810,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             setContextMenu(null)
             const push = useNotificationStore.getState().push
             try {
+              const since = Date.now()
               const slot = await invoke<number>('send_clip_to_launcher', { trackId, clipId })
-              useHistoryStore.getState().push('Send clip to launcher')
+              useHistoryStore.getState().push('Send clip to launcher', since)
               push('info', tf('In the clip launcher, scene {n}', { n: slot + 1 }))
             } catch (e) {
               push('warning', t('Could not send that clip to the launcher'), { detail: String(e) })
@@ -2834,10 +2835,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             const push = useNotificationStore.getState().push
             push('info', t('Consolidating…'))
             try {
+              const since = Date.now()
               await invoke('consolidate_track_range', { trackId, startTicks: from, endTicks: to })
-              // The engine took its undo snapshot; the history names the step,
-              // or Edit > History would not show it.
-              useHistoryStore.getState().push('Consolidate clips')
+              // The engine took its undo snapshot; the history names the step.
+              useHistoryStore.getState().push('Consolidate clips', since)
               await useTrackStore.getState().fetchTracks()
               push('info', tf('Consolidated {n} clips into one', { n: clips.length }))
             } catch (e) {

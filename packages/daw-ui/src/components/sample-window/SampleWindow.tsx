@@ -399,6 +399,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
 
   // A change: shown at once, sent to the engine. A gesture's first move
   // takes the undo snapshot; its end reloads the song and names the step.
+  const startedAt = useRef(0)
   const sendTimer = useRef<number | null>(null)
   const pending = useRef<Settings>({})
   const flush = (snapshot: boolean) => {
@@ -415,6 +416,8 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
     setV((prev) => (prev ? { ...prev, ...patch } : prev))
     pending.current = { ...pending.current, ...settingsOf(patch) }
     const first = !gesture.current
+    // When the gesture began: its first change takes the undo step.
+    if (first) startedAt.current = Date.now()
     if (!done) {
       gesture.current = true
       if (first) { void flush(true); return }
@@ -424,7 +427,7 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
     gesture.current = false
     void flush(first).then(async () => {
       useProjectStore.getState().markDirty()
-      useHistoryStore.getState().push(label)
+      useHistoryStore.getState().push(label, startedAt.current)
       await useTrackStore.getState().fetchTracks()
     })
   }
@@ -678,6 +681,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
   // A change: shown at once, sent to the engine. A gesture's first move
   // takes the undo snapshot; its end names the step.
   const gesture = useRef(false)
+  const startedAt = useRef(0)
   const sendTimer = useRef<number | null>(null)
   const pending = useRef(new Map<number, number>())
   const flush = (snapshot: boolean) => {
@@ -694,6 +698,8 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
     setParams((prev) => (prev ? { ...prev, [id]: value } : prev))
     pending.current.set(id, value)
     const first = !gesture.current
+    // When the gesture began: its first change takes the undo step.
+    if (first) startedAt.current = Date.now()
     if (!done) {
       gesture.current = true
       if (first) { void flush(true); return }
@@ -703,7 +709,7 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
     gesture.current = false
     void flush(first).then(() => {
       useProjectStore.getState().markDirty()
-      useHistoryStore.getState().push(label)
+      useHistoryStore.getState().push(label, startedAt.current)
       if (id === SP.root) setSampleGen((g) => g + 1)
     })
   }
@@ -721,9 +727,10 @@ function SamplerWindow({ trackId, slotId }: { trackId: string; slotId: string })
       multiple: false,
     })
     if (!selected) return
+    const since = Date.now()
     await invokeOrToast('load_sampler', { trackId, slotId, path: selected as string, baseNote: Math.round(p(SP.root) * 127) }, { message: t('Loading the sample failed'), retry: false })
     useProjectStore.getState().markDirty()
-    useHistoryStore.getState().push('Load sample')
+    useHistoryStore.getState().push('Load sample', since)
     setSampleGen((g) => g + 1)
   }
 

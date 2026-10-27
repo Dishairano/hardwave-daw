@@ -50,20 +50,39 @@ pub struct UndoHistory {
     pub entries: Vec<hardwave_engine::engine::HistoryEntry>,
     /// How many of the entries are applied; the rest can be redone.
     pub cursor: usize,
+    /// Whether undoing every step gets back to the song as it was opened
+    /// (false once old steps have gone past the history's cap).
+    #[serde(rename = "startsAtOpen")]
+    pub starts_at_open: bool,
 }
 
 #[tauri::command]
 pub fn get_undo_history(state: State<AppState>) -> UndoHistory {
-    let (entries, cursor) = state.engine.lock().history_entries();
-    UndoHistory { entries, cursor }
+    // The engine's own lock only long enough to reach the two parts.
+    let (project, history) = {
+        let engine = state.engine.lock();
+        (
+            std::sync::Arc::clone(&engine.project),
+            std::sync::Arc::clone(&engine.history),
+        )
+    };
+    let (entries, cursor, starts_at_open) =
+        hardwave_engine::DawEngine::history_entries(&project, &history);
+    UndoHistory {
+        entries,
+        cursor,
+        starts_at_open,
+    }
 }
 
-/// Name the edit the command before this one just made ("Mute clip").
-/// A name that comes with no new edit is dropped, so it never lands on
-/// an older step. Steps nobody names are described from the song.
+/// Name the edit a command just made ("Mute clip"). `since` is when the
+/// app started that command, in milliseconds since 1970: a command that
+/// took no step finds only older ones, and its name is dropped rather
+/// than landing on one of them. Steps nobody names are described from
+/// the song.
 #[tauri::command]
-pub fn label_undo_step(state: State<AppState>, label: String) -> bool {
-    state.engine.lock().label_newest_edit(label)
+pub fn label_undo_step(state: State<AppState>, label: String, since: u64) -> bool {
+    state.engine.lock().label_newest_edit(label, since)
 }
 
 /// Forget every undo step: the history list's "Clear".

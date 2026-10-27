@@ -40,12 +40,13 @@ interface TempoMapState {
 
 /** Several tempo-map edits that make one change, as one undo step. */
 async function asOneStep(label: string, edit: () => Promise<void>): Promise<void> {
+  const since = Date.now()
   await invoke('begin_history_group').catch(() => {})
   try {
     await edit()
   } finally {
     await invoke('end_history_group').catch(() => {})
-    useHistoryStore.getState().push(label)
+    useHistoryStore.getState().push(label, since)
   }
 }
 

@@ -653,6 +653,7 @@ const mock: TauriInternals = {
             { label: 'Rename "{old}" to "{name}"', old: 'Insert 3', name: 'Screech', time: at + 240_000 },
           ],
           cursor: 4,
+          startsAtOpen: true,
         }
       }
       case 'process_memory':
