@@ -441,6 +441,32 @@ impl InsertChain {
         Ok(())
     }
 
+    /// Add a slot, or put it in place of the one with its id. Loading a
+    /// song's plug-ins twice (two audio restarts close together, or one
+    /// while a song was loading) used to add each slot twice: two
+    /// instances playing the same audio, two sandbox processes. The slot
+    /// it replaced is returned, deactivated, for the graveyard.
+    pub fn add_or_replace(
+        &mut self,
+        slot: LiveSlot,
+        sample_rate: f64,
+        max_block_size: u32,
+    ) -> Result<Option<LiveSlot>, String> {
+        let mut s = slot;
+        s.plugin.activate(sample_rate, max_block_size)?;
+        match self.slots.iter_mut().find(|x| x.slot_id == s.slot_id) {
+            Some(existing) => {
+                let mut old = std::mem::replace(existing, s);
+                old.plugin.deactivate();
+                Ok(Some(old))
+            }
+            None => {
+                self.slots.push(s);
+                Ok(None)
+            }
+        }
+    }
+
     /// Remove a slot by id and return the freed `LiveSlot` for off-RT
     /// disposal. Caller is responsible for shipping it through the
     /// graveyard channel — the audio thread must not drop directly.
@@ -825,8 +851,18 @@ impl InsertRouter {
         match cmd {
             InsertCommand::Add { track_id, slot } => {
                 let chain = self.chains.entry(track_id).or_default();
-                if let Err(e) = chain.push_slot(slot, self.sample_rate, self.max_block_size) {
-                    log::warn!("insert chain: activate failed: {e}");
+                match chain.add_or_replace(slot, self.sample_rate, self.max_block_size) {
+                    Ok(Some(old)) => {
+                        if let Err(old) = self.graveyard.try_bury(old) {
+                            log::warn!(
+                                "insert chain: graveyard full, leaking slot {} drop to engine teardown",
+                                old.slot_id
+                            );
+                            std::mem::forget(old);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => log::warn!("insert chain: activate failed: {e}"),
                 }
             }
             InsertCommand::Remove { track_id, slot_id } => {
@@ -1407,6 +1443,40 @@ pub(crate) mod tests {
         chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
         assert!(left.iter().all(|&v| (v - 0.5).abs() < 1e-6));
         assert!(right.iter().all(|&v| (v - 0.5).abs() < 1e-6));
+    }
+
+    /// The same slot loaded twice (two audio restarts close together) is
+    /// one slot, in its place, not two playing the same audio.
+    #[test]
+    fn a_slot_added_again_replaces_itself_in_place() {
+        let mut chain = InsertChain::new();
+        let (a, _) = make_gain_slot("a", 2.0, true);
+        let (b, _) = make_gain_slot("b", 1.0, true);
+        chain.push_slot(a, 48_000.0, 512).unwrap();
+        chain.push_slot(b, 48_000.0, 512).unwrap();
+        let (again, counter) = make_gain_slot("a", 2.0, true);
+        let replaced = chain.add_or_replace(again, 48_000.0, 512).unwrap();
+        assert!(
+            replaced.is_some(),
+            "the old one comes back for the graveyard"
+        );
+        let ids: Vec<&str> = chain.slots.iter().map(|s| s.slot_id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b"]);
+        let mut scratch = Scratch::default();
+        let mut left = block(256, 0.5);
+        let mut right = block(256, 0.5);
+        chain.process(&mut left, &mut right, 256, &mut scratch, &[], None);
+        assert!(
+            left.iter().all(|&v| (v - 1.0).abs() < 1e-6),
+            "doubled once, not twice"
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        let (fresh, _) = make_gain_slot("c", 1.0, true);
+        assert!(chain
+            .add_or_replace(fresh, 48_000.0, 512)
+            .unwrap()
+            .is_none());
+        assert_eq!(chain.slots.len(), 3);
     }
 
     #[test]
