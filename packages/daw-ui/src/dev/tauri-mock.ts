@@ -638,6 +638,23 @@ const mock: TauriInternals = {
       case 'begin_history_group':
       case 'end_history_group':
         return null
+      case 'label_undo_step':
+        return true
+      case 'get_undo_history': {
+        // The engine's undo steps: named by the app, or described by the
+        // engine with a template and what goes in it. The last one is undone.
+        const at = Date.now() - 600_000
+        return {
+          entries: [
+            { label: 'Add track "{name}"', name: 'Kick', time: at },
+            { label: 'Add {n} notes: "{name}"', name: 'Lead', n: 8, time: at + 60_000 },
+            { label: 'Mute clip', time: at + 120_000 },
+            { label: 'Volume: "{name}"', name: 'Bass', time: at + 180_000 },
+            { label: 'Rename "{old}" to "{name}"', old: 'Insert 3', name: 'Screech', time: at + 240_000 },
+          ],
+          cursor: 4,
+        }
+      }
       case 'process_memory':
         return { usedBytes: 412 * 1024 * 1024, totalBytes: 16 * 1024 * 1024 * 1024 }
       case 'get_audio_load':
