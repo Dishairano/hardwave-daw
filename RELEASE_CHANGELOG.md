@@ -1,11 +1,9 @@
 ### Bug fixes
-- fix: in an FL project with several arrangements, a playlist row switched off in the arrangement open in FL stayed silent in every other arrangement after switching to it. Each arrangement now keeps its own switch
-- fix: an FL pattern clip trimmed at its start dropped a note held over where it begins; the note now plays its tail from there, as in FL
-- fix: an FL mixer insert going on to the master below full while also sending to a reverb or group played at full; it now plays at its level, with its sends where FL had them
-- fix: an FL project cut off part-way (an interrupted copy) was refused whole; the part that is there now opens
+- fix: changing the audio settings twice in quick succession (or once while a song was opening) could load every plug-in twice, so the song played at twice the level and a plug-in in its own process ran two copies. A plug-in loaded again now takes the place of the one already there
+- fix: when the sound card was unplugged or taken by another program, restarting the audio waited half a second for plug-in settings it could not get, with the app stalled; it now goes straight on with the settings as last saved
+- fix: a plug-in taken off a track, or replaced when the song's plug-ins were loaded again, was only freed the next time a plug-in was added or removed by hand; until then it kept its memory, and a plug-in in its own process kept running idle. It is now freed within half a second
 
 ### Improvements
-- A playlist row switched off in the arrangement open in FL muted the
-- A note held over the start of a pattern clip trimmed there was
-- A route on to the master below full beside a send (a group at -6 dB
-- A file cut off in the middle of an event was refused whole; what
+- fix(plugins): a plug-in the audio thread lets go of is freed within half a second
+- Two audio restarts more than a tick apart each started loading the
+- After the audio stream failed (the card unplugged or taken by another
