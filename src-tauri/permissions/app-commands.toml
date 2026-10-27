@@ -99,6 +99,7 @@ permissions = [
   "allow-get-control-surface",
   "allow-set-control-surface-enabled",
   "allow-set-control-surface-bank",
+  "allow-set-control-surface-protocol",
   "allow-get-mpe",
   "allow-set-mpe",
   "allow-load-tuning-file",

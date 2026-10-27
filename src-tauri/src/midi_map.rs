@@ -224,6 +224,8 @@ pub fn spawn_dispatcher(
     midi_input: Arc<Mutex<hardwave_midi::MidiInputManager>>,
 ) {
     let mut last_frame_at = std::time::Instant::now();
+    let mut last_ping_at: Option<std::time::Instant> = None;
+    let mut reader = crate::control_surface::DeskReader::default();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(8));
         // The desk shows the song as it is now, about thirty times a second,
@@ -233,6 +235,17 @@ pub fn spawn_dispatcher(
             last_frame_at = std::time::Instant::now();
             let inputs = midi_input.lock().open_port_names();
             send_desk_frame(&engine, &surface, &midi_out, &inputs);
+            // A HUI desk stays on line only while it is pinged once a second.
+            if surface.protocol() == crate::control_surface::DeskProtocol::Hui
+                && last_ping_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(1))
+            {
+                last_ping_at = Some(std::time::Instant::now());
+                send_to_desk(
+                    &midi_out,
+                    &inputs,
+                    &[crate::control_surface::HUI_PING.to_vec()],
+                );
+            }
         }
         // The input manager's own lock only: holding the engine's while waiting for it kept
         // everything else off the engine during a MIDI port scan.
@@ -245,8 +258,11 @@ pub fn spawn_dispatcher(
             // whatever a knob was learned to, so it is read first and
             // what it claims never reaches the learn path.
             if surface.is_enabled() {
-                if let Some(action) = crate::control_surface::interpret(&ev) {
-                    apply_surface(&engine, &surface, &midi_out, action);
+                let protocol = surface.protocol();
+                if crate::control_surface::claims(protocol, &ev) {
+                    if let Some(action) = reader.read(protocol, &ev) {
+                        apply_surface(&engine, &surface, &midi_out, action);
+                    }
                     continue;
                 }
             }
@@ -554,6 +570,7 @@ fn apply_surface(
             }
             engine.lock().apply_track_mix(&track_id);
         }
+        cs::SurfaceAction::Hello => surface.redraw(),
         cs::SurfaceAction::Goto { beats } => {
             let eng = engine.lock();
             let sample_rate = eng.current_sample_rate();
@@ -602,19 +619,31 @@ pub fn send_desk_frame(
         return;
     };
     let messages = cs::frame_messages(
+        surface.protocol(),
         shown.as_ref(),
         &frame,
         surface.touched.load(Ordering::Relaxed),
     );
-    if !messages.is_empty() {
-        let out = midi_out.lock();
-        for port in cs::desk_outputs(&out.open_port_names(), open_inputs) {
-            for m in &messages {
-                let _ = out.send(&port, m);
-            }
+    send_to_desk(midi_out, open_inputs, &messages);
+    *shown = Some(frame);
+}
+
+/// Send messages to the desk's outputs, in order: a HUI light is two
+/// messages that must arrive together.
+fn send_to_desk(
+    midi_out: &Arc<Mutex<hardwave_midi::output::MidiOutputManager>>,
+    open_inputs: &[String],
+    messages: &[Vec<u8>],
+) {
+    if messages.is_empty() {
+        return;
+    }
+    let out = midi_out.lock();
+    for port in crate::control_surface::desk_outputs(&out.open_port_names(), open_inputs) {
+        for m in messages {
+            let _ = out.send(&port, m);
         }
     }
-    *shown = Some(frame);
 }
 
 #[cfg(test)]

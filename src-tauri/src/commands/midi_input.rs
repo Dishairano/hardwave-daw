@@ -262,6 +262,8 @@ pub struct ControlSurfaceStatus {
     /// Which bank of eight the strips are on, counting from zero.
     pub bank: usize,
     pub bank_count: usize,
+    /// "mackie" or "hui".
+    pub protocol: crate::control_surface::DeskProtocol,
 }
 
 #[tauri::command]
@@ -276,16 +278,17 @@ pub fn get_control_surface(state: State<AppState>) -> ControlSurfaceStatus {
         enabled: state.control_surface.is_enabled(),
         bank: state.control_surface.bank.load(Ordering::Relaxed),
         bank_count,
+        protocol: state.control_surface.protocol(),
     }
 }
 
 /// Listen to a Mackie Control or HUI desk on the open MIDI inputs.
 ///
-/// With it on, pitch bend and the desk's button notes drive the mixer
-/// instead of going through MIDI Learn: eight faders with mute, solo
-/// and arm, the transport keys, and bank left and right. Switching it
-/// on sends the current faders and mute lights out, so a motorised
-/// desk lines up with the mix straight away.
+/// With it on, the desk's faders and buttons drive the mixer instead of
+/// going through MIDI Learn: eight faders with mute, solo and arm, the
+/// V-pots, the transport keys, and bank left and right. Switching it on
+/// sends the whole mix out, so a motorised desk lines up with it
+/// straight away.
 #[tauri::command]
 pub fn set_control_surface_enabled(state: State<AppState>, enabled: bool) {
     use std::sync::atomic::Ordering;
@@ -300,6 +303,16 @@ pub fn set_control_surface_enabled(state: State<AppState>, enabled: bool) {
             &state.midi_clock.output,
         );
     }
+}
+
+/// Which protocol the desk speaks: "mackie" (Mackie Control, and the
+/// desks that copy it) or "hui".
+#[tauri::command]
+pub fn set_control_surface_protocol(
+    state: State<AppState>,
+    protocol: crate::control_surface::DeskProtocol,
+) {
+    state.control_surface.set_protocol(protocol);
 }
 
 /// Put the strips on another eight tracks.
