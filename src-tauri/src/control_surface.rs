@@ -44,7 +44,7 @@ const NOTE_STOP: u8 = 93;
 const NOTE_PLAY: u8 = 94;
 const NOTE_RECORD: u8 = 95;
 const NOTE_VPOT_PUSH_FIRST: u8 = 32; // 32..39 V-pot pressed
-const NOTE_TOUCH_FIRST: u8 = 104; // 104..111 a hand on the fader
+const NOTE_TOUCH_FIRST: u8 = 104; // 104..111 a hand on the fader, 112 on the master
 const CC_VPOT_FIRST: u8 = 16; // 16..23 V-pot turned, relative
 const CC_RING_FIRST: u8 = 48; // 48..55 V-pot LED ring
 
@@ -95,8 +95,9 @@ pub struct ControlSurface {
     pub enabled: AtomicBool,
     /// Index of the first track under the strips.
     pub bank: AtomicUsize,
-    /// Faders with a hand on them, one bit per strip.
-    pub touched: std::sync::atomic::AtomicU8,
+    /// Faders with a hand on them, one bit per strip and bit 8 for the
+    /// master.
+    pub touched: std::sync::atomic::AtomicU16,
     /// What the desk was last sent; none sends everything next time.
     pub shown: std::sync::Mutex<Option<DeskFrame>>,
     /// The desk's [`DeskProtocol`], as its number.
@@ -137,7 +138,7 @@ impl ControlSurface {
     }
 
     pub fn set_touched(&self, strip: usize, on: bool) {
-        let bit = 1u8 << (strip & 7);
+        let bit = 1u16 << strip.min(STRIPS);
         if on {
             self.touched.fetch_or(bit, Ordering::Relaxed);
         } else {
@@ -228,7 +229,7 @@ pub fn interpret(event: &MidiEvent) -> Option<SurfaceAction> {
         }
         // A hand leaving a fader: the touch note's release.
         MidiEvent::NoteOff { note, .. }
-            if (NOTE_TOUCH_FIRST..NOTE_TOUCH_FIRST + STRIPS as u8).contains(&note) =>
+            if (NOTE_TOUCH_FIRST..=NOTE_TOUCH_FIRST + STRIPS as u8).contains(&note) =>
         {
             Some(SurfaceAction::Touch {
                 strip: (note - NOTE_TOUCH_FIRST) as usize,
@@ -248,7 +249,7 @@ pub fn interpret(event: &MidiEvent) -> Option<SurfaceAction> {
             })
         }
         MidiEvent::NoteOn { note, velocity, .. } => {
-            if (NOTE_TOUCH_FIRST..NOTE_TOUCH_FIRST + STRIPS as u8).contains(&note) {
+            if (NOTE_TOUCH_FIRST..=NOTE_TOUCH_FIRST + STRIPS as u8).contains(&note) {
                 return Some(SurfaceAction::Touch {
                     strip: (note - NOTE_TOUCH_FIRST) as usize,
                     on: velocity > 0.0,
@@ -604,12 +605,12 @@ pub fn desk_frame(project: &Project, bank: usize, master_db: f64) -> DeskFrame {
 
 /// The messages that take the desk from what it showed (`old`, none for
 /// a blank desk) to `new`: only what changed, and nothing for a fader with
-/// a hand on it (`touched`, one bit per strip).
+/// a hand on it (`touched`, one bit per strip, bit 8 the master).
 pub fn frame_messages(
     protocol: DeskProtocol,
     old: Option<&DeskFrame>,
     new: &DeskFrame,
-    touched: u8,
+    touched: u16,
 ) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for strip in 0..STRIPS {
@@ -656,7 +657,9 @@ pub fn frame_messages(
             protocol.text(strip, 1, &v.level, &mut out);
         }
     }
-    if old.is_none_or(|o| o.master != new.master) {
+    // The master's motor leaves a hand alone too (Mackie's touch note 112;
+    // a HUI desk has no master fader of its own).
+    if touched & (1 << STRIPS) == 0 && old.is_none_or(|o| o.master != new.master) {
         protocol.fader(STRIPS, new.master, &mut out);
     }
     out
@@ -972,6 +975,24 @@ mod tests {
             changes.contains(&scribble(0, 1, "-3.0")),
             "the level still shows"
         );
+    }
+
+    #[test]
+    fn a_hand_on_the_master_fader_keeps_its_motor_still() {
+        assert_eq!(
+            interpret(&note_on(112)),
+            Some(SurfaceAction::Touch { strip: 8, on: true })
+        );
+        let first = DeskFrame {
+            strips: vec![strip("Kick", -6.0)],
+            master: 1.0,
+        };
+        let mut next = first.clone();
+        next.master = 0.5;
+        let held = frame_messages(DeskProtocol::Mackie, Some(&first), &next, 1 << 8);
+        assert!(held.is_empty(), "the master is not moved under a hand");
+        let free = frame_messages(DeskProtocol::Mackie, Some(&first), &next, 0);
+        assert_eq!(free, vec![fader_feedback(8, 0.5).to_vec()]);
     }
 
     #[test]
