@@ -77,6 +77,13 @@ pub struct AudioPrefs {
     /// from zero; none keeps it in the mix.
     #[serde(default)]
     pub click_channel_offset: Option<u16>,
+    /// The control surface switch (Settings, MIDI). It was not kept, so a
+    /// desk went dead at every launch until it was switched on again.
+    #[serde(default)]
+    pub control_surface_enabled: bool,
+    /// The protocol the desk speaks.
+    #[serde(default)]
+    pub control_surface_protocol: crate::control_surface::DeskProtocol,
 }
 
 fn default_sample_rate() -> u32 {
@@ -152,6 +159,8 @@ impl AudioPrefs {
             take_bits_24: false,
             take_folder: None,
             click_channel_offset: None,
+            control_surface_enabled: false,
+            control_surface_protocol: crate::control_surface::DeskProtocol::Mackie,
         }
     }
 }

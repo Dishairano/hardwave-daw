@@ -303,6 +303,7 @@ pub fn set_control_surface_enabled(state: State<AppState>, enabled: bool) {
             &state.midi_clock.output,
         );
     }
+    crate::commands::engine::persist_audio_prefs_public(&state);
 }
 
 /// Which protocol the desk speaks: "mackie" (Mackie Control, and the
@@ -313,6 +314,7 @@ pub fn set_control_surface_protocol(
     protocol: crate::control_surface::DeskProtocol,
 ) {
     state.control_surface.set_protocol(protocol);
+    crate::commands::engine::persist_audio_prefs_public(&state);
 }
 
 /// Put the strips on another eight tracks.
