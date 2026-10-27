@@ -187,7 +187,7 @@ export const nlBrowser: Record<string, string> = {
   'OSC port': 'OSC-poort',
   'listening: /hardwave/play, /hardwave/track/1/volume, /hardwave/tempo': 'luistert naar: /hardwave/play, /hardwave/track/1/volume, /hardwave/tempo',
   'drive the DAW from TouchOSC and the like': 'bedien de DAW vanuit TouchOSC en vergelijkbare apps',
-  'Mackie Control (MCU): eight faders with mute, solo and arm, the transport keys, and bank left and right. HUI is not supported yet, and the scribble strips and the LED rings are not driven.': 'Mackie Control (MCU): acht faders met mute, solo en arm, de transporttoetsen en bank links en rechts. HUI wordt nog niet ondersteund, en de scribble strips en de LED-ringen worden niet aangestuurd.',
+  'Mackie Control (MCU): eight faders with mute, solo and arm, the V-pots for pan, the transport keys, and bank left and right. The motor faders, lights, LED rings and scribble strips (name and level) follow the mix.': 'Mackie Control (MCU): acht faders met mute, solo en arm, de V-pots voor pan, de transporttoetsen en bank links en rechts. De motorfaders, lampjes, LED-ringen en scribble strips (naam en niveau) volgen de mix.',
   'MIDI Inputs': 'MIDI-ingangen',
   'No MIDI input ports detected': 'Geen MIDI-ingangen gevonden',
   '{open} of {total} open': '{open} van {total} open',
