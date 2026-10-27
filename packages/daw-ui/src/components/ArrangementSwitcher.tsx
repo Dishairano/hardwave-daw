@@ -4,6 +4,7 @@
  * the playlist timeline; we refetch tracks so the playlist re-renders.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { useSongPartChanged } from '../stores/songPartSync'
 import { invoke } from '@tauri-apps/api/core'
 import { useTrackStore } from '../stores/trackStore'
 import { t, tf, useLanguage } from '../i18n'
@@ -30,6 +31,8 @@ export function ArrangementSwitcher() {
   useEffect(() => {
     refresh()
   }, [refresh])
+  // A room partner added, renamed or switched an arrangement.
+  useSongPartChanged('arrangements', refresh)
 
   const active = arrangements.find(a => a.active)
 
