@@ -69,7 +69,8 @@ pub struct LiveMidiFx {
     next_step_at: f64,
     sounding: KeyNotes,
     off_at: Option<f64>,
-    /// The chain changed under held keys: let every note go first.
+    /// The chain changed under held keys: let every note go and play the
+    /// keys again through the new chain.
     release_all: bool,
 }
 
@@ -248,7 +249,7 @@ impl LiveMidiFx {
         out.clear();
         if self.release_all {
             self.release_all = false;
-            self.let_everything_go(out, 0);
+            self.rekey(out);
         }
         let arp = self.arp();
         let mut at = 0u32;
@@ -343,10 +344,13 @@ impl LiveMidiFx {
                 } else {
                     // A key pressed before this node existed (a graph
                     // rebuild) or before the chain changed: what the chain
-                    // makes of it now is let go, so nothing hangs.
+                    // makes of it now is let go, so nothing hangs. Not a
+                    // note another key still holds.
                     let (pitches, count) = apply(self.before_arp(), key);
                     for &pitch in &pitches[..count] {
-                        emit(out, note_off(timing, 0, pitch));
+                        if !self.keys.iter().any(|k| k.notes().contains(&pitch)) {
+                            emit(out, note_off(timing, 0, pitch));
+                        }
                     }
                 }
             }
@@ -371,16 +375,70 @@ impl LiveMidiFx {
         self.off_at = None;
     }
 
-    /// Every note this stage started is let go, and the keys forgotten.
-    fn let_everything_go(&mut self, out: &mut Vec<MidiEvent>, timing: u32) {
-        for key in 0..128 {
-            let notes = std::mem::replace(&mut self.keys[key], KeyNotes::EMPTY);
-            for &pitch in notes.notes() {
-                emit(out, note_off(timing, notes.channel, pitch));
+    /// The chain changed under held keys: every note they started is let
+    /// go (each pitch once, so a full buffer cannot drop a release), and
+    /// the keys still down play again through the new chain. An arpeggio
+    /// picks the new notes up at its next step.
+    fn rekey(&mut self, out: &mut Vec<MidiEvent>) {
+        let mut sent = [0u128; 16];
+        let mut release = |channel: u8, pitch: u8, out: &mut Vec<MidiEvent>| {
+            let bit = 1u128 << (pitch & 0x7F);
+            let row = &mut sent[(channel & 0x0F) as usize];
+            if *row & bit == 0 {
+                *row |= bit;
+                emit(out, note_off(0, channel, pitch));
+            }
+        };
+        let sounding = std::mem::replace(&mut self.sounding, KeyNotes::EMPTY);
+        for &pitch in sounding.notes() {
+            release(sounding.channel, pitch, out);
+        }
+        self.off_at = None;
+        let arp = self.arp();
+        for key in 0..128u8 {
+            let old = self.keys[key as usize];
+            if old.count == 0 {
+                continue;
+            }
+            if arp.is_none() || self.held == 0 {
+                // Notes this key started itself (with an arpeggiator they
+                // only ever sounded as its steps, let go above).
+                for &pitch in old.notes() {
+                    release(old.channel, pitch, out);
+                }
+            }
+            let (pitches, count) = apply(self.before_arp(), key);
+            self.keys[key as usize] = KeyNotes {
+                pitches,
+                count: count as u8,
+                ..old
+            };
+        }
+        match arp {
+            None => {
+                self.held = 0;
+                for key in 0..128usize {
+                    let k = self.keys[key];
+                    for &pitch in k.notes() {
+                        emit(out, note_on(0, k.channel, pitch, k.velocity));
+                    }
+                }
+            }
+            Some(_) => {
+                if self.held == 0 {
+                    // Keys held before an arpeggiator came in: in the
+                    // order of their numbers, starting now.
+                    for key in 0..128u8 {
+                        if self.keys[key as usize].count > 0 && self.held < self.order.len() {
+                            self.order[self.held] = key;
+                            self.held += 1;
+                        }
+                    }
+                    self.step = 0;
+                    self.next_step_at = 0.0;
+                }
             }
         }
-        self.held = 0;
-        self.end_step(timing, out);
     }
 
     /// The arpeggiator from `from` to `to` (samples into the block): its
@@ -651,12 +709,50 @@ mod tests {
     }
 
     #[test]
-    fn changing_the_chain_under_a_held_key_lets_go_of_what_it_started() {
+    fn changing_the_chain_under_a_held_key_plays_it_through_the_new_chain() {
         let mut fx = LiveMidiFx::default();
         fx.set_chain(vec![MidiFx::Transpose { semitones: 2 }]);
         run(&mut fx, &[on(0, 60)], 64);
         fx.set_chain(vec![MidiFx::Transpose { semitones: 5 }]);
-        assert_eq!(run(&mut fx, &[], 64), vec![(0, 62, false)]);
+        assert_eq!(run(&mut fx, &[], 64), vec![(0, 62, false), (0, 65, true)]);
+        assert_eq!(run(&mut fx, &[off(0, 60)], 64), vec![(0, 65, false)]);
+    }
+
+    #[test]
+    fn an_arpeggiator_added_under_held_keys_starts_on_them() {
+        let mut fx = LiveMidiFx::default();
+        run(&mut fx, &[on(0, 64), on(0, 60)], 64);
+        fx.set_chain(vec![MidiFx::Arpeggiator {
+            step_ticks: 100,
+            mode: ArpMode::Up,
+            gate: 0.5,
+            octaves: 1,
+        }]);
+        let out = run(&mut fx, &[], 160);
+        assert_eq!(
+            out,
+            vec![
+                (0, 60, false),
+                (0, 64, false),
+                (0, 60, true),
+                (50, 60, false),
+                (100, 64, true),
+                (150, 64, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_release_for_an_unknown_key_spares_a_note_another_key_holds() {
+        let mut fx = LiveMidiFx::default();
+        fx.set_chain(vec![MidiFx::Scale {
+            root: 0,
+            kind: ScaleKind::Major,
+        }]);
+        // 60 sounds as 60; a release of 61 (pressed before this node
+        // existed) maps to 60 too, and must not cut the key still down.
+        run(&mut fx, &[on(0, 60)], 64);
+        assert!(run(&mut fx, &[off(0, 61)], 64).is_empty());
     }
 
     #[test]
