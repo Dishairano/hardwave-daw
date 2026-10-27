@@ -294,6 +294,14 @@ impl History {
         (self.undo.len(), self.redo.len())
     }
 
+    /// The gesture that took the newest step has ended: the app's name
+    /// for it comes now, so the time to name it starts now.
+    pub fn gesture_ended(&mut self) {
+        if let Some(step) = self.undo.last_mut() {
+            step.taken = std::time::Instant::now();
+        }
+    }
+
     /// Name the newest edit, if it was just made and has no name yet.
     /// Returns whether it was named.
     pub fn label_newest(&mut self, label: String) -> bool {
@@ -400,6 +408,16 @@ mod history_list_tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].change.label, "Set tempo");
         assert_eq!(applied, 1);
+    }
+
+    #[test]
+    fn a_long_gesture_is_named_when_it_ends() {
+        let mut h = History::new();
+        h.push(song(120.0));
+        // Taken long ago, as the first pass of a long recording is.
+        h.undo.last_mut().unwrap().taken -= LABEL_WINDOW * 4;
+        h.gesture_ended();
+        assert!(h.label_newest("Record 3 loop passes".into()));
     }
 
     #[test]
@@ -819,7 +837,11 @@ impl DawEngine {
     pub fn end_history_group(&self) {
         use std::sync::atomic::Ordering::Relaxed;
         self.history_group_open.store(false, Relaxed);
-        self.history_group_taken.store(false, Relaxed);
+        // The app names a group's step when the gesture ends, which for
+        // three loop passes recorded is long after the step was taken.
+        if self.history_group_taken.swap(false, Relaxed) {
+            self.history.lock().gesture_ended();
+        }
     }
 
     pub fn history_group_open(&self) -> bool {
