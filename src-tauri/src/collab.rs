@@ -92,10 +92,35 @@ pub struct Collab {
     /// Each track's hash as last sent or received, so what goes out is
     /// only the tracks that changed since.
     track_hashes: Mutex<std::collections::HashMap<String, u64>>,
-    /// The same for what belongs to the song rather than a track (tempo,
-    /// channel rack, markers, arrangements; see `Project::song_level_blob`).
-    song_hash: Mutex<Option<u64>>,
+    /// The same for each part of the song that belongs to no track (see
+    /// `Project::SONG_SECTIONS`), with the version that settles two people
+    /// editing one part at the same moment.
+    song: Mutex<std::collections::HashMap<&'static str, SectionClock>>,
+    /// Who this side is when two versions of a part tie: random per room.
+    author: AtomicU64,
 }
+
+/// One part of the song as last sent or taken.
+///
+/// Two people editing the same part at once each send their version; each
+/// side then takes the higher (version, author) of the two, so both end
+/// with the same one. Sent as one blob, a marker moved on one side and a
+/// tempo changed on the other overwrote each other and the two songs
+/// stayed different.
+#[derive(Clone, Copy, Default)]
+struct SectionClock {
+    hash: u64,
+    /// Lamport version: the highest seen, one more for an edit of ours.
+    version: u64,
+    author: u64,
+    /// An edit of ours that has its version but has not gone out yet.
+    unsent: bool,
+    /// The hash of a version too large to send, so it is said once.
+    too_large: u64,
+}
+
+/// One part of the song to send: (name, version, author, bytes).
+pub type ChangedSections = Vec<(&'static str, u64, u64, Vec<u8>)>;
 
 /// Tracks that changed, as (id, place in the song, bytes).
 pub type ChangedTracks = Vec<(String, usize, Vec<u8>)>;
@@ -111,7 +136,24 @@ impl Collab {
     /// Take the song as it is now as what the other side has, so only
     /// later edits are sent (when a room opens or a song arrives).
     pub fn remember_tracks(&self, project: &hardwave_project::Project) {
-        *self.song_hash.lock() = Some(hash_of(&project.song_level_blob()));
+        {
+            let mut song = self.song.lock();
+            song.clear();
+            for name in hardwave_project::Project::SONG_SECTIONS {
+                let blob = project.song_section(name).unwrap_or_default();
+                song.insert(
+                    name,
+                    SectionClock {
+                        hash: hash_of(&blob),
+                        ..SectionClock::default()
+                    },
+                );
+            }
+        }
+        if self.author.load(Ordering::Relaxed) == 0 {
+            self.author
+                .store(uuid::Uuid::new_v4().as_u64_pair().0 | 1, Ordering::Relaxed);
+        }
         let mut hashes = self.track_hashes.lock();
         hashes.clear();
         for t in &project.tracks {
@@ -129,23 +171,96 @@ impl Collab {
             .insert(track_id.to_string(), hash_of(blob));
     }
 
-    /// What the other side sent of the song level: it has it, so it is not
-    /// sent back.
-    pub fn remember_song(&self, blob: &[u8]) {
-        *self.song_hash.lock() = Some(hash_of(blob));
+    /// The parts of the song changed since last sent or taken, each with
+    /// its new version. A part too large for a room message is left out
+    /// (said once) and does not hold up the others.
+    pub fn song_changes(&self, project: &hardwave_project::Project) -> ChangedSections {
+        let me = self.author.load(Ordering::Relaxed);
+        let mut song = self.song.lock();
+        let mut out = Vec::new();
+        for name in hardwave_project::Project::SONG_SECTIONS {
+            let blob = project.song_section(name).unwrap_or_default();
+            let h = hash_of(&blob);
+            let clock = song.entry(name).or_default();
+            if h != clock.hash {
+                clock.hash = h;
+                clock.version += 1;
+                clock.author = me;
+                clock.unsent = true;
+            }
+            if !clock.unsent {
+                continue;
+            }
+            if blob.len() > crate::commands::collab::hardwave_room_limits::MAX_TRACK {
+                if clock.too_large != h {
+                    clock.too_large = h;
+                    log::warn!(
+                        "room: the song's {name} are too large to send ({} bytes)",
+                        blob.len()
+                    );
+                }
+                continue;
+            }
+            clock.unsent = false;
+            out.push((name, clock.version, clock.author, blob));
+        }
+        out
     }
 
-    /// The song level, when it changed since last sent or received. Marks
-    /// it as sent.
-    pub fn song_changes(&self, project: &hardwave_project::Project) -> Option<Vec<u8>> {
-        let blob = project.song_level_blob();
-        let h = hash_of(&blob);
-        let mut last = self.song_hash.lock();
-        if *last == Some(h) {
-            return None;
+    /// Whether a part of the song the other side sent should be taken:
+    /// it is newer than ours, or as new and from the higher author. An
+    /// edit of ours not sent yet counts as ours first, so the two compare
+    /// fairly; it then goes out on the next send.
+    pub fn should_take_section(
+        &self,
+        name: &str,
+        current: &[u8],
+        version: u64,
+        author: u64,
+    ) -> bool {
+        let me = self.author.load(Ordering::Relaxed);
+        let Some(name) = hardwave_project::Project::SONG_SECTIONS
+            .into_iter()
+            .find(|n| *n == name)
+        else {
+            return false;
+        };
+        let mut song = self.song.lock();
+        let clock = song.entry(name).or_default();
+        let h = hash_of(current);
+        if h != clock.hash {
+            clock.hash = h;
+            clock.version += 1;
+            clock.author = me;
+            clock.unsent = true;
         }
-        *last = Some(h);
-        Some(blob)
+        let take = (version, author) > (clock.version, clock.author);
+        if !take {
+            // Ours stands; the version still counts for the next edit.
+            clock.version = clock.version.max(version);
+        }
+        take
+    }
+
+    /// A part of the song taken from the other side, as it reads now: it
+    /// has it, so it is not sent back.
+    pub fn took_section(&self, name: &str, now: &[u8], version: u64, author: u64) {
+        let Some(name) = hardwave_project::Project::SONG_SECTIONS
+            .into_iter()
+            .find(|n| *n == name)
+        else {
+            return;
+        };
+        self.song.lock().insert(
+            name,
+            SectionClock {
+                hash: hash_of(now),
+                version,
+                author,
+                unsent: false,
+                too_large: 0,
+            },
+        );
     }
 
     pub fn forget_track(&self, track_id: &str) {
@@ -488,6 +603,114 @@ pub enum Hello {
 mod tests {
     use super::*;
     use hardwave_project::multiplayer::MixerSync;
+
+    /// One side of a room: its song and its session.
+    struct Side {
+        project: hardwave_project::Project,
+        collab: Collab,
+    }
+
+    fn side(song: &hardwave_project::Project) -> Side {
+        let collab = Collab::default();
+        collab.remember_tracks(song);
+        Side {
+            project: song.clone(),
+            collab,
+        }
+    }
+
+    /// What `to` does with the parts `from` sends: as apply_song_state.
+    fn deliver(sent: ChangedSections, to: &mut Side) {
+        for (name, version, author, blob) in sent {
+            let current = to.project.song_section(name).unwrap();
+            if to
+                .collab
+                .should_take_section(name, &current, version, author)
+            {
+                to.project.put_song_section(name, &blob).unwrap();
+                let now = to.project.song_section(name).unwrap();
+                to.collab.took_section(name, &now, version, author);
+            }
+        }
+    }
+
+    fn song() -> hardwave_project::Project {
+        let mut p = hardwave_project::Project::default();
+        p.ensure_arrangements();
+        p
+    }
+
+    #[test]
+    fn two_people_editing_different_parts_at_once_both_keep_their_edit() {
+        let start = song();
+        let (mut a, mut b) = (side(&start), side(&start));
+        a.project.timeline_state = Some("{\"markers\":[1]}".into());
+        b.project.tempo_map.entries[0].bpm = 150.0;
+        // Both send before either hears from the other.
+        let from_a = a.collab.song_changes(&a.project);
+        let from_b = b.collab.song_changes(&b.project);
+        deliver(from_b, &mut a);
+        deliver(from_a, &mut b);
+        for s in [&a, &b] {
+            assert_eq!(s.project.tempo_map.entries[0].bpm, 150.0);
+            assert_eq!(
+                s.project.timeline_state.as_deref(),
+                Some("{\"markers\":[1]}")
+            );
+        }
+        // Nothing left to send: neither echoes what it took.
+        assert!(a.collab.song_changes(&a.project).is_empty());
+        assert!(b.collab.song_changes(&b.project).is_empty());
+    }
+
+    #[test]
+    fn two_people_editing_the_same_part_at_once_end_with_the_same_one() {
+        let start = song();
+        let (mut a, mut b) = (side(&start), side(&start));
+        a.project.tempo_map.entries[0].bpm = 150.0;
+        b.project.tempo_map.entries[0].bpm = 160.0;
+        let from_a = a.collab.song_changes(&a.project);
+        let from_b = b.collab.song_changes(&b.project);
+        deliver(from_b, &mut a);
+        deliver(from_a, &mut b);
+        assert_eq!(
+            a.project.tempo_map.entries[0].bpm, b.project.tempo_map.entries[0].bpm,
+            "both sides keep the same tempo"
+        );
+    }
+
+    #[test]
+    fn an_edit_made_after_hearing_the_other_side_wins() {
+        let start = song();
+        let (mut a, mut b) = (side(&start), side(&start));
+        a.project.tempo_map.entries[0].bpm = 150.0;
+        let from_a = a.collab.song_changes(&a.project);
+        deliver(from_a, &mut b);
+        assert_eq!(b.project.tempo_map.entries[0].bpm, 150.0);
+        // B changes it after taking A's: B's is newer, whoever's author
+        // number is higher.
+        b.project.tempo_map.entries[0].bpm = 128.0;
+        let from_b = b.collab.song_changes(&b.project);
+        deliver(from_b, &mut a);
+        assert_eq!(a.project.tempo_map.entries[0].bpm, 128.0);
+    }
+
+    #[test]
+    fn an_edit_not_sent_yet_is_weighed_before_the_other_sides_is_taken() {
+        let start = song();
+        let (mut a, mut b) = (side(&start), side(&start));
+        a.project.tempo_map.entries[0].bpm = 150.0;
+        let from_a = a.collab.song_changes(&a.project);
+        // B edits the same part and hears A before its next send.
+        b.project.tempo_map.entries[0].bpm = 160.0;
+        deliver(from_a, &mut b);
+        let from_b = b.collab.song_changes(&b.project);
+        deliver(from_b, &mut a);
+        assert_eq!(
+            a.project.tempo_map.entries[0].bpm,
+            b.project.tempo_map.entries[0].bpm
+        );
+    }
 
     fn fader() -> SyncKind {
         SyncKind::Mixer(MixerSync {

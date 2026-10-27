@@ -200,18 +200,36 @@ export function resetTimelineState() {
 // autosave would write a stale timeline. Coalesced so dragging a marker does
 // not fire a command per frame.
 let pushTimer: ReturnType<typeof setTimeout> | null = null
+let pushResolve: (() => void) | null = null
 let suppressPush = false
+
+function sendTimelineState(): Promise<void> {
+  return invoke('set_timeline_state', { payload: serializeTimelineState() })
+    .then(() => {})
+    .catch(() => { /* a failed sync must not break a marker edit */ })
+}
 
 export function pushTimelineState(): Promise<void> {
   if (pushTimer) clearTimeout(pushTimer)
   return new Promise(resolve => {
+    pushResolve = resolve
     pushTimer = setTimeout(() => {
       pushTimer = null
-      invoke('set_timeline_state', { payload: serializeTimelineState() })
-        .catch(() => { /* a failed sync must not break a marker edit */ })
-        .finally(() => resolve())
+      pushResolve = null
+      void sendTimelineState().finally(() => resolve())
     }, 250)
   })
+}
+
+/** Send a marker edit still waiting at once. True when there was one. */
+function flushTimelinePush(): boolean {
+  if (!pushTimer) return false
+  clearTimeout(pushTimer)
+  pushTimer = null
+  const resolve = pushResolve
+  pushResolve = null
+  void sendTimelineState().finally(() => resolve?.())
+  return true
 }
 
 /**
@@ -257,8 +275,12 @@ export function startTimelineRoomSync(): void {
   import('@tauri-apps/api/event')
     .then(({ listen }) => {
       void listen<string | null>('daw:timelineChanged', (ev) => {
-        const state = parseTimelineState(ev.payload)
-        if (state) applyTimelineState(state)
+        // A marker edit of ours still waiting to go out is the newer
+        // change: it goes now and reaches the other side, rather than
+        // being overwritten by theirs and then sending theirs back.
+        if (flushTimelinePush()) return
+        // A song with no timeline at all clears ours, as opening it would.
+        applyTimelineState(parseTimelineState(ev.payload) ?? emptyTimeline())
       })
       void listen('daw:tempoChanged', () => {
         void import('./tempoMapStore').then(({ useTempoMapStore }) => useTempoMapStore.getState().refresh())

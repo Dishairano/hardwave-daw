@@ -345,6 +345,11 @@ impl LiveRoom {
             SyncKind::TrackState { blob, .. } if blob.len() > MAX_TRACK_BYTES => {
                 Relay::stop("that track is too large to send")
             }
+            // A part of the song (tempo, rack, markers...) is held to a
+            // track's size: it comes from someone else's DAW.
+            SyncKind::SongState { blob, .. } if blob.len() > MAX_TRACK_BYTES => {
+                Relay::stop("that part of the song is too large to send")
+            }
             // Everything that changes the song needs edit rights.
             _ => {
                 if permission.can_edit() {
@@ -367,6 +372,7 @@ impl LiveRoom {
                 | SyncKind::TrackState { .. }
                 | SyncKind::TrackRemoved { .. }
                 | SyncKind::PluginParam { .. }
+                | SyncKind::SongState { .. }
         );
         if relay.forward && worth_replaying {
             self.remember(message.clone());
@@ -627,6 +633,21 @@ mod tests {
         assert!(live.handle(&msg("guest-1", 1, track(1024))).forward);
         let big = live.handle(&msg("guest-1", 2, track(MAX_TRACK_BYTES + 1)));
         assert_eq!(big.refused, Some("that track is too large to send"));
+        let song_part = |len: usize| SyncKind::SongState {
+            section: "timeline".into(),
+            version: 1,
+            author: 7,
+            blob: vec![0; len],
+        };
+        let big = live.handle(&msg("guest-1", 2, song_part(MAX_TRACK_BYTES + 1)));
+        assert_eq!(
+            big.refused,
+            Some("that part of the song is too large to send")
+        );
+        assert!(live
+            .handle(&msg("guest-1", 2, song_part(10)))
+            .refused
+            .is_none());
         live.room.member_mut("guest-1").unwrap().permission = Permission::Viewer;
         let listening = live.handle(&msg("guest-1", 3, track(10)));
         assert_eq!(listening.refused, Some("you are listening, not editing"));

@@ -893,7 +893,7 @@ fn split_arrangements(
     };
     let elsewhere =
         |id: String| -> Option<usize> { arrangement_of.get(&id).copied().filter(|a| *a != open) };
-    let mut stored: Vec<std::collections::HashMap<String, crate::arrangement::TrackTimeline>> =
+    let mut stored: Vec<std::collections::BTreeMap<String, crate::arrangement::TrackTimeline>> =
         vec![Default::default(); fl.arrangements.len()];
     for track in &mut project.tracks {
         let mut kept = Vec::new();

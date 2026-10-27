@@ -14,6 +14,7 @@ import { PanelWindow } from './PanelWindow'
 import { listenForTrackChanges } from './stores/trackStore'
 import { startRackSync } from './stores/rackSync'
 import { startTimelineRoomSync } from './stores/timelineState'
+import { startSongPartSync } from './stores/songPartSync'
 import './fonts'
 import './mockup.css'
 import './rework.css'
@@ -27,6 +28,7 @@ import './rework.css'
 listenForTrackChanges()
 startRackSync()
 startTimelineRoomSync()
+startSongPartSync()
 
 const injected = (window as unknown as { __HW_PANEL__?: { panel?: string; params?: string } }).__HW_PANEL__
 const rawFallback = window.location.hash.startsWith('#')

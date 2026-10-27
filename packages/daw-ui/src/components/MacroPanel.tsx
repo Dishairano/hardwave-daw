@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSongPartChanged } from '../stores/songPartSync'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
@@ -76,6 +77,7 @@ export function MacroPanel({ onClose }: { onClose: () => void }) {
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
+  useSongPartChanged('macros', refresh)
 
   useEffect(() => {
     if (!linkTrackId && tracks.length > 0) setLinkTrackId(tracks[0].id)

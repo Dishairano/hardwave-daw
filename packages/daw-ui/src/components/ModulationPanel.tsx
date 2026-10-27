@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSongPartChanged } from '../stores/songPartSync'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
@@ -121,6 +122,7 @@ export function ModulationPanel({ onClose }: { onClose: () => void }) {
   }, [])
 
   useEffect(() => { void refresh() }, [refresh])
+  useSongPartChanged('modulations', refresh)
   useEffect(() => { void fetchSends().catch(() => {}) }, [fetchSends])
 
   useEffect(() => {
