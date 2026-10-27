@@ -170,6 +170,30 @@ impl MidiRecorder {
         }
     }
 
+    /// Stop, closing notes still held at `end_tick` (or at the latest end
+    /// of a closed note, when that is later): a key down when a capture is
+    /// made lasts to the end of the take.
+    pub fn stop_at(&mut self, end_tick: u64) {
+        self.recording = false;
+        let end_tick = end_tick.max(self.current_latest_tick());
+        self.close_pending(end_tick);
+    }
+
+    fn close_pending(&mut self, end_tick: u64) {
+        self.pending.retain(|p| {
+            self.notes.push(MidiNote {
+                start_tick: p.start_tick,
+                duration_ticks: end_tick.saturating_sub(p.start_tick).max(1),
+                pitch: p.pitch,
+                velocity: p.velocity,
+                channel: p.channel,
+                muted: false,
+                ..Default::default()
+            });
+            false
+        });
+    }
+
     pub fn stop(&mut self) {
         self.recording = false;
         // Close any pending notes at the current cursor position.
@@ -434,6 +458,24 @@ mod capture_ring_pass_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::MidiRecorder;
+
+    /// A key still down when a capture is made lasts to the end of the
+    /// take; it was closed at the end of the last note let go, often one
+    /// tick long.
+    #[test]
+    fn a_key_still_down_lasts_to_the_end_of_the_take() {
+        let mut r = MidiRecorder::default();
+        r.start();
+        r.note_on(0, 60, 0.8, 0);
+        r.note_on(480, 64, 0.8, 0);
+        r.note_off(960, 60, 0);
+        r.stop_at(3_840);
+        let notes = r.take_notes();
+        let held = notes.iter().find(|n| n.pitch == 64).unwrap();
+        assert_eq!(held.duration_ticks, 3_840 - 480);
+    }
+
     use super::*;
 
     #[test]

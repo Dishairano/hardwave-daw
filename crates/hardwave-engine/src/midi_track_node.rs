@@ -204,8 +204,16 @@ const RELEASE_SECS: f32 = 0.150;
 /// either way that a synth defaults to.
 #[inline]
 fn bend_multiplier(bend: f32) -> f32 {
-    const BEND_SEMITONES: f32 = 2.0;
-    2.0_f32.powf(bend.clamp(-1.0, 1.0) * BEND_SEMITONES / 12.0)
+    bend_multiplier_over(bend, 2.0)
+}
+
+/// An MPE member channel bends over 48 semitones either way, as the MPE
+/// spec sets for them (and as the zone message below says).
+const MPE_MEMBER_BEND_SEMITONES: f32 = 48.0;
+
+#[inline]
+fn bend_multiplier_over(bend: f32, semitones: f32) -> f32 {
+    2.0_f32.powf(bend.clamp(-1.0, 1.0) * semitones / 12.0)
 }
 
 /// Convert MIDI pitch number → frequency in Hz using equal-temperament.
@@ -271,6 +279,9 @@ pub struct MidiTrackNode {
     jump_offs: Vec<(u8, u8)>,
     /// The MPE zone was announced since playing started (or the last jump).
     mpe_zone_sent: bool,
+    /// Whether the song played last block, to send the zone again when
+    /// playing starts.
+    was_playing: bool,
     /// This track's row of the launcher grid (MIDI loops; an empty slot or
     /// an audio loop is None), the grid state it shares with the UI, the
     /// playing loop's notes in this block, which slot played last block,
@@ -418,6 +429,7 @@ impl MidiTrackNode {
             jumped: false,
             jump_offs: Vec::with_capacity(64),
             mpe_zone_sent: false,
+            was_playing: false,
             session: None,
             session_quantise: None,
             session_midi: Vec::new(),
@@ -1079,7 +1091,14 @@ impl AudioNode for MidiTrackNode {
                 }
                 hardwave_midi::MidiEvent::PitchBend { value, channel, .. } => {
                     if self.mpe {
-                        self.channel_bend[(channel & 0x0F) as usize] = bend_multiplier(value);
+                        // A member channel's bend covers 48 semitones: read
+                        // over two, a slide on an MPE controller moved a
+                        // twenty-fourth of the way.
+                        self.channel_bend[(channel & 0x0F) as usize] = if channel & 0x0F == 0 {
+                            bend_multiplier(value)
+                        } else {
+                            bend_multiplier_over(value, MPE_MEMBER_BEND_SEMITONES)
+                        };
                         // Channel 0 is the master channel of the zone:
                         // a bend there moves everything, as the spec says.
                         if channel & 0x0F == 0 {
@@ -1565,10 +1584,17 @@ impl AudioNode for MidiTrackNode {
         // MPE out: when playing starts (and after a jump) the instrument is
         // told the lower zone has fifteen member channels, the
         // configuration message an MPE synth listens for.
-        if !ctx.playing {
+        // Sent again each time playing starts, and when keys are played
+        // live with the song stopped (they reached the instrument without
+        // it). Each member channel is also told its bend covers 48
+        // semitones, which the detune of a note is written in; an
+        // instrument that kept its own default played it a fraction.
+        if ctx.playing && !self.was_playing {
             self.mpe_zone_sent = false;
         }
-        if ctx.playing && self.mpe && (!self.mpe_zone_sent || self.jumped) {
+        self.was_playing = ctx.playing;
+        let live_keys = !self.live_events.is_empty();
+        if self.mpe && (ctx.playing || live_keys) && (!self.mpe_zone_sent || self.jumped) {
             self.mpe_zone_sent = true;
             for (cc, value) in [(101u8, 0u8), (100, 6), (6, 15)] {
                 block_midi.push(hardwave_midi::MidiEvent::ControlChange {
@@ -1577,6 +1603,16 @@ impl AudioNode for MidiTrackNode {
                     cc,
                     value: value as f32 / 127.0,
                 });
+            }
+            for member in 1..16u8 {
+                for (cc, value) in [(101u8, 0u8), (100, 0), (6, 48), (38, 0)] {
+                    block_midi.push(hardwave_midi::MidiEvent::ControlChange {
+                        timing: 0,
+                        channel: member,
+                        cc,
+                        value: value as f32 / 127.0,
+                    });
+                }
             }
         }
         let mpe = self.mpe;
