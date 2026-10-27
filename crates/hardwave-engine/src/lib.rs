@@ -12,6 +12,7 @@ pub mod source_paths;
 pub use input_node::CaptureTap;
 pub mod insert_chain;
 pub mod link;
+pub mod live_midi_fx;
 pub mod master_node;
 pub mod master_tap;
 pub mod metronome;

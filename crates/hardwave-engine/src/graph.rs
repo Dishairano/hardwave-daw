@@ -110,6 +110,18 @@ pub trait AudioNode: Send {
         None
     }
 
+    /// Hand off the keys held and the arpeggio playing on a live keyboard,
+    /// for the node that replaces this one in a graph rebuild. Default
+    /// `None`; an instrument track's node overrides it while busy.
+    fn take_live_midi(&mut self) -> Option<Box<crate::live_midi_fx::LiveMidiFx>> {
+        None
+    }
+
+    /// Carry on from what a replaced node handed off with `take_live_midi`.
+    fn restore_live_midi(&mut self, live: Box<crate::live_midi_fx::LiveMidiFx>) {
+        let _ = live;
+    }
+
     /// Reattach a previously-stashed plug-in chain after a graph rebuild.
     /// No-op for non-track nodes; TrackNode replaces its empty chain
     /// with the supplied one.
