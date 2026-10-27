@@ -43,6 +43,35 @@ pub fn redo(state: State<AppState>) -> bool {
     ok
 }
 
+/// The history list: the engine's undo steps, so the list and undo can
+/// never disagree.
+#[derive(serde::Serialize)]
+pub struct UndoHistory {
+    pub entries: Vec<hardwave_engine::engine::HistoryEntry>,
+    /// How many of the entries are applied; the rest can be redone.
+    pub cursor: usize,
+}
+
+#[tauri::command]
+pub fn get_undo_history(state: State<AppState>) -> UndoHistory {
+    let (entries, cursor) = state.engine.lock().history_entries();
+    UndoHistory { entries, cursor }
+}
+
+/// Name the edit the command before this one just made ("Mute clip").
+/// A name that comes with no new edit is dropped, so it never lands on
+/// an older step. Steps nobody names are described from the song.
+#[tauri::command]
+pub fn label_undo_step(state: State<AppState>, label: String) -> bool {
+    state.engine.lock().label_newest_edit(label)
+}
+
+/// Forget every undo step: the history list's "Clear".
+#[tauri::command]
+pub fn clear_undo_history(state: State<AppState>) {
+    state.engine.lock().reset_history();
+}
+
 /// Returns `(undo_depth, redo_depth)` so the UI can grey out buttons.
 #[tauri::command]
 pub fn history_sizes(state: State<AppState>) -> (usize, usize) {

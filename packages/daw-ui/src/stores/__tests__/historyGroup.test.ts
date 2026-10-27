@@ -5,42 +5,45 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invokeM
 vi.mock('@tauri-apps/api/event', () => ({ listen: () => Promise.resolve(() => {}) }))
 
 const { useTrackStore } = await import('../trackStore')
-const { useHistoryStore } = await import('../historyStore')
+
+/** The labels sent to the engine for its undo steps, in order. */
+function labelsSent(): string[] {
+  return invokeMock.mock.calls
+    .filter(([cmd]) => cmd === 'label_undo_step')
+    .map(([, args]) => (args as { label: string }).label)
+}
 
 describe('history groups', () => {
   beforeEach(() => {
     invokeMock.mockReset()
     invokeMock.mockResolvedValue([])
-    useHistoryStore.getState().clear()
     useTrackStore.setState({ tracks: [], tracksById: {} } as never)
   })
 
-  /// The engine keeps one snapshot for a whole group, so the undo list must
-  /// show one entry. Every command inside used to push its own label.
-  it('a grouped gesture is one entry in the undo list', async () => {
+  /// The engine keeps one snapshot for a whole group, so the group gets one
+  /// label. Every command inside used to push its own.
+  it('a grouped gesture is named once', async () => {
     const store = useTrackStore.getState()
     await store.beginHistoryGroup()
     await store.setClipMuted('t', 'c1', true)
     await store.setClipMuted('t', 'c2', true)
     await store.endHistoryGroup('Record 3 loop passes')
-
-    const labels = useHistoryStore.getState().entries.map(e => e.label)
-    expect(labels).toEqual(['Record 3 loop passes'])
+    expect(labelsSent()).toEqual(['Record 3 loop passes'])
   })
 
-  it('commands outside a group keep their own entries', async () => {
+  it('commands outside a group name their own steps', async () => {
     const store = useTrackStore.getState()
     await store.setClipMuted('t', 'c1', true)
     await store.setClipMuted('t', 'c2', false)
-    expect(useHistoryStore.getState().entries).toHaveLength(2)
+    expect(labelsSent()).toHaveLength(2)
   })
 
-  it('a group that ends without a label leaves no entry', async () => {
+  it('a group that ends without a label names nothing', async () => {
     const store = useTrackStore.getState()
     await store.beginHistoryGroup()
     await store.setClipMuted('t', 'c1', true)
     await store.endHistoryGroup(null)
-    expect(useHistoryStore.getState().entries).toHaveLength(0)
+    expect(labelsSent()).toHaveLength(0)
   })
 
   it('labels come back once the group has closed', async () => {
@@ -48,7 +51,6 @@ describe('history groups', () => {
     await store.beginHistoryGroup()
     await store.endHistoryGroup('Paint 4 clips')
     await store.setClipMuted('t', 'c1', true)
-    const labels = useHistoryStore.getState().entries.map(e => e.label)
-    expect(labels).toEqual(['Paint 4 clips', 'Mute clip'])
+    expect(labelsSent()).toEqual(['Paint 4 clips', 'Mute clip'])
   })
 })

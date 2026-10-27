@@ -158,8 +158,92 @@ const MAX_MOD_ROUTES: usize = 256;
 /// small (track/clip metadata only — audio samples live in the AudioPool and are
 /// referenced by source id), so cloning is cheap.
 pub struct History {
-    undo: Vec<Project>,
-    redo: Vec<Project>,
+    /// The song before each edit, oldest first.
+    undo: Vec<Step>,
+    /// The song after each undone edit, the next one to redo last.
+    redo: Vec<Step>,
+    /// The newest step was taken since the last label, undo or redo, so a
+    /// label that comes now is for it.
+    fresh: bool,
+}
+
+/// One edit: a song it can be undone or redone to, and what the edit was.
+struct Step {
+    project: Project,
+    /// What the app called the edit, when it said.
+    label: Option<String>,
+    /// What the edit changed, read off the songs, once worked out. Kept
+    /// only while both songs are snapshots, which do not change.
+    described: Option<hardwave_project::describe::Change>,
+    /// When the edit was made, in milliseconds since 1970.
+    at_ms: u64,
+    taken: std::time::Instant,
+}
+
+/// One row of the history list: the app's own name for the edit, or a
+/// template describing it (`Add {n} notes: "{name}"`) with what goes in.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HistoryEntry {
+    #[serde(flatten)]
+    pub change: hardwave_project::describe::Change,
+    pub time: u64,
+}
+
+/// How long after its snapshot an edit can still be labelled. The app
+/// labels a step right after the command that took it returns; a label
+/// that comes later belongs to a command that took no step.
+const LABEL_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
+
+impl Step {
+    fn new(project: Project) -> Self {
+        Self {
+            project,
+            label: None,
+            described: None,
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            taken: std::time::Instant::now(),
+        }
+    }
+
+    /// The same edit with another song, as it moves between the stacks:
+    /// the song it held, and the step holding `project`.
+    fn swap(mut self, project: Project) -> (Project, Self) {
+        let held = std::mem::replace(&mut self.project, project);
+        (held, self)
+    }
+}
+
+/// The row for an edit that turned `before` into `after`. A description
+/// worked out between two snapshots (`keep`) is stored in `described`.
+fn history_row(
+    label: &Option<String>,
+    described: &mut Option<hardwave_project::describe::Change>,
+    at_ms: u64,
+    before: &Project,
+    after: &Project,
+    keep: bool,
+) -> HistoryEntry {
+    let change = match (label, &*described) {
+        (Some(label), _) => hardwave_project::describe::Change {
+            label: label.clone(),
+            ..Default::default()
+        },
+        (None, Some(change)) => change.clone(),
+        (None, None) => {
+            let change = hardwave_project::describe::describe_change(before, after);
+            if keep {
+                *described = Some(change.clone());
+            }
+            change
+        }
+    };
+    HistoryEntry {
+        change,
+        time: at_ms,
+    }
 }
 
 impl History {
@@ -167,48 +251,174 @@ impl History {
         Self {
             undo: Vec::new(),
             redo: Vec::new(),
+            fresh: false,
         }
     }
 
     pub fn push(&mut self, snapshot: Project) {
-        self.undo.push(snapshot);
+        self.undo.push(Step::new(snapshot));
         if self.undo.len() > HISTORY_CAP {
             self.undo.remove(0);
         }
         self.redo.clear();
+        self.fresh = true;
     }
 
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+        self.fresh = false;
     }
 
     pub fn undo(&mut self, current: Project) -> Option<Project> {
-        let prev = self.undo.pop()?;
-        self.redo.push(current);
+        let (project, step) = self.undo.pop()?.swap(current);
+        self.redo.push(step);
         if self.redo.len() > HISTORY_CAP {
             self.redo.remove(0);
         }
-        Some(prev)
+        self.fresh = false;
+        Some(project)
     }
 
     pub fn redo(&mut self, current: Project) -> Option<Project> {
-        let next = self.redo.pop()?;
-        self.undo.push(current);
+        let (project, step) = self.redo.pop()?.swap(current);
+        self.undo.push(step);
         if self.undo.len() > HISTORY_CAP {
             self.undo.remove(0);
         }
-        Some(next)
+        self.fresh = false;
+        Some(project)
     }
 
     pub fn sizes(&self) -> (usize, usize) {
         (self.undo.len(), self.redo.len())
+    }
+
+    /// Name the newest edit, if it was just made and has no name yet.
+    /// Returns whether it was named.
+    pub fn label_newest(&mut self, label: String) -> bool {
+        let fresh = std::mem::take(&mut self.fresh);
+        match self.undo.last_mut() {
+            Some(step) if fresh && step.label.is_none() && step.taken.elapsed() < LABEL_WINDOW => {
+                step.label = Some(label);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Every edit, oldest first, and how many of them are applied: the
+    /// undo steps, then the redo steps. `current` is the song as it is.
+    pub fn entries(&mut self, current: &Project) -> (Vec<HistoryEntry>, usize) {
+        let applied = self.undo.len();
+        let mut out = Vec::with_capacity(applied + self.redo.len());
+        for i in 0..applied {
+            let (head, tail) = self.undo.split_at_mut(i + 1);
+            let Step {
+                project,
+                label,
+                described,
+                at_ms,
+                ..
+            } = &mut head[i];
+            let after = tail.first().map(|next| &next.project);
+            out.push(history_row(
+                label,
+                described,
+                *at_ms,
+                project,
+                after.unwrap_or(current),
+                after.is_some(),
+            ));
+        }
+        // The redo stack holds each undone edit's result; the first comes
+        // from the song as it is.
+        let undone = self.redo.len();
+        for k in 0..undone {
+            let index = undone - 1 - k;
+            let (head, tail) = self.redo.split_at_mut(index + 1);
+            let Step {
+                project,
+                label,
+                described,
+                at_ms,
+                ..
+            } = &mut head[index];
+            let before = tail.first().map(|previous| &previous.project);
+            out.push(history_row(
+                label,
+                described,
+                *at_ms,
+                before.unwrap_or(current),
+                project,
+                before.is_some(),
+            ));
+        }
+        (out, applied)
     }
 }
 
 impl Default for History {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod history_list_tests {
+    use super::*;
+
+    fn song(bpm: f64) -> Project {
+        let mut p = Project::default();
+        p.tempo_map.entries[0].bpm = bpm;
+        p
+    }
+
+    #[test]
+    fn the_list_is_the_undo_steps_with_their_names_and_follows_undo() {
+        let mut h = History::new();
+        // Edit one, named by the app; edit two, not named.
+        h.push(song(120.0));
+        assert!(h.label_newest("Set tempo".into()));
+        h.push(song(130.0));
+        let current = song(140.0);
+        let (rows, applied) = h.entries(&current);
+        let labels: Vec<&str> = rows.iter().map(|r| r.change.label.as_str()).collect();
+        assert_eq!(labels, vec!["Set tempo", "Tempo"]);
+        assert_eq!(applied, 2);
+
+        // Undo moves the cursor, not the names.
+        let back = h.undo(current).unwrap();
+        let (rows, applied) = h.entries(&back);
+        let labels: Vec<&str> = rows.iter().map(|r| r.change.label.as_str()).collect();
+        assert_eq!(labels, vec!["Set tempo", "Tempo"]);
+        assert_eq!(applied, 1);
+        let back = h.undo(back).unwrap();
+        assert_eq!(h.entries(&back).1, 0);
+        let forward = h.redo(back).unwrap();
+        let (rows, applied) = h.entries(&forward);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].change.label, "Set tempo");
+        assert_eq!(applied, 1);
+    }
+
+    #[test]
+    fn a_name_is_only_for_an_edit_just_made() {
+        let mut h = History::new();
+        assert!(!h.label_newest("Nothing to name".into()), "no edit yet");
+        h.push(song(120.0));
+        assert!(h.label_newest("First".into()));
+        assert!(
+            !h.label_newest("Second".into()),
+            "a second name has no edit of its own and does not rename the first"
+        );
+        let current = song(125.0);
+        let back = h.undo(current).unwrap();
+        h.redo(back).unwrap();
+        assert!(
+            !h.label_newest("After redo".into()),
+            "a redo is not a new edit"
+        );
     }
 }
 
@@ -640,6 +850,19 @@ impl DawEngine {
         } else {
             false
         }
+    }
+
+    /// Name the edit just made, for the history list. See
+    /// [`History::label_newest`].
+    pub fn label_newest_edit(&self, label: String) -> bool {
+        self.history.lock().label_newest(label)
+    }
+
+    /// The history list: every edit, oldest first, and how many are
+    /// applied.
+    pub fn history_entries(&self) -> (Vec<HistoryEntry>, usize) {
+        let current = self.project.lock().clone();
+        self.history.lock().entries(&current)
     }
 
     /// Reset the history — e.g. after loading or creating a new project.

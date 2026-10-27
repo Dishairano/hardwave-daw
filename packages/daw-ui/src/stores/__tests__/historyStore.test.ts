@@ -1,69 +1,65 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useHistoryStore } from '../historyStore'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// The frontend history mirrors the Rust undo stack (labels only). Its
-// cursor discipline is what keeps the History panel truthful — a desync
-// here shows users wrong undo labels even when Rust is correct.
+// The History panel's list is the engine's undo stack. These tests stand
+// in for the engine: a stack of labels and a cursor that undo and redo
+// move, as get_undo_history reports them.
+let engine: { labels: string[]; cursor: number }
+const invokeMock = vi.fn(async (cmd: string, _args?: Record<string, unknown>) => {
+  if (cmd === 'get_undo_history') {
+    return { entries: engine.labels.map((label, i) => ({ label, time: i })), cursor: engine.cursor }
+  }
+  if (cmd === 'label_undo_step') return true
+  return null
+})
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
+}))
 
-beforeEach(() => useHistoryStore.getState().clear())
+const { useHistoryStore } = await import('../historyStore')
+
+beforeEach(() => {
+  invokeMock.mockClear()
+  engine = { labels: [], cursor: 0 }
+  useHistoryStore.setState({ entries: [], cursor: 0 })
+})
 
 describe('historyStore', () => {
-  it('push after undo truncates the redo branch', () => {
-    const s = () => useHistoryStore.getState()
-    s().push('add track')
-    s().push('move clip')
-    s().undoOne()
-    expect(s().cursor).toBe(1)
-    s().push('delete clip') // new branch — redo history must vanish
-    expect(s().entries.map(e => e.label)).toEqual(['add track', 'delete clip'])
-    expect(s().cursor).toBe(2)
+  it('shows the engine list, with its cursor', async () => {
+    engine = { labels: ['Add track "Kick"', 'Add {n} notes: "{name}"'], cursor: 1 }
+    await useHistoryStore.getState().refresh()
+    const s = useHistoryStore.getState()
+    expect(s.entries.map(e => e.label)).toEqual(['Add track "Kick"', 'Add {n} notes: "{name}"'])
+    expect(s.cursor).toBe(1)
   })
 
-  it('undo/redo clamp at the ends', () => {
-    const s = () => useHistoryStore.getState()
-    s().push('a')
-    s().undoOne(); s().undoOne(); s().undoOne()
-    expect(s().cursor).toBe(0)
-    s().redoOne(); s().redoOne(); s().redoOne()
-    expect(s().cursor).toBe(1)
+  it('a label goes to the engine, which decides whether it names a step', () => {
+    useHistoryStore.getState().push('Mute clip')
+    expect(invokeMock).toHaveBeenCalledWith('label_undo_step', { label: 'Mute clip' })
+    // The list itself is not touched: only the engine adds rows.
+    expect(useHistoryStore.getState().entries).toHaveLength(0)
   })
 
-  it('caps entries at 200, dropping the oldest', () => {
-    const s = () => useHistoryStore.getState()
-    for (let i = 0; i < 205; i++) s().push(`edit ${i}`)
-    expect(s().entries).toHaveLength(200)
-    expect(s().entries[0].label).toBe('edit 5')
-    expect(s().cursor).toBe(200)
-  })
-
-  it('jumpTo walks undo/redo callbacks the right number of times', async () => {
-    // Contract: jumpTo does NOT move the cursor itself — the callbacks
-    // do (production passes trackStore.undo/redo, which call
-    // undoOne/redoOne on success). The test callbacks mirror that.
-    const s = () => useHistoryStore.getState()
-    s().push('a'); s().push('b'); s().push('c')
+  it('jumpTo walks undo and redo the right number of times', async () => {
+    engine = { labels: ['a', 'b', 'c'], cursor: 3 }
     const calls: string[] = []
-    const undo = async () => { calls.push('undo'); s().undoOne(); return true }
-    const redo = async () => { calls.push('redo'); s().redoOne(); return true }
-    await s().jumpTo(1, undo, redo)
+    const undo = async () => { calls.push('undo'); engine.cursor--; return true }
+    const redo = async () => { calls.push('redo'); engine.cursor++; return true }
+    await useHistoryStore.getState().jumpTo(1, undo, redo)
     expect(calls).toEqual(['undo', 'undo'])
-    expect(s().cursor).toBe(1)
-    await s().jumpTo(3, undo, redo)
+    expect(useHistoryStore.getState().cursor).toBe(1)
+    await useHistoryStore.getState().jumpTo(3, undo, redo)
     expect(calls).toEqual(['undo', 'undo', 'redo', 'redo'])
-    expect(s().cursor).toBe(3)
+    expect(useHistoryStore.getState().cursor).toBe(3)
   })
 
-  it('jumpTo stops early when a step fails (Rust rejected the undo)', async () => {
-    const s = () => useHistoryStore.getState()
-    s().push('a'); s().push('b'); s().push('c')
+  it('jumpTo stops when a step fails and shows where the engine is', async () => {
+    engine = { labels: ['a', 'b', 'c'], cursor: 3 }
     let allowed = 1
     const undo = async () => {
-      if (allowed-- > 0) { s().undoOne(); return true }
+      if (allowed-- > 0) { engine.cursor--; return true }
       return false
     }
-    await s().jumpTo(0, undo, async () => true)
-    // One undo succeeded, second failed → cursor reflects reality (2),
-    // not the requested target (0) — the History panel stays truthful.
-    expect(s().cursor).toBe(2)
+    await useHistoryStore.getState().jumpTo(0, undo, async () => true)
+    expect(useHistoryStore.getState().cursor).toBe(2)
   })
 })

@@ -8,6 +8,7 @@ pub mod channel_rack;
 pub mod clip;
 pub mod dawproject;
 pub mod dawproject_import;
+pub mod describe;
 pub mod fl_build;
 pub mod fl_import;
 pub mod flp_parser;
