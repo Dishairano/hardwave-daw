@@ -950,6 +950,28 @@ pub fn run() {
                 }
             }
 
+            // Plug-ins the audio thread let go of (removed, replaced when a
+            // song's plug-ins were loaded again, or on a deleted track) wait
+            // in the graveyard to be freed off the audio thread. It was only
+            // emptied when a plug-in was added or removed by hand, so until
+            // then each kept its process and memory: after a change of the
+            // audio settings, a plug-in in its own process ran on, idle,
+            // beside the one playing. Emptied twice a second here, under the
+            // graveyard's own lock, not the engine's: freeing a plug-in can
+            // take a while.
+            {
+                let graveyard = Arc::clone(&state.engine.lock().insert_graveyard);
+                std::thread::Builder::new()
+                    .name("hardwave-plugin-graveyard".into())
+                    .spawn(move || loop {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        if let Some(g) = graveyard.lock().as_mut() {
+                            g.drain_and_drop();
+                        }
+                    })
+                    .ok();
+            }
+
             // MIDI Clock sync dispatcher: observes clock ticks from the
             // MIDI input manager and, when sync is enabled, slaves the
             // transport BPM and play/stop state to the external master.
