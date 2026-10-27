@@ -16,15 +16,21 @@ export interface HistoryEntry {
 interface UndoHistory {
   entries: { label: string; name?: string; old?: string; n?: number; time: number }[]
   cursor: number
+  startsAtOpen: boolean
 }
 
 interface HistoryState {
   entries: HistoryEntry[]
   /** How many entries are applied; the rest can be redone. */
   cursor: number
-  /** Name the edit the command before this one just made. A name with
-   *  no new edit behind it is dropped by the engine. */
-  push: (label: string) => void
+  /** Undoing every step gets back to the song as it was opened (not
+   *  once old steps have gone past the engine's cap). */
+  startsAtOpen: boolean
+  /** Name the edit a command made. `since` is `Date.now()` from just
+   *  before the command was sent: the engine names its newest step only
+   *  if it was taken since then, so a command that took no step names
+   *  nothing rather than the step before it. */
+  push: (label: string, since: number) => void
   /** Read the list from the engine again. */
   refresh: () => Promise<void>
   undoOne: () => void
@@ -45,9 +51,10 @@ interface HistoryState {
 export const useHistoryStore = create<HistoryState>((set, get) => ({
   entries: [],
   cursor: 0,
+  startsAtOpen: true,
 
-  push: (label) => {
-    invoke('label_undo_step', { label }).catch(() => {})
+  push: (label, since) => {
+    invoke('label_undo_step', { label, since }).catch(() => {})
   },
 
   refresh: async () => {
@@ -56,6 +63,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     set({
       entries: h.entries.map((e, i) => ({ ...e, id: `h${i}` })),
       cursor: h.cursor,
+      startsAtOpen: h.startsAtOpen,
     })
   },
 

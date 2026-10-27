@@ -32,6 +32,7 @@ export function HistoryPanel({ onClose }: Props) {
   useLanguage()
   const entries = useHistoryStore(s => s.entries)
   const cursor = useHistoryStore(s => s.cursor)
+  const startsAtOpen = useHistoryStore(s => s.startsAtOpen)
   const jumpTo = useHistoryStore(s => s.jumpTo)
   const refresh = useHistoryStore(s => s.refresh)
   const undo = useTrackStore(s => s.undo)
@@ -46,9 +47,12 @@ export function HistoryPanel({ onClose }: Props) {
   }, [refresh])
 
   const rows = useMemo(() => {
-    const withInitial = [{ id: '__initial__', label: 'Project opened', time: 0 } as HistoryEntry, ...entries]
+    // Undoing everything gets back to the song as opened, unless old
+    // steps went past the engine's cap: then it is the oldest step kept.
+    const first = startsAtOpen ? 'Project opened' : 'Oldest step kept'
+    const withInitial = [{ id: '__initial__', label: first, time: 0 } as HistoryEntry, ...entries]
     return withInitial
-  }, [entries])
+  }, [entries, startsAtOpen])
 
   const handleJump = async (targetCursor: number) => {
     await jumpTo(targetCursor, undo, redo)

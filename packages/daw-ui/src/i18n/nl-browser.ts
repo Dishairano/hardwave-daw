@@ -576,6 +576,8 @@ export const nlBrowser: Record<string, string> = {
   'Redo {n} steps': '{n} stappen opnieuw doen',
   'Project opened': 'Project geopend',
   // The History panel's rows: the engine's descriptions of undo steps.
+  'Oldest step kept': 'Oudste bewaarde stap',
+  'Move clip to "{name}"': 'Clip verplaatsen naar "{name}"',
   'Tempo': 'Tempo',
   'Arrangements': 'Arrangementen',
   'VCA faders': 'VCA-faders',

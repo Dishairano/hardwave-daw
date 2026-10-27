@@ -19,8 +19,11 @@ const liveMixPending = new Set<string>()
 let liveMixFrame: number | null = null
 
 let historyGroupOpen = false
+/** When the open history group started, for naming its step. */
+let historyGroupSince = 0
 
 async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: string): Promise<T> {
+  const since = Date.now()
   // invokeOrToast: every track mutation that fails now surfaces a toast
   // instead of dying in a caller's console.error (deep-research P1-8).
   const r = await invokeOrToast<T>(cmd, args, {
@@ -28,7 +31,7 @@ async function mut<T>(cmd: string, args?: Record<string, unknown>, label?: strin
     retry: false,
   })
   useProjectStore.getState().markDirty()
-  if (label && !historyGroupOpen) useHistoryStore.getState().push(label)
+  if (label && !historyGroupOpen) useHistoryStore.getState().push(label, since)
   return r
 }
 
@@ -564,13 +567,14 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     // A failure here only costs finer-grained undo, so it is not worth a
     // toast: the mutations still happen.
     historyGroupOpen = true
+    historyGroupSince = Date.now()
     await invoke('begin_history_group').catch(() => {})
   },
 
   endHistoryGroup: async (label) => {
     historyGroupOpen = false
     await invoke('end_history_group').catch(() => {})
-    if (label) useHistoryStore.getState().push(label)
+    if (label) useHistoryStore.getState().push(label, historyGroupSince)
   },
 
   selectTrack: (id) => {
@@ -898,9 +902,10 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   // round-trip is fine — drag-move calls are coalesced UI-side
   // before they hit invoke().
   addAutomationLane: async (trackId, target) => {
+    const since = Date.now()
     const id = await invoke<string>('add_automation_lane', { trackId, target })
     useProjectStore.getState().markDirty()
-    useHistoryStore.getState().push('Add automation lane')
+    useHistoryStore.getState().push('Add automation lane', since)
     await get().refreshTrack(trackId)
     return id
   },

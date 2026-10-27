@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 let engine: { labels: string[]; cursor: number }
 const invokeMock = vi.fn(async (cmd: string, _args?: Record<string, unknown>) => {
   if (cmd === 'get_undo_history') {
-    return { entries: engine.labels.map((label, i) => ({ label, time: i })), cursor: engine.cursor }
+    return { entries: engine.labels.map((label, i) => ({ label, time: i })), cursor: engine.cursor, startsAtOpen: true }
   }
   if (cmd === 'label_undo_step') return true
   return null
@@ -33,8 +33,8 @@ describe('historyStore', () => {
   })
 
   it('a label goes to the engine, which decides whether it names a step', () => {
-    useHistoryStore.getState().push('Mute clip')
-    expect(invokeMock).toHaveBeenCalledWith('label_undo_step', { label: 'Mute clip' })
+    useHistoryStore.getState().push('Mute clip', 1234)
+    expect(invokeMock).toHaveBeenCalledWith('label_undo_step', { label: 'Mute clip', since: 1234 })
     // The list itself is not touched: only the engine adds rows.
     expect(useHistoryStore.getState().entries).toHaveLength(0)
   })

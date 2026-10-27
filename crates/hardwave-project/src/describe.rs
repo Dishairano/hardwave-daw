@@ -183,10 +183,46 @@ fn describe_tracks(a: Option<&Value>, b: Option<&Value>) -> Option<Change> {
     if ids_a != ids_b {
         return Some(Change::plain("Move tracks"));
     }
+    // A clip dragged to another track leaves one track and lands on
+    // another; read one at a time, that is a delete on the first.
+    if let Some(to) = clip_moved_to(a, b) {
+        return Some(Change::on("Move clip to \"{name}\"", text(to, "name")));
+    }
     a.iter()
         .zip(b)
         .find(|(ta, tb)| ta != tb)
         .map(|(ta, tb)| describe_track(ta, tb))
+}
+
+/// The id of a clip, audio or MIDI.
+fn clip_id(clip: &Value) -> Option<&str> {
+    clip.pointer("/content/Audio/id")
+        .or_else(|| clip.pointer("/content/Midi/id"))
+        .and_then(Value::as_str)
+}
+
+/// The track a clip went to, when one moved from one track to another.
+fn clip_moved_to<'a>(a: &[Value], b: &'a [Value]) -> Option<&'a Value> {
+    let clips = |t: &Value| -> Vec<String> {
+        t.get("clips")
+            .and_then(Value::as_array)
+            .map(|cs| cs.iter().filter_map(clip_id).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    for (ta, tb) in a.iter().zip(b) {
+        let before = clips(ta);
+        let after = clips(tb);
+        if let Some(gained) = after.iter().find(|id| !before.contains(id)) {
+            let came_from_elsewhere = a
+                .iter()
+                .filter(|other| text(other, "id") != text(ta, "id"))
+                .any(|other| clips(other).contains(gained));
+            if came_from_elsewhere {
+                return Some(tb);
+            }
+        }
+    }
+    None
 }
 
 fn describe_track(a: &Value, b: &Value) -> Change {
@@ -356,6 +392,22 @@ mod tests {
         assert_eq!(
             describe_change(&before, &moved).text(),
             "Move clip: \"Lead\""
+        );
+    }
+
+    #[test]
+    fn a_clip_dragged_to_another_track_is_a_move_there() {
+        let mut before = song();
+        before
+            .tracks
+            .push(Track::new_midi("bass".into(), "Bass".into()));
+        let mut after = before.clone();
+        let lead = after.tracks.len() - 2;
+        let clip = after.tracks[lead].clips.remove(0);
+        after.tracks.last_mut().unwrap().clips.push(clip);
+        assert_eq!(
+            describe_change(&before, &after).text(),
+            "Move clip to \"Bass\""
         );
     }
 
