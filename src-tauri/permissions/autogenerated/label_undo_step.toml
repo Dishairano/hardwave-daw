@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-label-undo-step"
+description = "Enables the label_undo_step command without any pre-configured scope."
+commands.allow = ["label_undo_step"]
+
+[[permission]]
+identifier = "deny-label-undo-step"
+description = "Denies the label_undo_step command without any pre-configured scope."
+commands.deny = ["label_undo_step"]

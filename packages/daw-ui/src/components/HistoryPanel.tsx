@@ -1,7 +1,7 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { hw } from '../theme'
-import { useHistoryStore } from '../stores/historyStore'
+import { useHistoryStore, type HistoryEntry } from '../stores/historyStore'
 import { useTrackStore } from '../stores/trackStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { t, tf, useLanguage } from '../i18n'
@@ -18,17 +18,35 @@ function formatTime(t: number) {
   return `${hh}:${mm}:${ss}`
 }
 
+/** A row's text: the app's own name for the edit, or the engine's
+ *  description with the track's name and count filled in. */
+function label(e: HistoryEntry) {
+  const values: Record<string, string | number> = {}
+  if (e.name !== undefined) values.name = e.name
+  if (e.old !== undefined) values.old = e.old
+  if (e.n !== undefined) values.n = e.n
+  return tf(e.label, values)
+}
+
 export function HistoryPanel({ onClose }: Props) {
   useLanguage()
   const entries = useHistoryStore(s => s.entries)
   const cursor = useHistoryStore(s => s.cursor)
   const jumpTo = useHistoryStore(s => s.jumpTo)
-  const clear = useHistoryStore(s => s.clear)
+  const refresh = useHistoryStore(s => s.refresh)
   const undo = useTrackStore(s => s.undo)
   const redo = useTrackStore(s => s.redo)
 
+  // The list is the engine's undo stack. Edits made while it is open
+  // (a note drawn, a fader moved on a desk) show within a second.
+  useEffect(() => {
+    void refresh()
+    const timer = window.setInterval(() => { void refresh() }, 1000)
+    return () => window.clearInterval(timer)
+  }, [refresh])
+
   const rows = useMemo(() => {
-    const withInitial = [{ id: '__initial__', label: 'Project opened', time: 0 } as { id: string; label: string; time: number }, ...entries]
+    const withInitial = [{ id: '__initial__', label: 'Project opened', time: 0 } as HistoryEntry, ...entries]
     return withInitial
   }, [entries])
 
@@ -44,18 +62,6 @@ export function HistoryPanel({ onClose }: Props) {
         : tf('{n} actions · cursor at {cursor}', { n: entries.length, cursor })}
       onClose={onClose}
       width={520}
-      headerActions={<>
-          <button
-            onClick={() => clear()}
-            disabled={entries.length === 0}
-            style={{
-              padding: '3px 10px', fontSize: 12, background: 'transparent',
-              border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
-              color: entries.length === 0 ? hw.textFaint : hw.textSecondary,
-              cursor: entries.length === 0 ? 'default' : 'pointer',
-            }}
-          >{t('Clear log')}</button>
-      </>}
     >
       <div style={{ flex: 1, overflowY: 'auto', padding: 4 }}>
         {rows.map((e, i) => {
@@ -90,7 +96,7 @@ export function HistoryPanel({ onClose }: Props) {
                 {isCurrent ? '▶' : isApplied ? '·' : '○'}
               </span>
               <span style={{ flex: 1, fontSize: 12.5, fontStyle: e.id === '__initial__' ? 'italic' : 'normal' }}>
-                {t(e.label)}
+                {label(e)}
               </span>
               {e.time > 0 && (
                 <span style={{ fontSize: 11, color: hw.textFaint, fontVariantNumeric: 'tabular-nums' }}>
@@ -106,7 +112,7 @@ export function HistoryPanel({ onClose }: Props) {
         padding: '6px 12px', borderTop: `1px solid ${hw.border}`,
         background: hw.bgElevated, fontSize: 11, color: hw.textFaint,
       }}>
-        {t('Click any row to undo or redo to that state. Tracks volume/pan, clip edits, track add/remove, and more.')}
+        {t('Click a row to undo or redo to that point. Every undo step is listed.')}
       </div>
     </DialogFrame>,
     document.body,
