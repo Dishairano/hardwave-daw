@@ -40,12 +40,23 @@ const ACTIVATE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10
 /// Messages waiting for the child at most; past this, blocks are dropped.
 const TO_CHILD_DEPTH: usize = 8;
 
-/// Every sandbox started in this run, so the app can say which
-/// plug-in's process went and when.
+/// Every sandbox still in use, and every one whose process went until
+/// that is shown, so the app can say which plug-in's process went and
+/// when.
 ///
 /// A list rather than a map: two slots can hold the same plug-in, and
 /// which of them died matters less than the fact that one did.
 static REGISTRY: Mutex<Vec<SandboxEntry>> = Mutex::new(Vec::new());
+
+/// Forget the sandboxes nothing uses any more: the plug-in was removed,
+/// or it was a copy made for a freeze or an export. Their entries were
+/// kept for the whole run, each holding the plug-in's last state, and
+/// showed in the counters as plug-ins that had stopped playing.
+fn forget_finished(registry: &mut Vec<SandboxEntry>) {
+    registry.retain(|entry| {
+        entry.crashed.load(Ordering::Relaxed) || Arc::strong_count(&entry.shared) > 1
+    });
+}
 
 #[derive(Clone)]
 struct SandboxEntry {
@@ -57,10 +68,11 @@ struct SandboxEntry {
 
 /// What each plug-in in its own process has done with its blocks.
 pub fn sandbox_stats() -> Vec<SandboxStats> {
-    let registry = match REGISTRY.lock() {
+    let mut registry = match REGISTRY.lock() {
         Ok(r) => r,
         Err(poisoned) => poisoned.into_inner(),
     };
+    forget_finished(&mut registry);
     registry
         .iter()
         .map(|entry| {
@@ -386,6 +398,7 @@ impl SandboxedPlugin {
                 Ok(r) => r,
                 Err(poisoned) => poisoned.into_inner(),
             };
+            forget_finished(&mut registry);
             registry.push(SandboxEntry {
                 plugin_id: descriptor.id.clone(),
                 crashed: Arc::clone(&crashed),
@@ -1088,6 +1101,32 @@ pub fn run_host_child(plugin_path: &str, plugin_id: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(id: &str, shared: &Arc<Shared>, crashed: bool) -> SandboxEntry {
+        SandboxEntry {
+            plugin_id: id.into(),
+            crashed: Arc::new(AtomicBool::new(crashed)),
+            message: Arc::new(Mutex::new(None)),
+            shared: Arc::clone(shared),
+        }
+    }
+
+    #[test]
+    fn a_sandbox_nothing_uses_is_forgotten_and_a_crash_is_kept() {
+        let in_use = Arc::new(Shared::default());
+        let dropped = Arc::new(Shared::default());
+        let crashed = Arc::new(Shared::default());
+        let mut registry = vec![
+            entry("in use", &in_use, false),
+            entry("dropped", &dropped, false),
+            entry("crashed", &crashed, true),
+        ];
+        drop(dropped);
+        drop(crashed);
+        forget_finished(&mut registry);
+        let left: Vec<&str> = registry.iter().map(|e| e.plugin_id.as_str()).collect();
+        assert_eq!(left, vec!["in use", "crashed"]);
+    }
     #[cfg(unix)]
     use hardwave_plugin_host::types::{PluginCategory, PluginFormat};
 
