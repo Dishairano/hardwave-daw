@@ -3952,10 +3952,17 @@ impl EngineCallback {
         // track was deleted, ship its chain to the graveyard for an
         // off-RT thread to drop.
         let mut stashed_chains: HashMap<String, crate::insert_chain::InsertChain> = HashMap::new();
+        // And the keys held on a live keyboard, with the notes they
+        // started, so the new node lets them go and an arpeggio goes on.
+        let mut stashed_live: HashMap<String, Box<crate::live_midi_fx::LiveMidiFx>> =
+            HashMap::new();
         for node in self.graph.iter_nodes_mut() {
             if let Some(track_id) = node.track_id().map(|s| s.to_string()) {
                 if let Some(chain) = node.take_chain() {
-                    stashed_chains.insert(track_id, chain);
+                    stashed_chains.insert(track_id.clone(), chain);
+                }
+                if let Some(live) = node.take_live_midi() {
+                    stashed_live.insert(track_id, live);
                 }
             }
         }
@@ -4351,6 +4358,9 @@ impl EngineCallback {
                     .or_else(|| self.parked_chains.remove(&track.id))
                 {
                     midi_node.restore_chain(chain);
+                }
+                if let Some(live) = stashed_live.remove(&track.id) {
+                    midi_node.restore_live_midi(live);
                 }
                 let node_id = self.graph.add_node(Box::new(midi_node));
                 // A track armed for input hears the keyboard; with none

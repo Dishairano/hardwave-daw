@@ -174,9 +174,6 @@ struct Voice {
 /// is stolen — bounds CPU while comfortably covering chords.
 const MAX_VOICES: usize = 16;
 
-/// How many notes one live key press can become after a chord effect.
-const LIVE_CHORD_MAX: usize = 16;
-
 const TWO_PI: f32 = std::f32::consts::TAU;
 
 /// A detune in cents as a frequency multiplier. 100 cents is a semitone.
@@ -245,10 +242,12 @@ pub struct MidiTrackNode {
     /// channel, which a desk uses for the whole zone.
     channel_bend: [f32; 16],
     channel_pressure: [f32; 16],
-    /// MIDI effects between the input and the instrument. Clip notes are
-    /// already through the chain by the time they arrive here; this is
-    /// for what is played live.
-    midi_fx: Vec<hardwave_midi::midi_fx::MidiFx>,
+    /// MIDI effects between a live keyboard and the instrument (clip
+    /// notes are already through them by the time they arrive here), and
+    /// what they made of this block's keys: the built-in synth and a
+    /// plug-in instrument both play from `live_events`.
+    live_fx: Box<crate::live_midi_fx::LiveMidiFx>,
+    live_events: Vec<hardwave_midi::MidiEvent>,
     /// The last value of each controller skipped over by a seek, so it can
     /// be sent once instead of replaying the whole history. Kept between
     /// blocks for the same reason.
@@ -407,7 +406,8 @@ impl MidiTrackNode {
             live_channel: 0,
             channel_bend: [1.0; 16],
             channel_pressure: [0.0; 16],
-            midi_fx: Vec::new(),
+            live_fx: Box::default(),
+            live_events: Vec::with_capacity(512),
             chase_scratch: Vec::with_capacity(16),
             bend_mul: 1.0,
             next_note_idx: 0,
@@ -669,57 +669,7 @@ impl MidiTrackNode {
     }
 
     pub fn set_midi_fx(&mut self, chain: Vec<hardwave_midi::midi_fx::MidiFx>) {
-        self.midi_fx = chain;
-    }
-
-    /// What one live note turns into after the chain.
-    ///
-    /// A fixed buffer rather than a Vec: this runs on the audio thread,
-    /// where an allocation per key press is not worth a chord effect.
-    /// A chord wider than the buffer is cut off at it.
-    fn live_pitches(&self, pitch: u8) -> ([u8; LIVE_CHORD_MAX], usize) {
-        let mut buffer = [0u8; LIVE_CHORD_MAX];
-        buffer[0] = pitch;
-        let mut count = 1usize;
-        for effect in &self.midi_fx {
-            match effect {
-                hardwave_midi::midi_fx::MidiFx::Chord { intervals } => {
-                    let held = count;
-                    for index in 0..held {
-                        let base = buffer[index] as i32;
-                        for interval in intervals {
-                            if count >= LIVE_CHORD_MAX {
-                                break;
-                            }
-                            let moved = base + *interval as i32;
-                            if (0..=127).contains(&moved) {
-                                buffer[count] = moved as u8;
-                                count += 1;
-                            }
-                        }
-                    }
-                }
-                hardwave_midi::midi_fx::MidiFx::Scale { root, kind } => {
-                    for slot in buffer.iter_mut().take(count) {
-                        *slot = hardwave_midi::midi_fx::snap_to_scale(*slot, *root, *kind);
-                    }
-                }
-                hardwave_midi::midi_fx::MidiFx::Transpose { semitones } => {
-                    let mut kept = 0usize;
-                    for index in 0..count {
-                        let moved = buffer[index] as i32 + *semitones as i32;
-                        if (0..=127).contains(&moved) {
-                            buffer[kept] = moved as u8;
-                            kept += 1;
-                        }
-                    }
-                    count = kept;
-                }
-                // See set_midi_fx: an arpeggiator needs a clock of its own.
-                hardwave_midi::midi_fx::MidiFx::Arpeggiator { .. } => {}
-            }
-        }
-        (buffer, count)
+        self.live_fx.set_chain(chain);
     }
 
     pub fn set_controls(&mut self, mut controls: Vec<MidiControlRegion>) {
@@ -1036,9 +986,18 @@ impl AudioNode for MidiTrackNode {
                 *s = 0.0;
             }
         }
+        // The keys played this block through the track's MIDI effects,
+        // muted or not, so a key let go while muted is let go here too.
+        if self.release_live {
+            self.live_fx.forget();
+        }
+        let block_len = outputs.first().map_or(ctx.buffer_size as usize, Vec::len);
+        let tempo = if ctx.tempo > 0.0 { ctx.tempo } else { 120.0 };
+        let samples_per_tick = ctx.sample_rate * 60.0 / (tempo * hardwave_midi::PPQ as f64);
+        self.live_fx
+            .process(midi_in, &mut self.live_events, block_len, samples_per_tick);
         if self.muted {
-            // Still process events so live note-state stays correct
-            // when the user unmutes mid-hold — but emit silence.
+            // Emit silence; the effects above kept the keys' state.
             return;
         }
 
@@ -1056,7 +1015,7 @@ impl AudioNode for MidiTrackNode {
                 }
             }
         }
-        for ev in midi_in {
+        for ev in &self.live_events {
             match *ev {
                 hardwave_midi::MidiEvent::NoteOn { note, velocity, .. } if velocity > 0.0 => {
                     self.live_held[(note & 0x7F) as usize] = true;
@@ -1068,42 +1027,41 @@ impl AudioNode for MidiTrackNode {
                 _ => {}
             }
         }
-        for ev in midi_in {
-            match *ev {
+        // Indexed rather than iterated: starting a voice needs the node
+        // mutably, and the events are small copies.
+        for index in 0..self.live_events.len() {
+            match self.live_events[index] {
                 hardwave_midi::MidiEvent::NoteOn {
                     note,
                     velocity,
                     channel,
                     ..
-                } => {
+                } if velocity > 0.0 => {
                     // With MPE the note belongs to the channel it came
                     // in on, which is what lets one note of a chord be
                     // bent on its own.
                     self.live_channel = if self.mpe { channel & 0x0F } else { 0 };
-                    // The chain turns one key press into whatever the
-                    // chord, scale and transpose effects make of it.
-                    let (pitches, count) = self.live_pitches(note);
-                    for pitch in pitches.iter().take(count).copied() {
-                        match self.instrument {
-                            Instrument::BuiltinSine => {
-                                // Live note → a held voice (off_sample None).
-                                self.start_voice(pitch, velocity.clamp(0.0, 1.0), None);
-                            }
-                            Instrument::KickSynth => {
-                                self.kick.note_on(pitch, velocity);
-                            }
+                    // Already through the chord, scale, transpose and
+                    // arpeggiator effects. The built-in instruments start
+                    // it at the top of the block, where a plug-in gets it
+                    // at its sample.
+                    match self.instrument {
+                        Instrument::BuiltinSine => {
+                            // Live note → a held voice (off_sample None).
+                            self.start_voice(note, velocity.clamp(0.0, 1.0), None);
+                        }
+                        Instrument::KickSynth => {
+                            self.kick.note_on(note, velocity);
                         }
                     }
                 }
-                hardwave_midi::MidiEvent::NoteOff { note, .. } => {
+                hardwave_midi::MidiEvent::NoteOn { note, .. }
+                | hardwave_midi::MidiEvent::NoteOff { note, .. } => {
                     // Release held (live) voices of this pitch. Clip-driven
                     // voices (off_sample Some) release on their own schedule
                     // so a live release can't cut a playing clip note.
-                    // The same chain maps the release, so every note the
-                    // press started is let go.
-                    let (pitches, count) = self.live_pitches(note);
                     for v in self.voices.iter_mut() {
-                        if pitches.iter().take(count).any(|p| *p == v.pitch)
+                        if v.pitch == note
                             && v.off_sample.is_none()
                             && v.stage != EnvStage::Idle
                             && v.stage != EnvStage::Release
@@ -1577,7 +1535,7 @@ impl AudioNode for MidiTrackNode {
                 value: 0.0,
             });
         }
-        block_midi.extend_from_slice(midi_in);
+        block_midi.extend_from_slice(&self.live_events);
         // Held notes the playhead jumped away from end here, first.
         for &(channel, note) in &self.jump_offs {
             block_midi.push(hardwave_midi::MidiEvent::NoteOff {
@@ -1912,6 +1870,16 @@ impl AudioNode for MidiTrackNode {
 
     fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
         self.chain = chain;
+    }
+
+    fn take_live_midi(&mut self) -> Option<Box<crate::live_midi_fx::LiveMidiFx>> {
+        self.live_fx
+            .busy()
+            .then(|| std::mem::take(&mut self.live_fx))
+    }
+
+    fn restore_live_midi(&mut self, live: Box<crate::live_midi_fx::LiveMidiFx>) {
+        self.live_fx.take_over(*live);
     }
 
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
@@ -2518,6 +2486,72 @@ mod tests {
         // Only once: the next block goes straight on.
         play_block_at(&mut node, 24_256);
         assert_eq!(note_ons(&received.lock().unwrap()).len(), 1);
+    }
+
+    /// A plug-in instrument hears a live key through the track's MIDI
+    /// effects. It got the key as played: a chord or transpose effect
+    /// worked only on the built-in synth, and an arpeggiator not live at
+    /// all.
+    #[test]
+    fn a_plug_in_instrument_hears_live_keys_through_the_midi_effects() {
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut node = make_node();
+        node.push_offline_slot(spy_instrument(received.clone()), 48_000.0, 256);
+        node.set_midi_fx(vec![hardwave_midi::midi_fx::MidiFx::Chord {
+            intervals: vec![4, 7],
+        }]);
+        let key = MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        };
+        let mut out = block_outputs(256);
+        let inputs: [&[f32]; 0] = [];
+        node.process(
+            &inputs,
+            &mut out,
+            &[key],
+            &mut Vec::new(),
+            &ctx_at(48_000.0, 256, 0, false),
+        );
+        assert_eq!(
+            note_ons(&received.lock().unwrap()),
+            vec![(0, 60), (0, 64), (0, 67)]
+        );
+
+        // An arpeggiator steps through a held chord, in time with the song.
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut node = make_node();
+        node.push_offline_slot(spy_instrument(received.clone()), 48_000.0, 256);
+        node.set_midi_fx(vec![
+            hardwave_midi::midi_fx::MidiFx::Chord {
+                intervals: vec![4, 7],
+            },
+            hardwave_midi::midi_fx::MidiFx::Arpeggiator {
+                step_ticks: 240,
+                mode: hardwave_midi::midi_fx::ArpMode::Up,
+                gate: 0.5,
+                octaves: 1,
+            },
+        ]);
+        // 120 BPM at 48 kHz: a sixteenth (240 ticks) is 6000 samples.
+        let mut pos = 0u64;
+        let mut keys = vec![key];
+        while pos < 17_000 {
+            let mut out = block_outputs(256);
+            let mut ctx = ctx_at(48_000.0, 256, pos, false);
+            ctx.tempo = 120.0;
+            node.process(&inputs, &mut out, &keys, &mut Vec::new(), &ctx);
+            keys.clear();
+            pos += 256;
+        }
+        // At samples 0, 6000 (block 5888 + 112) and 12000 (11776 + 224).
+        assert_eq!(
+            note_ons(&received.lock().unwrap()),
+            vec![(0, 60), (112, 64), (224, 67)],
+            "one step each sixteenth, at its sample"
+        );
     }
 
     #[test]
