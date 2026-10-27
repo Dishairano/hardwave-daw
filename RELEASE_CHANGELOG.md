@@ -1,9 +1,11 @@
 ### Bug fixes
-- fix: changing the audio settings twice in quick succession (or once while a song was opening) could load every plug-in twice, so the song played at twice the level and a plug-in in its own process ran two copies. A plug-in loaded again now takes the place of the one already there
-- fix: when the sound card was unplugged or taken by another program, restarting the audio waited half a second for plug-in settings it could not get, with the app stalled; it now goes straight on with the settings as last saved
-- fix: a plug-in taken off a track, or replaced when the song's plug-ins were loaded again, was only freed the next time a plug-in was added or removed by hand; until then it kept its memory, and a plug-in in its own process kept running idle. It is now freed within half a second
+- fix: with the song stopped, a key or pad held longer than ten seconds went silent while still held, and came back as a release tail when let go. Keys held down and the sustain pedal now keep it sounding
+- fix: on an MPE track, a slide on an MPE controller moved the built-in synth only a fraction of the way, and a plug-in instrument could play a note's detune at a fraction too. Member channels now bend over the 48 semitones the MPE spec sets, and the instrument is told so, also when keys are played with the song stopped
+- fix: capture what you just played came back with "nothing that makes a note" after a chord held longer than ten seconds; it now captures the chord and what led up to it
+- fix: a key still down when capture was pressed came out one tick long; it now lasts to the end of the captured part
 
 ### Improvements
-- fix(plugins): a plug-in the audio thread lets go of is freed within half a second
-- Two audio restarts more than a tick apart each started loading the
-- After the audio stream failed (the card unplugged or taken by another
+- With the song stopped, the engine ran for ten seconds after the last
+- An MPE member channel's pitch bend covers 48 semitones, as the MPE
+- Capture takes the playing since the last pause of ten seconds; a key
+- A key still down when capture is pressed lasts to the end of the take;
