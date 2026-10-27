@@ -1307,11 +1307,29 @@ impl DawEngine {
     /// so their settings as they are now go into the song first, or every
     /// knob turned since the last save would be lost.
     pub fn stop_for_restart(&mut self) {
-        if let Some(states) = self.snapshot_plugin_states(std::time::Duration::from_millis(500)) {
+        self.stop_for_restart_reading(true);
+    }
+
+    /// The same, saying whether the audio callback can still be asked for
+    /// the plug-ins' settings. After the stream failed it cannot: the ask
+    /// waited half a second with the engine locked for an answer that
+    /// never came. The settings as last saved are what is loaded then.
+    fn stop_for_restart_reading(&mut self, stream_alive: bool) {
+        if !stream_alive {
+            log::warn!(
+                "audio stream failed: plug-in settings changed since the last save could not be read"
+            );
+        } else if let Some(states) =
+            self.snapshot_plugin_states(std::time::Duration::from_millis(500))
+        {
             let mut project = self.project.lock();
             for ((_, slot_id), bytes) in states {
                 project.set_plugin_state(slot_id, "unknown", bytes);
             }
+        } else {
+            log::warn!(
+                "plug-in settings were not read before the audio restart (no answer in 500 ms)"
+            );
         }
         self.audio_device.stop();
     }
@@ -1975,7 +1993,7 @@ impl DawEngine {
             return Ok(None);
         }
         let before = self.audio_device.active_device_name().map(str::to_string);
-        self.stop_for_restart();
+        self.stop_for_restart_reading(false);
         let failed_again = self
             .last_audio_restart
             .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));

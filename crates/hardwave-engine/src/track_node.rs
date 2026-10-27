@@ -1062,8 +1062,14 @@ impl AudioNode for TrackNode {
         use crate::insert_chain::InsertCommand;
         match cmd {
             InsertCommand::Add { slot, .. } => {
-                if let Err(e) = self.chain.push_slot(slot, sample_rate, max_block_size) {
-                    log::warn!("track {} insert add failed: {e}", self.track_id);
+                match self.chain.add_or_replace(slot, sample_rate, max_block_size) {
+                    Ok(Some(old)) => {
+                        if let Err(old) = graveyard.try_bury(old) {
+                            std::mem::forget(old);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => log::warn!("track {} insert add failed: {e}", self.track_id),
                 }
             }
             InsertCommand::Remove { slot_id, .. } => {
