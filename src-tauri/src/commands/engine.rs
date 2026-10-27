@@ -40,6 +40,8 @@ fn persist_audio_prefs(state: &State<AppState>) {
         take_bits_24: crate::commands::transport::take_format().bits_24,
         take_folder: crate::commands::transport::take_format().folder,
         click_channel_offset: engine.click_output().0,
+        control_surface_enabled: state.control_surface.is_enabled(),
+        control_surface_protocol: state.control_surface.protocol(),
     };
     drop(engine);
     prefs.save();

@@ -324,7 +324,15 @@ pub fn run() {
         slot_editors: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
         slot_param_shadow: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        control_surface: Arc::new(crate::control_surface::ControlSurface::new()),
+        control_surface: {
+            let surface = crate::control_surface::ControlSurface::new();
+            surface.set_protocol(prefs.control_surface_protocol);
+            surface.enabled.store(
+                prefs.control_surface_enabled,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            Arc::new(surface)
+        },
         reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
         sandboxed_plugins: commands::plugins::sandboxed_set(
             prefs.sandboxed_plugins.iter().cloned().collect(),
