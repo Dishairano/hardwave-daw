@@ -11,7 +11,7 @@
 //! stored, so the snapshot stays small.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::automation_clip::AutomationClip;
 use crate::clip::ClipPlacement;
@@ -34,7 +34,7 @@ pub struct Arrangement {
     /// `track_id` → that track's timeline content in this arrangement.
     /// Tracks absent from the map have no clips in this arrangement.
     #[serde(default)]
-    pub timelines: HashMap<String, TrackTimeline>,
+    pub timelines: BTreeMap<String, TrackTimeline>,
 }
 
 fn new_id() -> String {
@@ -43,8 +43,8 @@ fn new_id() -> String {
 
 /// Snapshot of the live tracks' timeline content, keyed by track id.
 /// Skips empty tracks so the idle inserts don't bloat the map.
-fn snapshot_live(project: &Project) -> HashMap<String, TrackTimeline> {
-    let mut map = HashMap::new();
+fn snapshot_live(project: &Project) -> BTreeMap<String, TrackTimeline> {
+    let mut map = BTreeMap::new();
     for t in &project.tracks {
         if t.clips.is_empty() && t.automation_clips.is_empty() {
             continue;
@@ -131,7 +131,7 @@ impl Project {
         let timelines = if copy_current {
             snapshot_live(self)
         } else {
-            HashMap::new()
+            BTreeMap::new()
         };
         self.arrangements.push(Arrangement {
             id: id.clone(),

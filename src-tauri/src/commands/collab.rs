@@ -214,17 +214,16 @@ pub async fn start_collab(
                 let (changed, gone) = collab_for_tracks.track_changes(&project);
                 (changed, gone, collab_for_tracks.song_changes(&project))
             };
-            // The song level first: a tempo change has to be there before
-            // the clips placed by it.
-            if let Some(blob) = song {
-                if blob.len() > hardwave_room_limits::MAX_TRACK {
-                    log::warn!(
-                        "room: the song's settings are too large to send ({} bytes)",
-                        blob.len()
-                    );
-                } else {
-                    collab_for_tracks.send(SyncKind::SongState { blob });
-                }
+            // The song's parts first: a tempo change has to be there
+            // before the clips placed by it. (Too large ones are left out
+            // in song_changes.)
+            for (section, version, author, blob) in song {
+                collab_for_tracks.send(SyncKind::SongState {
+                    section: section.to_string(),
+                    version,
+                    author,
+                    blob,
+                });
             }
             for (track_id, index, blob) in changed {
                 if blob.len() > hardwave_room_limits::MAX_TRACK {
@@ -268,7 +267,7 @@ pub async fn start_collab(
 }
 
 /// Limits this side keeps whatever the service does.
-mod hardwave_room_limits {
+pub(crate) mod hardwave_room_limits {
     /// The largest message read from the room: the largest song plus
     /// its envelope.
     pub const MAX_MESSAGE: usize = 16 * 1024 * 1024 + 64 * 1024;
@@ -370,8 +369,13 @@ fn apply_one(
             apply_track_state(app, engine, collab, track_id, *index, blob);
             return;
         }
-        SyncKind::SongState { blob } => {
-            apply_song_state(app, engine, collab, blob);
+        SyncKind::SongState {
+            section,
+            version,
+            author,
+            blob,
+        } => {
+            apply_song_state(app, engine, collab, section, *version, *author, blob);
             return;
         }
         SyncKind::TrackRemoved { track_id } => {
@@ -533,44 +537,75 @@ fn apply_song_state(
     app: &tauri::AppHandle,
     engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
     collab: &Arc<crate::collab::Collab>,
+    section: &str,
+    version: u64,
+    author: u64,
     blob: &[u8],
 ) {
     use std::sync::atomic::Ordering;
-    let (rack, timeline) = {
+    let shown = {
         let engine_guard = engine.lock();
-        engine_guard.snapshot_before_mutation();
-        let (rack, timeline, bpm) = {
+        let shown = {
             let mut project = engine_guard.project.lock();
-            if let Err(e) = project.put_song_level_blob(blob) {
-                log::warn!("room: the song's settings were not taken: {e}");
+            let Some(current) = project.song_section(section) else {
+                log::warn!("room: not a part of the song: {section}");
+                return;
+            };
+            // Ours stands when it is newer, or as new and from the higher
+            // author: the other side takes ours by the same rule.
+            if !collab.should_take_section(section, &current, version, author) {
                 return;
             }
-            collab.remember_song(&project.song_level_blob());
-            (
-                project.channel_rack_state.clone(),
-                project.timeline_state.clone(),
-                project
-                    .tempo_map
-                    .entries
-                    .first()
-                    .map(|e| e.bpm)
-                    .unwrap_or(140.0),
-            )
+            // Not an undo step: undoing it would only send the old part
+            // back to the room as a new edit.
+            if let Err(e) = project.put_song_section(section, blob) {
+                log::warn!("room: the song's {section} were not taken: {e}");
+                return;
+            }
+            let now = project.song_section(section).unwrap_or_default();
+            collab.took_section(section, &now, version, author);
+            match section {
+                "rack" => Some(serde_json::json!({
+                    "payload": project.channel_rack_state.clone(),
+                    "from": "room",
+                })),
+                "timeline" => Some(serde_json::json!(project.timeline_state.clone())),
+                _ => None,
+            }
         };
-        engine_guard.transport.bpm.store(bpm, Ordering::Relaxed);
-        engine_guard.send_command(hardwave_engine::TransportCommand::SetBpm(bpm));
-        crate::commands::project::apply_project_time_signature(&engine_guard);
+        if section == "tempo" {
+            let bpm = engine_guard
+                .project
+                .lock()
+                .tempo_map
+                .entries
+                .first()
+                .map(|e| e.bpm)
+                .unwrap_or(140.0);
+            engine_guard.transport.bpm.store(bpm, Ordering::Relaxed);
+            engine_guard.send_command(hardwave_engine::TransportCommand::SetBpm(bpm));
+            crate::commands::project::apply_project_time_signature(&engine_guard);
+        }
         engine_guard.rebuild_graph();
-        (rack, timeline)
+        shown
     };
-    // The windows show what the room sent: the rack, the markers and the
-    // tempo lane read it again.
-    let _ = app.emit(
-        "daw:rackChanged",
-        serde_json::json!({ "payload": rack, "from": "room" }),
-    );
-    let _ = app.emit("daw:timelineChanged", timeline);
-    let _ = app.emit("daw:tempoChanged", ());
+    // The windows show what the room sent.
+    match section {
+        "rack" => {
+            let _ = app.emit("daw:rackChanged", shown);
+        }
+        "timeline" => {
+            let _ = app.emit("daw:timelineChanged", shown);
+        }
+        "tempo" => {
+            let _ = app.emit("daw:tempoChanged", ());
+        }
+        // The arrangement list, the macros, the VCAs and the modulation
+        // read the song again.
+        _ => {
+            let _ = app.emit("daw:songChanged", section);
+        }
+    }
 }
 
 fn apply_track_state(

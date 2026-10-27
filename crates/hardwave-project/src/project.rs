@@ -481,61 +481,75 @@ impl Project {
         rmp_serde::to_vec_named(track).unwrap_or_default()
     }
 
-    /// What belongs to the song rather than one track, as bytes for a room:
-    /// a tempo change, a pattern drawn in the channel rack, a marker or a
-    /// new arrangement reached the other side only when the whole song was
-    /// sent again. MessagePack with field names.
-    pub fn song_level_blob(&self) -> Vec<u8> {
+    /// The parts of the song that belong to no one track, each sent to a
+    /// room on its own (`song_section`): sent as one, a marker moved on
+    /// one side and a tempo changed on the other at the same moment
+    /// overwrote each other, and both sides kept a different song.
+    pub const SONG_SECTIONS: [&'static str; 7] = [
+        "tempo",
+        "rack",
+        "timeline",
+        "arrangements",
+        "macros",
+        "vcas",
+        "modulations",
+    ];
+
+    /// One part of the song (see `SONG_SECTIONS`) as bytes for a room:
+    /// MessagePack with field names. None for a name that is not one.
+    pub fn song_section(&self, name: &str) -> Option<Vec<u8>> {
         #[derive(Serialize)]
-        struct SongLevel<'a> {
-            tempo_map: &'a TempoMap,
-            channel_rack_state: &'a Option<String>,
-            timeline_state: &'a Option<String>,
+        struct Arrangements<'a> {
             arrangements: &'a Vec<crate::arrangement::Arrangement>,
             active_arrangement: &'a String,
-            macros: &'a Vec<crate::macros::Macro>,
-            vcas: &'a Vec<crate::vca::Vca>,
-            modulations: &'a Vec<crate::modulation::ModRoute>,
         }
-        rmp_serde::to_vec_named(&SongLevel {
-            tempo_map: &self.tempo_map,
-            channel_rack_state: &self.channel_rack_state,
-            timeline_state: &self.timeline_state,
-            arrangements: &self.arrangements,
-            active_arrangement: &self.active_arrangement,
-            macros: &self.macros,
-            vcas: &self.vcas,
-            modulations: &self.modulations,
-        })
-        .unwrap_or_default()
+        let bytes = match name {
+            "tempo" => rmp_serde::to_vec_named(&self.tempo_map),
+            "rack" => rmp_serde::to_vec_named(&self.channel_rack_state),
+            "timeline" => rmp_serde::to_vec_named(&self.timeline_state),
+            "arrangements" => rmp_serde::to_vec_named(&Arrangements {
+                arrangements: &self.arrangements,
+                active_arrangement: &self.active_arrangement,
+            }),
+            "macros" => rmp_serde::to_vec_named(&self.macros),
+            "vcas" => rmp_serde::to_vec_named(&self.vcas),
+            "modulations" => rmp_serde::to_vec_named(&self.modulations),
+            _ => return None,
+        };
+        Some(bytes.unwrap_or_default())
     }
 
-    /// Take what a room sent from `song_level_blob`. The tracks are not in
-    /// it and are left as they are.
-    pub fn put_song_level_blob(&mut self, blob: &[u8]) -> Result<(), String> {
+    /// Take one part of the song a room sent. What the other side sends
+    /// is checked as anything from outside is: a tempo map has to be one
+    /// the engine can play.
+    pub fn put_song_section(&mut self, name: &str, blob: &[u8]) -> Result<(), String> {
         #[derive(Deserialize)]
-        struct SongLevel {
-            tempo_map: TempoMap,
-            channel_rack_state: Option<String>,
-            timeline_state: Option<String>,
+        struct Arrangements {
             arrangements: Vec<crate::arrangement::Arrangement>,
             active_arrangement: String,
-            macros: Vec<crate::macros::Macro>,
-            vcas: Vec<crate::vca::Vca>,
-            modulations: Vec<crate::modulation::ModRoute>,
         }
-        let s: SongLevel = rmp_serde::from_slice(blob).map_err(|e| e.to_string())?;
-        if s.tempo_map.entries.is_empty() {
-            return Err("a song needs a tempo".into());
+        let err = |e: rmp_serde::decode::Error| e.to_string();
+        match name {
+            "tempo" => {
+                let mut map: TempoMap = rmp_serde::from_slice(blob).map_err(err)?;
+                sanitize_tempo_map(&mut map)?;
+                self.tempo_map = map;
+            }
+            "rack" => self.set_channel_rack_state(rmp_serde::from_slice(blob).map_err(err)?),
+            "timeline" => self.timeline_state = rmp_serde::from_slice(blob).map_err(err)?,
+            "arrangements" => {
+                let a: Arrangements = rmp_serde::from_slice(blob).map_err(err)?;
+                self.arrangements = a.arrangements;
+                self.active_arrangement = a.active_arrangement;
+                // An empty list or an active one that is not in it is put
+                // right, as for a song that is opened.
+                self.ensure_arrangements();
+            }
+            "macros" => self.macros = rmp_serde::from_slice(blob).map_err(err)?,
+            "vcas" => self.vcas = rmp_serde::from_slice(blob).map_err(err)?,
+            "modulations" => self.modulations = rmp_serde::from_slice(blob).map_err(err)?,
+            _ => return Err(format!("not a part of the song: {name}")),
         }
-        self.tempo_map = s.tempo_map;
-        self.set_channel_rack_state(s.channel_rack_state);
-        self.timeline_state = s.timeline_state;
-        self.arrangements = s.arrangements;
-        self.active_arrangement = s.active_arrangement;
-        self.macros = s.macros;
-        self.vcas = s.vcas;
-        self.modulations = s.modulations;
         Ok(())
     }
 
@@ -731,6 +745,26 @@ fn decompress_within(bytes: &[u8], cap: u64) -> Result<Vec<u8>, Box<dyn std::err
     Ok(data)
 }
 
+/// A tempo map from outside (a room) made one the engine can play: a
+/// tempo of 0 or NaN reached the transport, which divides by it. Tempos
+/// are held to 20 to 999 BPM, as the tempo field allows, meters to
+/// 1 to 32 over 1 to 32, and the changes put in order.
+fn sanitize_tempo_map(map: &mut TempoMap) -> Result<(), String> {
+    if map.entries.is_empty() {
+        return Err("a song needs a tempo".into());
+    }
+    for entry in map.entries.iter_mut() {
+        if !entry.bpm.is_finite() {
+            return Err("a tempo that is not a number".into());
+        }
+        entry.bpm = entry.bpm.clamp(20.0, 999.0);
+        entry.time_sig_num = entry.time_sig_num.clamp(1, 32);
+        entry.time_sig_den = entry.time_sig_den.clamp(1, 32);
+    }
+    map.entries.sort_by_key(|e| e.tick);
+    Ok(())
+}
+
 #[cfg(test)]
 mod decompress_tests {
     use super::*;
@@ -750,25 +784,49 @@ mod decompress_tests {
 
 #[cfg(test)]
 mod tests {
-    /// A tempo change, the channel rack and the markers go to the other side
-    /// without the tracks, and come back the same.
+    /// Each part of the song goes to the other side on its own, without
+    /// the tracks, and comes back the same.
     #[test]
-    fn the_song_level_goes_to_a_room_without_the_tracks() {
+    fn the_song_parts_go_to_a_room_without_the_tracks() {
         let mut ours = Project::default();
         ours.tempo_map.entries[0].bpm = 150.0;
         ours.channel_rack_state = Some("{\"patterns\":[]}".into());
         ours.timeline_state = Some("{\"markers\":[1]}".into());
-        let blob = ours.song_level_blob();
+        // A song always has an arrangement once opened; taking a room's
+        // list puts one in an empty list too.
+        ours.ensure_arrangements();
 
         let mut theirs = Project::default();
         let t = theirs.add_midi_track("Theirs".into());
-        theirs.put_song_level_blob(&blob).unwrap();
+        for name in Project::SONG_SECTIONS {
+            let blob = ours.song_section(name).unwrap();
+            theirs.put_song_section(name, &blob).unwrap();
+            assert_eq!(theirs.song_section(name).unwrap(), blob, "{name}");
+        }
         assert_eq!(theirs.tempo_map.entries[0].bpm, 150.0);
         assert_eq!(theirs.channel_rack_state, ours.channel_rack_state);
         assert_eq!(theirs.timeline_state, ours.timeline_state);
         assert!(theirs.track(&t).is_some(), "their tracks stay");
-        assert_eq!(theirs.song_level_blob(), blob);
-        assert!(theirs.put_song_level_blob(b"nonsense").is_err());
+        assert!(theirs.put_song_section("tempo", b"nonsense").is_err());
+        assert!(theirs.put_song_section("tracks", b"").is_err());
+    }
+
+    /// A room partner cannot stop the transport with a tempo of 0 or NaN.
+    #[test]
+    fn a_tempo_from_a_room_is_one_the_engine_can_play() {
+        let mut sent = Project::default().tempo_map;
+        sent.entries[0].bpm = 0.0;
+        sent.entries[0].time_sig_den = 0;
+        let mut p = Project::default();
+        p.put_song_section("tempo", &rmp_serde::to_vec_named(&sent).unwrap())
+            .unwrap();
+        assert_eq!(p.tempo_map.entries[0].bpm, 20.0);
+        assert_eq!(p.tempo_map.entries[0].time_sig_den, 1);
+        sent.entries[0].bpm = f64::NAN;
+        assert!(p
+            .put_song_section("tempo", &rmp_serde::to_vec_named(&sent).unwrap())
+            .is_err());
+        assert_eq!(p.tempo_map.entries[0].bpm, 20.0, "kept what it had");
     }
 
     /// A track a room sends replaces ours by id, or lands at its place
@@ -1048,7 +1106,6 @@ mod tests {
         use crate::automation::AutomationTarget;
         use crate::automation_clip::AutomationClip;
         use crate::track::PluginSlot;
-        use std::collections::HashMap;
 
         let mut p = Project::default();
         let tid = p.tracks[1].id.clone();
@@ -1071,7 +1128,7 @@ mod tests {
         p.set_plugin_state("s1", "native", vec![1, 2, 3]);
         // Push an arrangement directly (create_arrangement would swap the
         // live timeline; here we only want to exercise serialization).
-        let mut timelines = HashMap::new();
+        let mut timelines = std::collections::BTreeMap::new();
         timelines.insert(tid.clone(), TrackTimeline::default());
         p.arrangements.push(Arrangement {
             id: "arr1".into(),
