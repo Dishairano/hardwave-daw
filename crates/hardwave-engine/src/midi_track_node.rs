@@ -109,6 +109,8 @@ pub fn assign_mpe_channels(notes: &mut [MidiNoteRegion]) {
         let c = (n.channel & 0x0F) as usize;
         free_at[c] = free_at[c].max(n.note_off_sample);
     }
+    // Which note each member channel was last given to.
+    let mut owner: [Option<usize>; 16] = [None; 16];
     let mut order: Vec<usize> = (0..notes.len()).collect();
     order.sort_by_key(|&i| notes[i].note_on_sample);
     for i in order {
@@ -121,8 +123,19 @@ pub fn assign_mpe_channels(notes: &mut [MidiNoteRegion]) {
             .filter(|&c| free_at[c] <= on)
             .min_by_key(|&c| free_at[c])
             .unwrap_or_else(|| (1..16).min_by_key(|&c| free_at[c]).unwrap_or(1));
+        // More than fifteen notes at once: the note still on that channel
+        // ends just before this one starts, as a synth steals a voice. It
+        // used to sound on beside it, the two sharing one bend, and the
+        // old note's release cut the new one when both were one pitch.
+        if free_at[channel] > on {
+            if let Some(stolen) = owner[channel] {
+                let off = on.saturating_sub(1).max(notes[stolen].note_on_sample + 1);
+                notes[stolen].note_off_sample = notes[stolen].note_off_sample.min(off);
+            }
+        }
         notes[i].channel = channel as u8;
         free_at[channel] = notes[i].note_off_sample;
+        owner[channel] = Some(i);
     }
 }
 
@@ -2828,6 +2841,36 @@ mod tests {
         // The third starts after the second ended: it may take its channel,
         // but never the first's, which is still sounding.
         assert_ne!(ch[2], ch[0]);
+    }
+
+    /// Sixteen notes at once on fifteen member channels: the sixteenth
+    /// takes the channel freeing first, and the note there ends just before
+    /// it starts, so no two notes share a channel (and its bend) at once.
+    #[test]
+    fn a_sixteenth_note_at_once_steals_a_channel_cleanly() {
+        let mut notes: Vec<MidiNoteRegion> = (0..16u64)
+            .map(|i| MidiNoteRegion {
+                note_on_sample: i,
+                note_off_sample: 1_000 + i,
+                pitch: 60,
+                channel: 0,
+                ..Default::default()
+            })
+            .collect();
+        assign_mpe_channels(&mut notes);
+        for c in 1..16u8 {
+            let on_it: Vec<&MidiNoteRegion> = notes.iter().filter(|n| n.channel == c).collect();
+            for a in &on_it {
+                for b in &on_it {
+                    if std::ptr::eq(*a, *b) {
+                        continue;
+                    }
+                    let overlap = a.note_on_sample < b.note_off_sample
+                        && b.note_on_sample < a.note_off_sample;
+                    assert!(!overlap, "channel {c} holds two notes at once");
+                }
+            }
+        }
     }
 
     /// With MPE on, a detuned note's bend goes on its own channel just
