@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-account"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-audio-io"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "cpal",
  "log",
@@ -1964,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-daw"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-dsp"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "hound",
  "log",
@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-engine"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "atomic_float",
  "crossbeam-channel",
@@ -2053,14 +2053,14 @@ dependencies = [
 
 [[package]]
 name = "hardwave-metering"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "hardwave-midi"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "log",
  "midir",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-native-plugins"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "hardwave-dsp",
  "hardwave-engine",
@@ -2088,7 +2088,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-plugin-bridge"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "hardwave-midi",
  "hardwave-plugin-host",
@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-plugin-host"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "dirs 5.0.1",
  "hardwave-midi",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-project"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-room"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "hardwave-project",
  "serde",
@@ -2142,7 +2142,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-room-server"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "axum",
  "futures-util",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "hardwave-stems-server"
-version = "0.266.31"
+version = "0.266.32"
 dependencies = [
  "axum",
  "hardwave-account",

@@ -1,19 +1,11 @@
 ### Bug fixes
-- fix: a key let go while its track was muted never reached a plug-in instrument, so the note sounded again on unmuting with nobody holding it. The release is now sent when the track plays again
-- fix: with the song stopped, live keys could miss a plug-in instrument (on a kick-synth track, or a release after the built-in voices had died out)
-- fix: changing a track's MIDI effects while keys were held stopped the arpeggio and silenced a held chord until the next key press; the keys now play on through the new effects
-- fix: the History panel could put an edit's name on the step before it, when the edit took no undo step of its own. Names now only go to a step their own command took
-- fix: a clip dragged to another track showed in the History panel as a delete on the track it left; it reads "Move clip to" the new track
-- fix: past 256 undo steps, the History panel's first row said "Project opened"; it says "Oldest step kept"
-- fix: the History panel no longer holds up other edits while it is open
-- fix: on a Mackie desk, the master fader's motor kept moving under a hand on it; it now waits, as the strips' motors do
+- fix: in an FL project with several arrangements, a playlist row switched off in the arrangement open in FL stayed silent in every other arrangement after switching to it. Each arrangement now keeps its own switch
+- fix: an FL pattern clip trimmed at its start dropped a note held over where it begins; the note now plays its tail from there, as in FL
+- fix: an FL mixer insert going on to the master below full while also sending to a reverb or group played at full; it now plays at its level, with its sends where FL had them
+- fix: an FL project cut off part-way (an interrupted copy) was refused whole; the part that is there now opens
 
 ### Improvements
-- fix(midi): a release while muted reaches a plug-in after a rebuild too
-- fix(control surface): the master fader's motor leaves a hand on it alone
-- The History panel's list is worked out under the song's and the
-- A clip dragged to another track read as "Delete clip" on the track it
-- Past the history's cap of 256 steps, the panel's first row said
-- fix(midi fx): a chain changed under held keys plays them through the new one
-- fix(midi): live keys are not lost while a track is muted or the song is stopped
-- test(engine): the capture clock test allows a sample of wall-clock jitter
+- A playlist row switched off in the arrangement open in FL muted the
+- A note held over the start of a pattern clip trimmed there was
+- A route on to the master below full beside a send (a group at -6 dB
+- A file cut off in the middle of an event was refused whole; what
