@@ -1,21 +1,19 @@
-### New features
-- feat: a track's MIDI effects now act on what you play live into a plug-in instrument. A chord, scale or transpose effect used to change only the built-in synth; a plug-in got the keys as played
-- feat: the arpeggiator in a track's MIDI effects plays live: hold a chord and it steps through it at the song's tempo, starting at once, up, down, up-down or as played, over one to four octaves. It worked only on clip notes before
-- feat: the History panel lists the real undo steps. It kept a list of its own, which missed a note drawn in the piano roll, a fader moved on a desk and many other edits, so clicking a row could undo a different number of steps than it said. Every step is there now, with what it did ("Add 8 notes: Lead", "Volume: Bass", "Delete track Kick"), in English or Dutch
-
 ### Bug fixes
-- fix: letting go of a key ends every note the MIDI effects started from it, also across an edit to the song while the key is held, so nothing hangs
-- fix: the control surface switch (Settings, MIDI) is kept between launches; a desk went dead at every start until it was switched on again
-- fix: the control surface caption said the scribble strips and LED rings were not driven; they have been since v0.266.23
-- fix: freezing or exporting a track with a plug-in in its own process left an unused copy of that plug-in's state behind for the rest of the session
+- fix: a key let go while its track was muted never reached a plug-in instrument, so the note sounded again on unmuting with nobody holding it. The release is now sent when the track plays again
+- fix: with the song stopped, live keys could miss a plug-in instrument (on a kick-synth track, or a release after the built-in voices had died out)
+- fix: changing a track's MIDI effects while keys were held stopped the arpeggio and silenced a held chord until the next key press; the keys now play on through the new effects
+- fix: the History panel could put an edit's name on the step before it, when the edit took no undo step of its own. Names now only go to a step their own command took
+- fix: a clip dragged to another track showed in the History panel as a delete on the track it left; it reads "Move clip to" the new track
+- fix: past 256 undo steps, the History panel's first row said "Project opened"; it says "Oldest step kept"
+- fix: the History panel no longer holds up other edits while it is open
+- fix: on a Mackie desk, the master fader's motor kept moving under a hand on it; it now waits, as the strips' motors do
 
 ### Improvements
-- fix(history): a long gesture's name is not dropped
-- feat(midi fx): a track's MIDI effects act on a live keyboard for plug-in instruments, arpeggiator included
-- chore(dev): the screenshot harness answers get_undo_history
-- feat(history): the History panel lists the real undo steps
-- chore(permissions): set_control_surface_protocol's generated permission file
-- fix(sandbox): a plug-in process nothing uses is forgotten
-- fix(control surface): the switch and the protocol are kept between launches
-- fix(settings): the control surface caption says what the desk does now
-- feat(control surface): HUI desks, beside Mackie Control
+- fix(midi): a release while muted reaches a plug-in after a rebuild too
+- fix(control surface): the master fader's motor leaves a hand on it alone
+- The History panel's list is worked out under the song's and the
+- A clip dragged to another track read as "Delete clip" on the track it
+- Past the history's cap of 256 steps, the panel's first row said
+- fix(midi fx): a chain changed under held keys plays them through the new one
+- fix(midi): live keys are not lost while a track is muted or the song is stopped
+- test(engine): the capture clock test allows a sample of wall-clock jitter
