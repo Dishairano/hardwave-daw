@@ -198,7 +198,10 @@ fn events(body: &[u8]) -> Result<Vec<Event<'_>>, FlpError> {
             let mut len = 0usize;
             let mut shift = 0u32;
             loop {
-                let byte = *body.get(i).ok_or(FlpError::Truncated)?;
+                // Cut off inside a length: what came before is read.
+                let Some(&byte) = body.get(i) else {
+                    return Ok(out);
+                };
                 i += 1;
                 len |= ((byte & 0x7F) as usize) << shift;
                 shift += 7;
@@ -212,7 +215,9 @@ fn events(body: &[u8]) -> Result<Vec<Event<'_>>, FlpError> {
             len
         };
         if i + len > body.len() {
-            return Err(FlpError::Truncated);
+            // A file cut off mid-event: what came before it is read, as
+            // the rest of the parser reads what it can.
+            break;
         }
         let data = &body[i..i + len];
         if id == FL_VERSION {
@@ -1127,6 +1132,18 @@ mod tests {
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&[120, 0, 64, 0, 64, velocity, 128, 128]);
         out
+    }
+
+    /// A file cut off in the middle of an event is read up to there, as
+    /// the rest of the reader reads what it can; it was refused whole.
+    #[test]
+    fn a_file_cut_off_mid_event_is_read_up_to_there() {
+        let mut w = Writer::new();
+        w.text(TEXT, "Song");
+        w.event(TEXT + 1, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mut bytes = w.finish(96);
+        bytes.truncate(bytes.len() - 4);
+        assert!(parse(&bytes).is_ok());
     }
 
     #[test]

@@ -525,14 +525,28 @@ pub fn build_project(
                 pattern_name(*pattern),
                 clip.length_ticks.max(1),
             );
-            // Notes past the end of the placement are cut off in FL too, and
-            // so are those before where a clip trimmed at its start begins.
+            // A start offset past every note is not one FL could have set
+            // (a field read as something else): the clip plays from the
+            // pattern's start rather than silent.
+            let pattern_end = notes
+                .iter()
+                .map(|n| n.tick + n.length_ticks)
+                .max()
+                .unwrap_or(0);
+            let offset = if *offset_ticks >= pattern_end {
+                0
+            } else {
+                *offset_ticks
+            };
+            // Notes past the end of the placement are cut off in FL too. A
+            // note held over where a clip trimmed at its start begins plays
+            // its tail from there, as FL plays truncated notes.
             midi.notes = notes
                 .iter()
-                .filter(|n| n.tick >= *offset_ticks && n.tick - offset_ticks < clip.length_ticks)
+                .filter(|n| n.tick + n.length_ticks > offset && n.tick < offset + clip.length_ticks)
                 .map(|n| hardwave_midi::MidiNote {
-                    start_tick: n.tick - offset_ticks,
-                    duration_ticks: n.length_ticks,
+                    start_tick: n.tick.saturating_sub(offset),
+                    duration_ticks: n.length_ticks - offset.saturating_sub(n.tick),
                     pitch: n.pitch,
                     velocity: n.velocity as f32 / 127.0,
                     channel: 0,
@@ -686,8 +700,15 @@ pub fn build_project(
             }
         }
         sources.push((track_id.clone(), insert));
+        // With one arrangement the row's switch is the track's. With
+        // several it is each arrangement's own, so it goes on each clip:
+        // on the track, the open arrangement's switch silenced the row in
+        // every other arrangement too once it was switched to.
+        let several = fl.arrangements.len() >= 2;
         if let Some(track) = project.track_mut(&track_id) {
-            track.muted |= track_off(fl_track);
+            if !several {
+                track.muted |= track_off(fl_track);
+            }
             track.soloed = soloed(fl_track);
         }
 
@@ -739,11 +760,11 @@ pub fn build_project(
                 gain_db: (fl_audio_clip_gain_db(settings.volume) + own_gain_db).max(-100.0),
                 fade_in_ticks,
                 fade_out_ticks,
-                // The row's own switch is on the track, from the open
-                // arrangement; another arrangement's is on the clip.
+                // The row's switch: on the track with one arrangement,
+                // on the clip by its own arrangement with several.
                 muted: clip.muted
                     || !settings.enabled
-                    || (clip.arrangement != fl.current_arrangement
+                    || ((several || clip.arrangement != fl.current_arrangement)
                         && switched_off(fl, clip.arrangement, clip.track_index)),
                 reversed: settings.reversed,
                 pitch_semitones: 0.0,
@@ -1293,15 +1314,22 @@ fn build_mixer(
         // The route that carries it on, to master or to another insert, at
         // its level. A route to master below full used to play at full.
         let onward = main.or_else(|| routes.iter().find(|r| r.to == 0).copied());
+        // The route on comes after the fader: the same as a fader that much
+        // lower, with the other routes (sends here, after the fader too)
+        // raised by as much so they stay where FL had them. Only the route
+        // with no others was taken; a group at -6 dB with a reverb send
+        // played at full.
+        let mut offset_db = 0.0;
         if let Some(main) = onward {
             if main.level != 12_800 {
-                if routes.len() == 1 {
-                    // Its only route comes after its fader: the same as a
-                    // fader that much lower.
-                    let offset = fl_volume_db(main.level as u32);
+                let offset = fl_volume_db(main.level as u32);
+                if offset > -60.0 || routes.len() == 1 {
+                    offset_db = offset;
                     track.volume_db = (track.volume_db + offset).max(-100.0);
                     map.fader_offset_db.insert(*insert, offset);
                 } else {
+                    // Silent on to master but still sending: no fader can
+                    // say that.
                     report.route_levels_left_behind.push(name.clone());
                 }
             }
@@ -1312,7 +1340,7 @@ fn build_mixer(
             .filter_map(|r| {
                 Some(crate::mixer::Send {
                     target: track_of(r.to)?,
-                    gain_db: fl_volume_db(r.level as u32),
+                    gain_db: (fl_volume_db(r.level as u32) - offset_db).min(24.0),
                     pre_fader: false,
                     enabled: true,
                 })
@@ -2172,6 +2200,86 @@ mod tests {
         assert_eq!(count(&switched), stored);
     }
 
+    /// A row switched off in one arrangement and on in another: each
+    /// arrangement's clips follow their own switch. On the track, the open
+    /// arrangement's switch silenced the row in every arrangement.
+    #[test]
+    fn a_row_switched_off_in_one_arrangement_plays_in_the_other() {
+        let mut fl = song();
+        for clip in fl.playlist_clips.iter_mut() {
+            clip.arrangement = 1;
+        }
+        // The second kick clip is in the other arrangement.
+        fl.playlist_clips[2].arrangement = 0;
+        fl.arrangements = vec![
+            FlArrangement {
+                name: "Extended".into(),
+                ..Default::default()
+            },
+            FlArrangement {
+                name: "Radio edit".into(),
+                tracks_off: vec![5],
+                ..Default::default()
+            },
+        ];
+        fl.current_arrangement = 1;
+        let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
+        let kicks = p.track("insert-003").unwrap();
+        assert!(!kicks.muted, "the track is not muted in every arrangement");
+        let ClipContent::Audio(open) = &kicks.clips[0].content else {
+            panic!("expected audio");
+        };
+        assert!(open.muted, "switched off where it is");
+        let other = &p
+            .arrangements
+            .iter()
+            .find(|a| a.name == "Extended")
+            .unwrap();
+        let stored = &other.timelines["insert-003"].clips[0].content;
+        let ClipContent::Audio(stored) = stored else {
+            panic!("expected audio");
+        };
+        assert!(!stored.muted, "on in the other arrangement");
+    }
+
+    /// A note held over the start of a clip trimmed there plays its tail,
+    /// and an offset past every note (a field read as something else)
+    /// does not silence the clip.
+    #[test]
+    fn a_trimmed_pattern_keeps_a_note_held_over_its_start() {
+        let mut fl = song();
+        let notes = &mut fl.pattern_notes[0].2;
+        notes[0].length_ticks = 1_920;
+        let set_offset = |fl: &mut FlProject, offset: u64| {
+            let clip = fl
+                .playlist_clips
+                .iter_mut()
+                .find(|c| matches!(c.content, FlClipContent::Pattern { .. }))
+                .unwrap();
+            if let FlClipContent::Pattern { offset_ticks, .. } = &mut clip.content {
+                *offset_ticks = offset;
+            }
+        };
+        set_offset(&mut fl, 480);
+        let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
+        let screech = p.track("insert-001").unwrap();
+        let ClipContent::Midi(midi) = &screech.clips[0].content else {
+            panic!("expected notes");
+        };
+        let first = &midi.clip.notes[0];
+        assert_eq!((first.start_tick, first.duration_ticks), (0, 1_440));
+
+        set_offset(&mut fl, 1_065_353_216);
+        let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
+        let ClipContent::Midi(midi) = &p.track("insert-001").unwrap().clips[0].content else {
+            panic!("expected notes");
+        };
+        assert!(
+            !midi.clip.notes.is_empty(),
+            "a nonsense offset leaves the notes"
+        );
+    }
+
     #[test]
     fn a_pattern_clip_trimmed_at_its_start_plays_from_there() {
         let mut fl = song();
@@ -2284,6 +2392,45 @@ mod tests {
             (half - (full + fl_volume_db(6_400))).abs() < 1e-9,
             "{full} {half}"
         );
+    }
+
+    /// A route on to the master below full, beside a send: the fader is
+    /// lowered and the send raised by as much, so both are where FL had
+    /// them. Only an insert with no other route was taken; a group at
+    /// -6 dB with a reverb send played at full.
+    #[test]
+    fn a_master_route_below_full_beside_a_send_lowers_the_fader_and_keeps_the_send() {
+        let mut fl = mixer_song();
+        let kick = fl.mixer.iter_mut().find(|m| m.index == 2).unwrap();
+        kick.routes = vec![
+            FlRoute {
+                to: 0,
+                level: 6_400,
+            },
+            FlRoute {
+                to: 5,
+                level: 6_400,
+            },
+        ];
+        let built = build_project(&fl, "s", &|p| Some(p.to_string()));
+        let full = build_project(&mixer_song(), "s", &|p| Some(p.to_string()));
+        let track = |b: &FlBuild| {
+            b.project
+                .tracks
+                .iter()
+                .find(|t| t.sends.len() == 1 && t.output_bus.is_none() && t.name != "Screech")
+                .cloned()
+                .expect("the kick insert")
+        };
+        let (lowered, before) = (track(&built), track(&full));
+        let offset = fl_volume_db(6_400);
+        assert!((lowered.volume_db - (before.volume_db + offset)).abs() < 1e-9);
+        assert!(
+            lowered.sends[0].gain_db.abs() < 1e-9,
+            "the send at half, raised by the fader's drop, is where FL had it: {}",
+            lowered.sends[0].gain_db
+        );
+        assert!(built.report.route_levels_left_behind.is_empty());
     }
 
     #[test]
