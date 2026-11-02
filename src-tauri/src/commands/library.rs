@@ -123,6 +123,12 @@ fn pack_name(zip: &Path) -> String {
     }
 }
 
+/// Whether a path in a zip starts at the top of a drive: "/x", "\x", "C:x".
+fn starts_at_the_top(name: &str) -> bool {
+    name.starts_with(['/', '\\'])
+        || matches!(name.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
+}
+
 /// Unpack `zip` into a new folder under `library`, as described above.
 pub fn install_into(library: &Path, zip: &Path) -> Result<InstalledPack, String> {
     let file = std::fs::File::open(zip).map_err(|e| format!("Could not open the pack: {e}"))?;
@@ -150,7 +156,14 @@ pub fn install_into(library: &Path, zip: &Path) -> Result<InstalledPack, String>
                 continue;
             }
             // A path that is absolute, or climbs out with "..", is refused.
-            let Some(relative) = entry.enclosed_name() else {
+            // zip's enclosed_name turns "/x" or "C:\x" into a path inside
+            // the pack, so those are caught first.
+            let Some(relative) = entry
+                .name()
+                .ok()
+                .filter(|name| !starts_at_the_top(name))
+                .and_then(|_| entry.enclosed_name())
+            else {
                 skipped += 1;
                 continue;
             };
@@ -176,8 +189,16 @@ pub fn install_into(library: &Path, zip: &Path) -> Result<InstalledPack, String>
                 .map_err(|e| format!("Could not write the pack: {e}"))?;
             // Never more than the entry says it holds: a zip bomb claims
             // little and unpacks to a lot.
-            let written = std::io::copy(&mut (&mut entry).take(claimed + 1), &mut out)
-                .map_err(|e| format!("Could not write the pack: {e}"))?;
+            let written = std::io::copy(&mut (&mut entry).take(claimed + 1), &mut out).map_err(
+                |e| match e.kind() {
+                    // zip itself stops a file that unpacks to more than it
+                    // says, or does not match its checksum.
+                    std::io::ErrorKind::InvalidData => {
+                        format!("The pack is damaged or unsafe: {e}")
+                    }
+                    _ => format!("Could not write the pack: {e}"),
+                },
+            )?;
             if written > claimed {
                 return Err(
                     "The pack is damaged or unsafe: a file unpacks to more than it says".into(),
@@ -270,17 +291,22 @@ mod tests {
                 ("readme.txt", b"hi"),
                 ("setup.exe", b"MZ"),
                 ("../../evil.wav", b"RIFF"),
+                ("/tmp/evil.wav", b"RIFF"),
+                ("C:\\Users\\Public\\evil.wav", b"RIFF"),
             ],
         );
         let lib = dir.join("Library");
         std::fs::create_dir_all(&lib).unwrap();
         let pack = install_into(&lib, &zip).unwrap();
-        assert_eq!((pack.files, pack.skipped), (3, 2));
+        assert_eq!((pack.files, pack.skipped), (3, 4));
         let folder = PathBuf::from(&pack.folder);
         assert_eq!(folder.file_name().unwrap(), "Raw Kicks Vol 1");
         assert!(folder.join("Kicks").join("kick 02.WAV").exists());
         assert!(!folder.join("setup.exe").exists());
         assert!(!dir.join("evil.wav").exists());
+        // An absolute path is refused, not unpacked under the pack.
+        assert!(!folder.join("tmp").exists());
+        assert!(!folder.join("Users").exists());
         // The same pack again goes beside it.
         let again = install_into(&lib, &zip).unwrap();
         assert!(again.folder.ends_with("Raw Kicks Vol 1 (2)"));
@@ -296,6 +322,25 @@ mod tests {
         let lib = dir.join("Library");
         std::fs::create_dir_all(&lib).unwrap();
         assert!(install_into(&lib, &zip).is_err());
+        assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file that unpacks to more than it says stops the install, and the
+    /// half-made pack folder goes again.
+    #[test]
+    fn a_zip_bomb_is_stopped_and_cleaned_up() {
+        let dir = temp("bomb");
+        let zip = dir.join("Bomb.zip");
+        crate::commands::flp_package::tests::make_zip(
+            &zip,
+            &[("Kick.wav", b"RIFF"), ("Bomb.wav", &[7u8; 100_000])],
+        );
+        crate::commands::flp_package::tests::understate_size(&zip, 100_000, 1000);
+        let lib = dir.join("Library");
+        std::fs::create_dir_all(&lib).unwrap();
+        let e = install_into(&lib, &zip).unwrap_err();
+        assert!(e.contains("damaged or unsafe"), "{e}");
         assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
