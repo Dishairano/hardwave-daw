@@ -149,8 +149,13 @@ pub async fn start_collab(
     let collab_for_writer = Arc::clone(&collab);
     collab.hold(tokio::spawn(async move {
         while let Some(message) = to_send.recv().await {
-            let Ok(text) = hardwave_project::multiplayer::to_wire_json(&message, base64) else {
-                continue;
+            let text = match crate::collab::wire_text(&message, base64) {
+                Ok(text) => text,
+                Err(why) => {
+                    log::warn!("room: {why}");
+                    collab_for_writer.say(&why);
+                    continue;
+                }
             };
             if writer
                 .send(tokio_tungstenite::tungstenite::Message::Text(text))
