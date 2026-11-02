@@ -168,6 +168,7 @@ export function App() {
   const fetchTracks = useTrackStore(s => s.fetchTracks)
   const newProject = useProjectStore(s => s.newProject)
   const saveProject = useProjectStore(s => s.saveProject)
+  const saveProjectAs = useProjectStore(s => s.saveProjectAs)
   const loadProject = useProjectStore(s => s.loadProject)
   const recentProjects = useProjectStore(s => s.recentProjects)
   const uiScaleMode = useUiPreferencesStore(s => s.mode)
@@ -1638,12 +1639,12 @@ export function App() {
 
   const handleSaveProjectAs = useCallback(async () => {
     try {
-      await saveProject(undefined)
+      await saveProjectAs()
       await invoke('autosave_clear').catch(() => {})
     } catch (err) {
       await showErrorDialog('Save failed', String(err))
     }
-  }, [saveProject, showErrorDialog])
+  }, [saveProjectAs, showErrorDialog])
 
   const handleSaveProject = useCallback(async () => {
     try {
