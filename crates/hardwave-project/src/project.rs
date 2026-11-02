@@ -550,6 +550,10 @@ impl Project {
         copy.name = format!("{} #2", copy.name);
         copy.armed = false;
         copy.frozen = false;
+        // An insert of its own, not a second one with the original's number.
+        if copy.mixer_number.is_some() {
+            copy.mixer_number = Some(self.next_mixer_number());
+        }
         let mut slot_ids = std::collections::HashMap::new();
         let mut states = Vec::new();
         for slot in copy.inserts.iter_mut() {
