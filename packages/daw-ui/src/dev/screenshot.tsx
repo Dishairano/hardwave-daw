@@ -420,6 +420,10 @@ function Harness() {
     case 'newsong':
       seedNewSong()
       return <NewSongShot />
+    case 'emptyroll':
+      // The piano roll with nothing open in it, in a new song.
+      seedNewSong()
+      return <Full><PianoRoll /></Full>
     case 'pianoroll': {
       // SHOT_CC=cc1 opens a controller lane under the notes.
       const lane = new URLSearchParams(location.search).get('cc')

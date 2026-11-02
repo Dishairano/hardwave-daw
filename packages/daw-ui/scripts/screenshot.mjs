@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account', 'tunenotes', 'tempolane', 'newsong']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account', 'tunenotes', 'tempolane', 'newsong', 'emptyroll']
 /** What to do on a panel before it is photographed, as a person would. */
 const ACTIONS = {
   // Open NOTES, choose "go", and hold it mid-drag a semitone and a half up,
