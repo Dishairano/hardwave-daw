@@ -1789,6 +1789,7 @@ impl DawEngine {
             return;
         }
         if let Some(meter) = self.track_meters.lock().get(track_id) {
+            meter.set_vca_gain(db_to_linear_f32(vca_db));
             meter.set_mix(
                 db_to_linear_f32(volume_db.clamp(-200.0, 24.0) + vca_db),
                 pan.clamp(-1.0, 1.0) as f32,
@@ -4160,6 +4161,7 @@ impl EngineCallback {
                     self.sample_rate as f32,
                 );
                 // The live mix starts from what the project says.
+                meter.set_vca_gain(db_to_linear_f32(vca_gain_db));
                 meter.set_mix(
                     db_to_linear_f32(track.volume_db + vca_gain_db),
                     track.pan as f32,
@@ -4479,6 +4481,7 @@ impl EngineCallback {
             node.set_stereo_separation(track.stereo_separation);
             // The live mix starts from what the project says.
             if let Some(meter) = meters.get(&track.id) {
+                meter.set_vca_gain(db_to_linear_f32(vca_gain_db));
                 meter.set_mix(
                     db_to_linear_f32(track.volume_db + vca_gain_db),
                     track.pan as f32,

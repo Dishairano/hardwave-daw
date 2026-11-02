@@ -70,6 +70,10 @@ pub struct TrackMeterState {
     /// False until the engine has written the three above for this track;
     /// before that the node keeps the values it was built with.
     pub mix_set: std::sync::atomic::AtomicBool,
+    /// What the track's VCA groups add to its level, linear. Already in
+    /// `mix_volume`; kept apart so a level drawn in automation, which
+    /// replaces the fader, still gets it.
+    pub mix_vca: AtomicF32,
     /// Where automation put the fader (linear) and the pan on the last
     /// block, so the mixer can follow it; bit 0 of `auto_on` says the
     /// volume is automated, bit 1 the pan.
@@ -92,6 +96,7 @@ impl Default for TrackMeterState {
             mix_pan: Default::default(),
             mix_width: Default::default(),
             mix_set: Default::default(),
+            mix_vca: AtomicF32::new(1.0),
             auto_volume: Default::default(),
             auto_pan: Default::default(),
             auto_on: Default::default(),
@@ -119,6 +124,22 @@ impl TrackMeterState {
         self.mix_width
             .store(finite(width, 1.0).clamp(0.0, 2.0), Relaxed);
         self.mix_set.store(true, Release);
+    }
+
+    /// The VCA groups' share of the level, linear (1 when the track is in
+    /// none). Set with the mix, before it.
+    pub fn set_vca_gain(&self, linear: f32) {
+        let linear = if linear.is_finite() {
+            linear.max(0.0)
+        } else {
+            1.0
+        };
+        self.mix_vca
+            .store(linear, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn vca_gain(&self) -> f32 {
+        self.mix_vca.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// What automation did to the fader and pan this block (audio thread).
@@ -1268,7 +1289,13 @@ impl AudioNode for TrackNode {
                 mix.volume_automated.then_some(volume),
                 mix.pan_automated.then_some(pan),
             );
-            self.volume = volume;
+            // Automation replaces the fader, not the VCA on top of it: a
+            // track with its level automated ignored its group's fader.
+            self.volume = if mix.volume_automated {
+                volume * self.meter.vca_gain()
+            } else {
+                volume
+            };
             self.pan = pan;
             if let Some(m) = mute_override {
                 if m {
@@ -1703,6 +1730,42 @@ mod tests {
         assert!(
             (after / before - 0.5).abs() < 0.05,
             "half the fader, half the level: {before} then {after}"
+        );
+    }
+
+    /// A track in a VCA group with its level automated: the lane takes the
+    /// fader's place, and the group's level still goes on top. It used to
+    /// be dropped with the fader, so the VCA did nothing to that track.
+    #[test]
+    fn the_vca_rides_an_automated_level() {
+        use hardwave_project::automation::{
+            AutomationLane, AutomationPoint, AutomationTarget, CurveMode,
+        };
+        let level = |vca: f32| {
+            let (mut node, session) = node_with_loop(480);
+            session.queue(0);
+            node.set_automation_lanes(vec![AutomationLane {
+                id: "volume".into(),
+                target: AutomationTarget::TrackVolume,
+                // 0 dB on the lane's -60..+6 dB range.
+                points: vec![AutomationPoint {
+                    tick: 0,
+                    value: 60.0 / 66.0,
+                    curve: CurveMode::Linear,
+                    tension: 0.0,
+                }],
+                visible: true,
+            }]);
+            node.meter.set_vca_gain(vca);
+            block(&mut node, 96_000, 256)
+                .iter()
+                .fold(0.0f32, |m, s| m.max(s.abs()))
+        };
+        let (open, down) = (level(1.0), level(0.5));
+        assert!(open > 0.0);
+        assert!(
+            (down / open - 0.5).abs() < 1e-3,
+            "the VCA at half halves the automated track: {open} then {down}"
         );
     }
 
