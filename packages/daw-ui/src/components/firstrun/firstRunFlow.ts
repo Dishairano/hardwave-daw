@@ -82,6 +82,13 @@ export function finishLabel(choice: SongChoice): string {
   return tf('Open the {name} starter', { name: t(starter?.title ?? 'Hardstyle') })
 }
 
+/** The template a choice starts from. The empty project is a new song,
+ *  which opens with Kick, Clap, Hat and Snare loaded, as its card says;
+ *  Blank in File > New is the one with nothing in it. */
+export function templateForChoice(choice: Exclude<SongChoice, 'open'>): 'drums' | `starter:${StarterId}` {
+  return choice === 'empty' ? 'drums' : choice
+}
+
 /** A note number as the piano roll writes it: 60 is C4. */
 export function noteName(note: number): string {
   const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
