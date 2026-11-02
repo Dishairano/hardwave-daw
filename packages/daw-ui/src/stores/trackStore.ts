@@ -1144,9 +1144,16 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       }
     }
     const label = toDelete.length === 1 ? 'Delete clip' : `Delete ${toDelete.length} clips`
-    for (let i = 0; i < toDelete.length; i++) {
-      const { trackId, clipId } = toDelete[i]
-      await mut('delete_clip', { trackId, clipId }, i === 0 ? label : undefined)
+    // One undo step for the lot. Each clip's delete used to be a step of its
+    // own, so undo brought back one clip of eight and the list named only
+    // the first.
+    await get().beginHistoryGroup()
+    try {
+      for (const { trackId, clipId } of toDelete) {
+        await mut('delete_clip', { trackId, clipId })
+      }
+    } finally {
+      await get().endHistoryGroup(label)
     }
     set({ selectedClipId: null, selectedClipIds: new Set() })
     await get().fetchTracks()
