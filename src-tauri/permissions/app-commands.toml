@@ -303,6 +303,7 @@ permissions = [
   "allow-set-audio-cache-max-bytes",
   "allow-new-project",
   "allow-save-project",
+  "allow-next-song-version-path",
   "allow-load-project",
   "allow-get-project-info",
   "allow-get-project-meta",
