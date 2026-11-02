@@ -496,19 +496,6 @@ pub fn apply_incoming(
     applied.transport
 }
 
-/// The account token every Hardwave program on this machine shares.
-///
-/// The plug-ins and the Suite write it when you sign in, so the DAW
-/// does not ask again: if you are signed in anywhere, you are signed
-/// in here.
-pub fn load_token() -> Option<String> {
-    let path = dirs::data_dir()?.join("hardwave").join("auth_token");
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|token| token.trim().to_string())
-        .filter(|token| !token.is_empty())
-}
-
 /// Where the room service lives: ours, or in a development build
 /// wherever HARDWAVE_ROOM_URL points.
 pub fn service_url() -> String {

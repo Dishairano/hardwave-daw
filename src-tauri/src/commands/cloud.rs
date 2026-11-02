@@ -12,11 +12,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
 fn signed_in_client() -> Result<Client, String> {
-    let token = crate::collab::load_token().ok_or_else(|| {
-        "sign in first. Opening any Hardwave plug-in and signing in there is enough: \
-         every Hardwave program on this machine shares one sign-in."
-            .to_string()
-    })?;
+    let token = crate::commands::account::token_or_sign_in_first()?;
     Ok(Client::new(token))
 }
 
