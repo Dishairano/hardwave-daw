@@ -293,7 +293,8 @@ fn import_blocking(app: &tauri::AppHandle, path: &str) -> Result<DawProjectImpor
     .map_err(|_| "that is not a DAWproject file (not a zip)".to_string())?;
     let read_entry =
         |zip: &mut zip::ZipArchive<std::fs::File>, name: &str, max: u64| -> Option<Vec<u8>> {
-            let entry = zip.by_name(name).ok()?;
+            let index = zip.index_for_name_raw(name.as_bytes())?;
+            let entry = zip.by_index(index).ok()?;
             if entry.size() > max {
                 return None;
             }
@@ -492,7 +493,13 @@ fn unpack(
     total: &mut u64,
 ) -> Result<PathBuf, String> {
     use std::io::Read;
-    let mut entry = zip.by_name(name).map_err(|e| e.to_string())?;
+    // Found by the name's bytes: zip's by_name looks through every entry
+    // for a name that is not there, and a project can name 200,000 such
+    // files. (by_name_raw would also hand over the data still compressed.)
+    let index = zip
+        .index_for_name_raw(name.as_bytes())
+        .ok_or_else(|| "not in the file".to_string())?;
+    let mut entry = zip.by_index(index).map_err(|e| e.to_string())?;
     let claimed = entry.size();
     if claimed > MAX_ENTRY || total.saturating_add(claimed) > MAX_UNPACKED {
         return Err("too large".into());
@@ -525,13 +532,19 @@ fn unpack(
         n += 1;
     }
     let mut out = std::fs::File::create(&target).map_err(|e| e.to_string())?;
-    let written =
-        std::io::copy(&mut (&mut entry).take(claimed + 1), &mut out).map_err(|e| e.to_string())?;
-    if written > claimed {
-        drop(out);
-        let _ = std::fs::remove_file(&target);
-        return Err("unpacks to more than it says".into());
-    }
+    let written = match std::io::copy(&mut (&mut entry).take(claimed + 1), &mut out) {
+        Ok(written) if written <= claimed => written,
+        // More than it says, or stopped part way (zip itself stops a file
+        // that unpacks to more than it says): what was written goes again.
+        copied => {
+            drop(out);
+            let _ = std::fs::remove_file(&target);
+            return Err(match copied {
+                Ok(_) => "unpacks to more than it says".into(),
+                Err(e) => e.to_string(),
+            });
+        }
+    };
     *total += written;
     Ok(target)
 }
@@ -788,6 +801,27 @@ mod tests {
         let again = unpack(&mut zip, "audio/kick.wav", &folder, &mut total).unwrap();
         assert_eq!(again, folder.join("kick (2).wav"));
         assert_eq!(total, 12);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sample that unpacks to more than it says is left out, and the part
+    /// already written does not stay behind in the song's folder.
+    #[test]
+    fn a_zip_bomb_sample_leaves_nothing_behind() {
+        let dir = std::env::temp_dir().join(format!("hw-dpi-bomb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = dir.join("song.dawproject");
+        crate::commands::flp_package::tests::make_zip(&at, &[("audio/bomb.wav", &[7u8; 100_000])]);
+        crate::commands::flp_package::tests::understate_size(&at, 100_000, 1000);
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&at).unwrap()).unwrap();
+        let folder = dir.join("song Samples");
+        let mut total = 0;
+        assert!(unpack(&mut zip, "audio/bomb.wav", &folder, &mut total).is_err());
+        assert!(
+            !folder.join("bomb.wav").exists(),
+            "the part written was removed"
+        );
+        assert_eq!(total, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

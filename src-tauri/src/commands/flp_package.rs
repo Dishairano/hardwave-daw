@@ -100,7 +100,10 @@ pub fn unpack(
         let entry = archive
             .by_index_raw(index)
             .map_err(|e| format!("That zip is damaged ({e}); nothing was unpacked"))?;
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| format!("That zip is damaged ({e}); nothing was unpacked"))?
+            .into_owned();
         let parts = safe_parts(&name)
             .map_err(|why| format!("That zip is unsafe: \"{name}\" {why}. Nothing was unpacked"))?;
         if entry.is_symlink() {
@@ -226,8 +229,15 @@ fn write_entry(
     let mut out = std::io::BufWriter::with_capacity(1 << 20, file);
     // A zip bomb says it holds little and unpacks to a lot: one byte past
     // what it says is enough to know.
-    let copied =
-        std::io::copy(&mut (&mut entry).take(plan.size + 1), &mut out).map_err(|e| failed(&e))?;
+    let copied = std::io::copy(&mut (&mut entry).take(plan.size + 1), &mut out).map_err(|e| {
+        // zip itself stops a file that unpacks to more than it says, or
+        // does not match its checksum.
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            format!("That zip is damaged or unsafe: \"{name}\" ({e})")
+        } else {
+            failed(&e)
+        }
+    })?;
     out.flush().map_err(|e| failed(&e))?;
     if copied != plan.size {
         return Err(format!(
@@ -340,6 +350,29 @@ pub(crate) mod tests {
             w.write_all(data).unwrap();
         }
         w.finish().unwrap();
+    }
+
+    /// Make the zip at `path` say the file of `real` bytes holds `claimed`,
+    /// in its local header and in the central directory: a zip bomb.
+    pub(crate) fn understate_size(path: &Path, real: u32, claimed: u32) {
+        let mut bytes = std::fs::read(path).unwrap();
+        let mut patched = 0;
+        for at in 0..bytes.len().saturating_sub(4) {
+            // The uncompressed size: 22 bytes into a local header, 24
+            // into a central directory one.
+            let offset = match &bytes[at..at + 4] {
+                [0x50, 0x4b, 0x03, 0x04] => 22,
+                [0x50, 0x4b, 0x01, 0x02] => 24,
+                _ => continue,
+            };
+            let size = u32::from_le_bytes(bytes[at + offset..at + offset + 4].try_into().unwrap());
+            if size == real {
+                bytes[at + offset..at + offset + 4].copy_from_slice(&claimed.to_le_bytes());
+                patched += 1;
+            }
+        }
+        assert_eq!(patched, 2);
+        std::fs::write(path, &bytes).unwrap();
     }
 
     fn no_progress() -> impl FnMut(usize, usize) {
@@ -511,28 +544,11 @@ pub(crate) mod tests {
         let zip = dir.join("Song.zip");
         let loud = vec![7u8; 100_000];
         make_zip(&zip, &[("Song.flp", b"FLhd"), ("Bomb.wav", &loud)]);
-        // Make the zip say Bomb.wav holds 1000 bytes: in its local header
-        // and in the central directory.
-        let mut bytes = std::fs::read(&zip).unwrap();
-        let mut patched = 0;
-        for at in 0..bytes.len().saturating_sub(4) {
-            // The uncompressed size: 22 bytes into a local header, 24
-            // into a central directory one.
-            let offset = match &bytes[at..at + 4] {
-                [0x50, 0x4b, 0x03, 0x04] => 22,
-                [0x50, 0x4b, 0x01, 0x02] => 24,
-                _ => continue,
-            };
-            let size = u32::from_le_bytes(bytes[at + offset..at + offset + 4].try_into().unwrap());
-            if size == 100_000 {
-                bytes[at + offset..at + offset + 4].copy_from_slice(&1000u32.to_le_bytes());
-                patched += 1;
-            }
-        }
-        assert_eq!(patched, 2);
-        std::fs::write(&zip, &bytes).unwrap();
+        // The zip says Bomb.wav holds 1000 bytes.
+        understate_size(&zip, 100_000, 1000);
         let e = unpack(&zip, LIMITS, &mut no_progress()).unwrap_err();
         assert!(e.contains("Nothing was unpacked"), "{e}");
+        assert!(e.contains("damaged or unsafe"), "{e}");
         assert!(only_the_zip_in(&dir), "the half-made folder was removed");
         let _ = std::fs::remove_dir_all(&dir);
     }
