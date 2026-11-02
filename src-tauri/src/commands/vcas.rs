@@ -1,8 +1,8 @@
 //! VCA groups: one fader that rides several others.
 //!
 //! The model and the arithmetic live in `hardwave_project::vca`. This file
-//! is the part the app calls: every change rebuilds the graph, because the
-//! group's level is folded into each member's fader there.
+//! is the part the app calls. A change of members or mute rebuilds the
+//! graph; the group's fader reaches its members' live mix directly.
 
 use crate::AppState;
 use hardwave_project::vca::Vca;
@@ -68,7 +68,9 @@ pub fn delete_vca(state: State<AppState>, id: String) -> Result<(), String> {
 /// Move the group's fader.
 ///
 /// No undo snapshot: this is a fader, and a whole move would fill the
-/// history. The value is saved with the song.
+/// history. The value is saved with the song. Heard from the next block
+/// through each member's live mix: a rebuild at every step of the drag
+/// cut held notes and clicked.
 #[tauri::command]
 pub fn set_vca_gain(state: State<AppState>, id: String, gain_db: f64) -> Result<(), String> {
     if !gain_db.is_finite() {
@@ -84,7 +86,7 @@ pub fn set_vca_gain(state: State<AppState>, id: String, gain_db: f64) -> Result<
             .ok_or_else(|| "no group with that id".to_string())?;
         vca.gain_db = gain_db.clamp(-60.0, 12.0);
     }
-    state.engine.lock().rebuild_graph();
+    state.engine.lock().apply_vca_mix(&id);
     Ok(())
 }
 

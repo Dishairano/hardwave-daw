@@ -1813,6 +1813,26 @@ impl DawEngine {
         }
     }
 
+    /// Play every member of a VCA group at its own fader plus the group's
+    /// level as the project now has it, from the next block. Moving the
+    /// group's fader rebuilt the whole graph at every step of the drag,
+    /// which clicked and reset every delay line and filter, as a track
+    /// fader used to.
+    pub fn apply_vca_mix(&self, vca_id: &str) {
+        let members: Vec<String> = {
+            let project = self.project.lock();
+            project
+                .vcas
+                .iter()
+                .find(|v| v.id == vca_id)
+                .map(|v| v.members.clone())
+                .unwrap_or_default()
+        };
+        for member in members {
+            self.apply_track_mix(&member);
+        }
+    }
+
     /// The person picked a file on a network server themselves: samples
     /// on that server may load from projects from now on.
     pub fn trust_network_location(&self, path: &str) {
@@ -6822,6 +6842,35 @@ mod offline_insert_tests {
             peak_without > 1e-3,
             "without the factory the source should still sound, got peak={peak_without}"
         );
+    }
+}
+
+#[cfg(test)]
+mod vca_mix_tests {
+    use super::*;
+
+    /// Moving a VCA's fader reaches its members' live mix straight away, as
+    /// a track fader does, with no rebuild of the graph; the group's level
+    /// is kept apart too, for a member whose own level is automated.
+    #[test]
+    fn a_vca_move_reaches_its_members_without_a_rebuild() {
+        let engine = DawEngine::new();
+        {
+            let mut project = engine.project.lock();
+            let mut kick = hardwave_project::Track::new_audio("kick".into(), "Kick".into());
+            kick.volume_db = -6.0;
+            project.tracks.push(kick);
+            let mut drums = hardwave_project::vca::Vca::new("drums".into(), "Drums".into());
+            drums.members.push("kick".into());
+            drums.gain_db = -6.0;
+            project.vcas.push(drums);
+        }
+        engine.sync_track_meters();
+        engine.apply_vca_mix("drums");
+        let meter = engine.track_meters.lock().get("kick").cloned().unwrap();
+        let (volume, _, _) = meter.live_mix().unwrap();
+        assert!((volume - db_to_linear_f32(-12.0)).abs() < 1e-4, "{volume}");
+        assert!((meter.vca_gain() - db_to_linear_f32(-6.0)).abs() < 1e-4);
     }
 }
 
