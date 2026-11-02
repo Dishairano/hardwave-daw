@@ -250,7 +250,12 @@ export function startTimelineSync() {
   if (syncStarted) return
   syncStarted = true
   useMarkerStore.subscribe(() => {
-    if (!suppressPush) void pushTimelineState()
+    if (suppressPush) return
+    void pushTimelineState()
+    // A marker is part of the song: one added, moved or renamed is a change
+    // to save. It never marked the song as changed, so closing after placing
+    // markers did not ask to save them.
+    void import('./projectStore').then(({ useProjectStore }) => useProjectStore.getState().markDirty())
   })
   useTrackFolderStore.subscribe(() => {
     if (!suppressPush) void pushTimelineState()
