@@ -125,6 +125,45 @@ pub type ChangedSections = Vec<(&'static str, u64, u64, Vec<u8>)>;
 /// Tracks that changed, as (id, place in the song, bytes).
 pub type ChangedTracks = Vec<(String, usize, Vec<u8>)>;
 
+/// A message as the text that goes to the room, or why it cannot go.
+///
+/// The room takes one message of up to MAX_MESSAGE and closes a connection
+/// that sends a larger one; the host's connection closing closes the room
+/// for both. A song whose bytes went over it (about 4.5 MB packed as a list
+/// of numbers, about 12 MB as base64) did exactly that when the guest asked
+/// for it. It is now not sent, and the host is told why in plain words.
+pub fn wire_text(message: &SyncMessage, base64: bool) -> Result<String, String> {
+    let text = hardwave_project::multiplayer::to_wire_json(message, base64)
+        .map_err(|e| format!("could not write a room message: {e}"))?;
+    let limit = crate::commands::collab::hardwave_room_limits::MAX_MESSAGE;
+    if text.len() <= limit {
+        return Ok(text);
+    }
+    let mb = |n: usize| n as f64 / (1024.0 * 1024.0);
+    Err(match &message.kind {
+        SyncKind::ProjectOffer { blob, .. } => {
+            // How much song fits, in the same packed size as this one.
+            let fits = blob.len() as f64 * limit as f64 / text.len() as f64;
+            format!(
+                "This song is too large to send through a room: it packs to {:.1} MB and a room \
+                 carries about {:.1} MB. Send them the project file another way; you are both \
+                 still in the room.",
+                mb(blob.len()),
+                fits / (1024.0 * 1024.0)
+            )
+        }
+        SyncKind::TrackState { blob, .. } => format!(
+            "A track is too large to send through the room ({:.1} MB with its plug-in \
+             settings), so the other side does not have its latest change.",
+            mb(blob.len())
+        ),
+        _ => format!(
+            "Something too large for the room ({:.1} MB) was not sent.",
+            mb(text.len())
+        ),
+    })
+}
+
 fn hash_of(bytes: &[u8]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -315,6 +354,11 @@ impl Collab {
             hashes.remove(id);
         }
         (changed, gone)
+    }
+
+    /// Something to tell the person in the room's panel.
+    pub fn say(&self, what: &str) {
+        self.status.lock().message = what.to_string();
     }
 
     /// True while a message from the other side is being applied.
@@ -900,6 +944,31 @@ mod tests {
         apply_incoming(&collab, &mut project, &incoming);
         assert_eq!(project.track(&track_id).unwrap().volume_db, -9.0);
         assert_eq!(collab.status().received, 1);
+    }
+
+    /// A song too large for one room message is not sent (the room would
+    /// close the connection, and with the host's the room), and the reason
+    /// is said in words. As base64 the same song fits.
+    #[test]
+    fn a_song_too_large_for_the_room_is_not_sent_and_says_why() {
+        let song = |len: usize| SyncMessage {
+            sender_user_id: String::new(),
+            logical_clock: 1,
+            kind: SyncKind::ProjectOffer {
+                name: "Big".into(),
+                blob: vec![200; len],
+            },
+        };
+        let why = wire_text(&song(5 * 1024 * 1024), false).unwrap_err();
+        assert!(
+            why.contains("too large to send through a room") && why.contains("5.0 MB"),
+            "{why}"
+        );
+        assert!(wire_text(&song(5 * 1024 * 1024), true).is_ok());
+        assert_eq!(
+            wire_text(&song(10), false).unwrap(),
+            serde_json::to_string(&song(10)).unwrap()
+        );
     }
 
     #[test]
