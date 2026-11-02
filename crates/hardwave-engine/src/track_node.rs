@@ -1009,6 +1009,16 @@ impl TrackNode {
         self.receives_input = receives;
     }
 
+    /// Whether this track runs with the song stopped: live input passes
+    /// through it, or other tracks play into it. The graph only runs while
+    /// stopped when something is played live (an input monitored, a
+    /// keyboard), and a bus has to carry that: a synth played with the
+    /// song stopped reached no bus or reverb return, through its output or
+    /// a send, until Play.
+    fn runs_stopped(&self) -> bool {
+        self.live_input || self.receives_input
+    }
+
     /// Monitoring went through the track only while playing, and only when
     /// the track had a plug-in: a track with nothing on it counted as idle
     /// and a stopped one returned silence, so an armed vocal track let the
@@ -1177,7 +1187,7 @@ impl AudioNode for TrackNode {
     /// Muted, stopped, or a placeholder: each of those leaves the track
     /// silent before it reads its input or runs anything (see `process`).
     fn idle(&self, ctx: &ProcessContext) -> bool {
-        self.muted || (!ctx.playing && !self.live_input) || self.has_nothing_to_play()
+        self.muted || (!ctx.playing && !self.runs_stopped()) || self.has_nothing_to_play()
     }
 
     fn process(
@@ -1219,7 +1229,7 @@ impl AudioNode for TrackNode {
             ch.fill(0.0);
         }
 
-        if self.muted || (!ctx.playing && !self.live_input) {
+        if self.muted || (!ctx.playing && !self.runs_stopped()) {
             // Silence on the meter as well. A track muted (or silenced by
             // another track's solo) while the song played kept showing its
             // last level until the song stopped, because the mixer is only
