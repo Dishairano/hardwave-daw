@@ -68,6 +68,12 @@ pub fn evaluate(
         }
     }
     for clip in clips {
+        // An automation clip without points drives nothing, like a lane.
+        // A new clip is empty, and it played half-way: the track dropped
+        // to -27 dB across the clip as soon as it was added.
+        if clip.lane.points.is_empty() {
+            continue;
+        }
         let Some(v) = clip.value_at_timeline(tick) else {
             continue;
         };
@@ -108,6 +114,17 @@ mod tests {
         let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
         assert_eq!(mix.volume_linear, 0.8);
         assert_eq!(mix.mute, None);
+    }
+
+    /// A new automation clip has no points yet: the track keeps its fader
+    /// under it instead of dropping to half-way.
+    #[test]
+    fn an_empty_clip_drives_nothing() {
+        let clip = AutomationClip::new("c", AutomationTarget::TrackVolume, 0, 15_360);
+        let mut chain = InsertChain::new();
+        let mix = evaluate(&[], &[clip], 100, 0.8, 0.0, &mut chain);
+        assert_eq!(mix.volume_linear, 0.8);
+        assert!(!mix.volume_automated);
     }
 
     /// The mixer follows what automation does, so the result says which

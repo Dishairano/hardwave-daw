@@ -5502,8 +5502,12 @@ impl EngineCallback {
                 let Some(track) = project.tracks.iter().find(|t| t.id == entry.track_id) else {
                     continue;
                 };
+                // A lane without points drives nothing, as on the fader: it
+                // read as half-way, so adding an empty send lane dropped
+                // the send to -27 dB.
                 let lane = track.automation_lanes.iter().find(|l| {
                     l.visible
+                        && !l.points.is_empty()
                         && matches!(
                             l.target,
                             AutomationTarget::SendLevel { send_index } if send_index == entry.send_index
@@ -7860,6 +7864,45 @@ mod monitoring_tests {
         assert!(
             level > 0.2,
             "the bus carries the input to master, got {level}"
+        );
+    }
+
+    /// A send-level lane with no points yet leaves the send where the mixer
+    /// has it. It read as half-way, -27 dB, from the moment it was added.
+    #[test]
+    fn an_empty_send_lane_leaves_the_send_alone() {
+        let song = |with_lane: bool| {
+            let mut song = armed_song();
+            song.tracks.push(hardwave_project::Track::new_audio(
+                "fx".into(),
+                "Reverb".into(),
+            ));
+            let vox = song.tracks.iter_mut().find(|t| t.id == "vox").unwrap();
+            vox.sends.push(hardwave_project::mixer::Send {
+                target: "fx".into(),
+                gain_db: 0.0,
+                pre_fader: false,
+                enabled: true,
+            });
+            if with_lane {
+                vox.automation_lanes
+                    .push(hardwave_project::automation::AutomationLane {
+                        id: "send".into(),
+                        target: hardwave_project::automation::AutomationTarget::SendLevel {
+                            send_index: 0,
+                        },
+                        points: Vec::new(),
+                        visible: true,
+                    });
+            }
+            song
+        };
+        let plain = heard(&mut rig(song(false)));
+        let with_lane = heard(&mut rig(song(true)));
+        assert!(plain > 0.5, "the dry vocal and the send: {plain}");
+        assert!(
+            (plain - with_lane).abs() < 1e-3,
+            "the lane changed the send: {plain} then {with_lane}"
         );
     }
 
