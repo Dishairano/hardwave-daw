@@ -277,23 +277,29 @@ impl PluginScanner {
             .cloned()
             .collect();
 
+        // The same plug-in in two folders is listed once, from the first
+        // folder it is in (the system folder comes first). The Hardwave
+        // Suite puts each build in both the system and the per-user folder,
+        // so without this every Hardwave plug-in showed up twice.
+        let mut vst3_names = HashSet::new();
         for path in &vst3_paths {
             if path.exists() {
                 if let Some(cb) = progress.as_mut() {
                     cb(self.cache.len(), &path.display().to_string());
                 }
                 let mut seen = HashSet::new();
-                self.scan_vst3_dir(path, progress.as_mut(), 0, &mut seen);
+                self.scan_vst3_dir(path, progress.as_mut(), 0, &mut seen, &mut vst3_names);
             }
         }
 
+        let mut clap_names = HashSet::new();
         for path in &clap_paths {
             if path.exists() {
                 if let Some(cb) = progress.as_mut() {
                     cb(self.cache.len(), &path.display().to_string());
                 }
                 let mut seen = HashSet::new();
-                self.scan_clap_dir(path, progress.as_mut(), 0, &mut seen);
+                self.scan_clap_dir(path, progress.as_mut(), 0, &mut seen, &mut clap_names);
             }
         }
 
@@ -377,6 +383,7 @@ impl PluginScanner {
         mut progress: Option<&mut ScanProgress>,
         depth: usize,
         seen: &mut HashSet<PathBuf>,
+        names: &mut HashSet<std::ffi::OsString>,
     ) {
         if !first_visit(dir, depth, seen) {
             return;
@@ -391,7 +398,9 @@ impl PluginScanner {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
             if ext == "vst3" {
-                if path.is_dir() || path.is_file() {
+                if !first_of_its_name(&path, names) {
+                    log::debug!("Already found in another folder: {}", path.display());
+                } else if path.is_dir() || path.is_file() {
                     log::debug!("Found VST3: {}", path.display());
                     let descriptors = match self.unchanged(&path, vst3_stamp(&path)) {
                         Some(found) => found,
@@ -419,7 +428,7 @@ impl PluginScanner {
                 // legitimately contain unrelated .vst3-named resources.
             } else if path.is_dir() {
                 // Scan nested non-bundle directories (e.g. vendor subfolders).
-                self.scan_vst3_dir(&path, progress.as_deref_mut(), depth + 1, seen);
+                self.scan_vst3_dir(&path, progress.as_deref_mut(), depth + 1, seen, names);
             }
         }
     }
@@ -430,6 +439,7 @@ impl PluginScanner {
         mut progress: Option<&mut ScanProgress>,
         depth: usize,
         seen: &mut HashSet<PathBuf>,
+        names: &mut HashSet<std::ffi::OsString>,
     ) {
         if !first_visit(dir, depth, seen) {
             return;
@@ -444,6 +454,10 @@ impl PluginScanner {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
             if ext == "clap" {
+                if !first_of_its_name(&path, names) {
+                    log::debug!("Already found in another folder: {}", path.display());
+                    continue;
+                }
                 log::debug!("Found CLAP: {}", path.display());
                 if let Some(cb) = progress.as_deref_mut() {
                     cb(self.cache.len(), &path.display().to_string());
@@ -465,7 +479,7 @@ impl PluginScanner {
                 };
                 self.cache.extend(found);
             } else if path.is_dir() {
-                self.scan_clap_dir(&path, progress.as_deref_mut(), depth + 1, seen);
+                self.scan_clap_dir(&path, progress.as_deref_mut(), depth + 1, seen, names);
             }
         }
     }
@@ -494,6 +508,16 @@ fn vst3_stamp(bundle_path: &Path) -> Option<u64> {
 pub fn describe_clap(library_path: &Path) -> Vec<PluginDescriptor> {
     let here: ClapDescriber = std::sync::Arc::new(crate::clap_ffi::read_clap_descriptors);
     parse_clap_library(library_path, Some(&here)).0
+}
+
+/// Whether this is the first bundle or library of its file name in this
+/// scan. A later one of the same name is a copy of a plug-in already found
+/// in a folder scanned before.
+fn first_of_its_name(path: &Path, names: &mut HashSet<std::ffi::OsString>) -> bool {
+    match path.file_name() {
+        Some(name) => names.insert(name.to_ascii_lowercase()),
+        None => true,
+    }
 }
 
 /// Whether to walk into a folder: not too deep, and not one already
@@ -798,10 +822,31 @@ impl Default for PluginScanner {
 
 #[cfg(target_os = "windows")]
 fn default_vst3_paths() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from(r"C:\Program Files\Common Files\VST3"),
-        PathBuf::from(r"C:\Program Files (x86)\Common Files\VST3"),
-    ]
+    with_windows_user_folder(
+        vec![
+            PathBuf::from(r"C:\Program Files\Common Files\VST3"),
+            PathBuf::from(r"C:\Program Files (x86)\Common Files\VST3"),
+        ],
+        dirs::data_local_dir(),
+        "VST3",
+    )
+}
+
+/// The system folders, then the per-user one under %LOCALAPPDATA%
+/// (Programs\Common\VST3, Programs\Common\CLAP), which the VST3 and CLAP
+/// specs both name. The Hardwave Suite installs there when it is not given
+/// admin rights for the system folder, and only scanning the system
+/// folders left those plug-ins out of the DAW.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn with_windows_user_folder(
+    mut system: Vec<PathBuf>,
+    local_app_data: Option<PathBuf>,
+    format: &str,
+) -> Vec<PathBuf> {
+    if let Some(local) = local_app_data {
+        system.push(local.join("Programs").join("Common").join(format));
+    }
+    system
 }
 
 #[cfg(target_os = "macos")]
@@ -832,7 +877,11 @@ fn default_vst3_paths() -> Vec<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn default_clap_paths() -> Vec<PathBuf> {
-    vec![PathBuf::from(r"C:\Program Files\Common Files\CLAP")]
+    with_windows_user_folder(
+        vec![PathBuf::from(r"C:\Program Files\Common Files\CLAP")],
+        dirs::data_local_dir(),
+        "CLAP",
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -903,6 +952,49 @@ mod tests {
         s.clap_paths.clear();
         s.custom_vst3_paths = vec![dir.to_path_buf()];
         s
+    }
+
+    #[test]
+    fn windows_scans_the_per_user_folders_the_suite_can_install_to() {
+        let local = PathBuf::from(r"C:\Users\producer\AppData\Local");
+        let vst3 = with_windows_user_folder(
+            vec![PathBuf::from(r"C:\Program Files\Common Files\VST3")],
+            Some(local.clone()),
+            "VST3",
+        );
+        assert_eq!(
+            vst3,
+            vec![
+                PathBuf::from(r"C:\Program Files\Common Files\VST3"),
+                local.join("Programs").join("Common").join("VST3"),
+            ],
+            "the system folder first, then the per-user one"
+        );
+        let clap = with_windows_user_folder(vec![], Some(local.clone()), "CLAP");
+        assert_eq!(
+            clap,
+            vec![local.join("Programs").join("Common").join("CLAP")]
+        );
+        assert!(with_windows_user_folder(vec![], None, "VST3").is_empty());
+    }
+
+    #[test]
+    fn a_plugin_in_two_folders_is_listed_once_from_the_first() {
+        let system = tmp("dup-system");
+        let user = tmp("dup-user");
+        write_fake_vst3(&system, "TestKick.vst3", KICK_MODULEINFO);
+        write_fake_vst3(&user, "TestKick.vst3", KICK_MODULEINFO);
+        let mut s = scanner_over(&system);
+        s.custom_vst3_paths.push(user.clone());
+        let found = s.scan().to_vec();
+        assert_eq!(found.len(), 1, "one Test Kick, not two: {found:?}");
+        assert!(
+            found[0].path.starts_with(&system),
+            "the copy in the folder scanned first: {:?}",
+            found[0].path
+        );
+        let _ = std::fs::remove_dir_all(&system);
+        let _ = std::fs::remove_dir_all(&user);
     }
 
     #[test]
