@@ -6226,12 +6226,19 @@ pub fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> 
 }
 
 /// A track with nothing in it and nothing reaching it: an empty insert of
-/// a new song. It makes no sound, so the graph leaves it out.
+/// a new song, or a bus or return nothing plays into (an FL insert that
+/// has a name and no effects). It makes no sound, so the graph leaves it
+/// out.
 fn is_placeholder(
     track: &hardwave_project::Track,
     reached: &std::collections::HashSet<&str>,
 ) -> bool {
-    matches!(track.kind, hardwave_project::TrackKind::Audio) && track.clips.is_empty()
+    matches!(
+        track.kind,
+        hardwave_project::TrackKind::Audio
+            | hardwave_project::TrackKind::Bus
+            | hardwave_project::TrackKind::Return
+    ) && track.clips.is_empty()
         && track.inserts.is_empty()
         && track.automation_lanes.is_empty()
         && track.automation_clips.is_empty()
@@ -8073,6 +8080,46 @@ mod rt_safety_tests {
         let chain = node.take_chain().expect("a chain");
         assert_eq!(chain.slots.len(), 1, "the plug-in is on it");
         assert!(cb.deferred_insert_commands.is_empty());
+    }
+
+    /// An insert nothing plays into and with no effects (FL's named but
+    /// unused inserts) builds no node, bus or return; one something
+    /// reaches, or with an effect on it, does.
+    #[test]
+    fn an_empty_bus_builds_no_node() {
+        use hardwave_project::track::{PluginSlot, Track};
+        let mut project = Project::default();
+        project.tracks.truncate(1);
+        project
+            .tracks
+            .push(Track::new_bus("empty".into(), "KICK REVERB".into()));
+        let mut ret = Track::new_bus("ret".into(), "Return".into());
+        ret.kind = hardwave_project::TrackKind::Return;
+        project.tracks.push(ret);
+        project
+            .tracks
+            .push(Track::new_bus("fed".into(), "Fed".into()));
+        let mut fx = Track::new_bus("fx".into(), "With effect".into());
+        fx.inserts.push(PluginSlot {
+            id: "s".into(),
+            plugin_id: "test.gain".into(),
+            enabled: true,
+            state: None,
+            sidechain_source: None,
+            wet: 1.0,
+        });
+        project.tracks.push(fx);
+        let mut source = Track::new_audio("src".into(), "Source".into());
+        source.output_bus = Some("fed".into());
+        project.tracks.push(source);
+        let (cb, _cmd_tx) = make_callback(Arc::new(Mutex::new(project)));
+        assert!(!cb.track_id_to_node.contains_key("empty"));
+        assert!(!cb.track_id_to_node.contains_key("ret"));
+        assert!(
+            cb.track_id_to_node.contains_key("fed"),
+            "something plays into it"
+        );
+        assert!(cb.track_id_to_node.contains_key("fx"), "it has an effect");
     }
 
     #[test]
