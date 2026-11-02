@@ -350,6 +350,7 @@ mod tests {
             length_ticks: length,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

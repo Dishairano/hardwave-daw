@@ -70,6 +70,7 @@ fn engine_with(notes: Vec<TunedNote>, stretch: f64) -> DawEngine {
             length_ticks: 1_000_000,
             lane: 0,
             color: None,
+            row: None,
         });
     drop(project);
     engine

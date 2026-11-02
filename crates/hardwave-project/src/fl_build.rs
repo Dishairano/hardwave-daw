@@ -575,6 +575,7 @@ pub fn build_project(
                         .iter()
                         .find(|(p, _)| p == pattern_index)
                         .map(|(_, c)| c.clone()),
+                    row: None,
                 });
                 report.pattern_clips += 1;
             }
@@ -823,6 +824,7 @@ pub fn build_project(
                     lane: 0,
                     // FL draws an audio clip in its channel's colour.
                     color: channel.and_then(|c| c.color.clone()),
+                    row: None,
                 });
                 report.audio_clips += 1;
             }
@@ -928,6 +930,7 @@ fn split_arrangements(
             id: uuid::Uuid::new_v4().to_string(),
             name: fl_arrangement.name.clone(),
             timelines,
+            rows: Vec::new(),
         });
         if index == open {
             project.active_arrangement = arrangements[index].id.clone();

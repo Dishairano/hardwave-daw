@@ -41,6 +41,10 @@ pub struct AutomationLane {
     pub target: AutomationTarget,
     pub points: Vec<AutomationPoint>,
     pub visible: bool,
+    /// The playlist row it is drawn on (see `ClipPlacement::row`). Unused
+    /// on the lane inside an automation clip, which has a row of its own.
+    #[serde(default)]
+    pub row: Option<u32>,
 }
 
 impl AutomationLane {
@@ -169,6 +173,7 @@ mod tests {
                 })
                 .collect(),
             visible: true,
+            row: None,
         }
     }
 

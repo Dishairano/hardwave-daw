@@ -119,6 +119,7 @@ mod tests {
             target: AutomationTarget::TrackVolume,
             points: Vec::new(),
             visible: true,
+            row: None,
         };
         let mut chain = InsertChain::new();
         let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
@@ -141,6 +142,7 @@ mod tests {
                 tension: 0.0,
             }],
             visible: true,
+            row: None,
         };
         let mut chain = InsertChain::new();
         let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
@@ -183,6 +185,7 @@ mod tests {
                 tension: 0.0,
             }],
             visible: true,
+            row: None,
         };
         let mut chain = InsertChain::new();
         let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);

@@ -217,6 +217,7 @@ mod tests {
             length_ticks: 960,
             lane: 0,
             color: None,
+            row: None,
         });
         p.make_safe().unwrap();
         let ClipContent::Audio(a) = &p.track(&id).unwrap().clips[0].content else {

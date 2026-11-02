@@ -204,6 +204,7 @@ mod tests {
             length_ticks: 960,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 
@@ -218,6 +219,7 @@ mod tests {
             length_ticks: 960,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

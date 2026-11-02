@@ -2272,6 +2272,7 @@ mod isolate_tests {
             target,
             points: Vec::new(),
             visible: true,
+            row: None,
         };
         let t = p.track_mut(&id).expect("the kick");
         t.automation_lanes = vec![
@@ -2370,6 +2371,7 @@ mod stem_and_freeze_tests {
             length_ticks: LEN_TICKS,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 
@@ -2384,6 +2386,7 @@ mod stem_and_freeze_tests {
             length_ticks: LEN_TICKS,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

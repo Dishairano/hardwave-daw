@@ -147,6 +147,17 @@ pub struct Project {
     /// to play every MIDI track at once.
     #[serde(default)]
     pub keyboard_track: Option<TrackId>,
+    /// The open arrangement's playlist rows, from the top: index 0 is FL's
+    /// "Track 1". A clip names its row by index (`ClipPlacement::row`); a
+    /// row past the end of the list is an unnamed one with its switches on.
+    /// Each arrangement keeps its own (`Arrangement::rows`).
+    #[serde(default)]
+    pub rows: Vec<crate::layout::PlaylistRow>,
+    /// The channel rack's filter groups by number, as FL keeps them
+    /// ("Audio", "Automation", "Unsorted"). A track's `rack_group` is an
+    /// index into this.
+    #[serde(default)]
+    pub rack_groups: Vec<String>,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -208,6 +219,8 @@ impl Default for Project {
             modulations: Vec::new(),
             video: None,
             keyboard_track: None,
+            rows: Vec::new(),
+            rack_groups: Vec::new(),
             scenes: vec![
                 "Scene 1".to_string(),
                 "Scene 2".to_string(),
@@ -688,6 +701,7 @@ impl Project {
                 length_ticks: length,
                 lane: 0,
                 color: None,
+                row: None,
             });
             placed += 1;
         }
@@ -1015,6 +1029,7 @@ mod tests {
                 },
                 points: Vec::new(),
                 visible: true,
+                row: None,
             });
         }
         let mut live = std::collections::HashMap::new();
@@ -1073,6 +1088,7 @@ mod tests {
             length_ticks: 3840,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 
@@ -1114,6 +1130,7 @@ mod tests {
             id: "arr-2".into(),
             name: "Radio edit".into(),
             timelines: [("insert-001".to_string(), other)].into_iter().collect(),
+            rows: Vec::new(),
         });
 
         p.anchor_sample_files(&song_dir);
@@ -1375,6 +1392,7 @@ mod tests {
             id: "arr1".into(),
             name: "A1".into(),
             timelines,
+            rows: Vec::new(),
         });
         p.active_arrangement = "arr1".into();
 
@@ -1440,6 +1458,7 @@ mod tests {
             length_ticks: 1920,
             lane: 0,
             color: None,
+            row: None,
         });
         p.save(&path).expect("save");
 
@@ -1668,6 +1687,7 @@ mod move_clip_tests {
             length_ticks: 960,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

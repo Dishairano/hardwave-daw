@@ -656,6 +656,7 @@ fn commit_takes(
                 length_ticks,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
         created.push(clip_id);
@@ -715,6 +716,7 @@ mod blend_tests {
             length_ticks: clip_len,
             lane: 0,
             color: None,
+            row: None,
         });
         t
     }

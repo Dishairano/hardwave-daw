@@ -4647,6 +4647,7 @@ impl EngineCallback {
                             length_ticks: rack.length_ticks(),
                             lane: 0,
                             color: None,
+                            row: None,
                         }
                     })
                 } else {
@@ -6423,6 +6424,7 @@ mod offline_insert_tests {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             });
             t.inserts.push(PluginSlot {
                 id: "slot1".into(),
@@ -6559,6 +6561,7 @@ mod offline_insert_tests {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -6642,6 +6645,7 @@ mod offline_insert_tests {
                     length_ticks: 4 * beat,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             project.tempo_map.tick_to_samples(8 * beat, sr as f64)
@@ -6743,6 +6747,7 @@ mod offline_insert_tests {
                     length_ticks: lengths.1,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -6855,6 +6860,7 @@ mod offline_insert_tests {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -7117,6 +7123,7 @@ mod offline_insert_tests {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             let path = dir.join("song.hwp");
@@ -7206,6 +7213,7 @@ mod offline_insert_tests {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             };
             if let Some(t) = project.track_mut(&id) {
                 t.clips.push(clip("clip-live"));
@@ -7214,6 +7222,7 @@ mod offline_insert_tests {
                 id: "arr-b".into(),
                 name: "B".into(),
                 timelines: Default::default(),
+                rows: Vec::new(),
             };
             arrangement.timelines.insert(
                 id.clone(),
@@ -7280,6 +7289,7 @@ mod offline_insert_tests {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             };
             ghost.track_id = id2.clone();
             if let Some(t) = project.track_mut(&id2) {
@@ -8662,6 +8672,7 @@ mod monitoring_tests {
                         },
                         points: Vec::new(),
                         visible: true,
+                        row: None,
                     });
             }
             song
@@ -8762,6 +8773,7 @@ mod monitoring_tests {
             length_ticks: 1920,
             lane: 0,
             color: None,
+            row: None,
         });
         p.tracks.push(beat);
         let mut rec = hardwave_project::Track::new_audio("rec".into(), "Resample".into());
@@ -9061,6 +9073,7 @@ mod track_render_tests {
             length_ticks: LEN_TICKS,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

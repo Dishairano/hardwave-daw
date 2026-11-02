@@ -1142,6 +1142,7 @@ mod tests {
             length_ticks: 1,
             lane: 0,
             color: None,
+            row: None,
         };
         let t = project.track_mut(&id).unwrap();
         t.clips.push(clip("/home/dishaion/Secret Project/vox.wav"));
