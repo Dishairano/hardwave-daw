@@ -360,6 +360,39 @@ impl Project {
         write_atomic(path, json.as_bytes())
     }
 
+    /// Turn every sample named relative to the song's folder into a full
+    /// path inside `dir`, the folder those names are relative to.
+    ///
+    /// A collected song names its samples relative to its .hwp ("Song
+    /// Samples/kick.wav") so the whole folder can be moved. A copy of the
+    /// song written somewhere else (an auto-save, a song template, Save As
+    /// into another folder) reads those names against its own folder and
+    /// finds nothing. Only `source_file`, where the audio is read from, is
+    /// changed: `source_path` is the id every clip plays its audio through
+    /// and has to stay as it is.
+    pub fn anchor_sample_files(&mut self, dir: &Path) {
+        use crate::clip::ClipContent;
+        let anchor = |content: &mut ClipContent| {
+            if let ClipContent::Audio(a) = content {
+                if !a.source_file.is_empty() && Path::new(&a.source_file).is_relative() {
+                    a.source_file = dir.join(&a.source_file).to_string_lossy().into_owned();
+                }
+            }
+        };
+        for track in &mut self.tracks {
+            for clip in &mut track.clips {
+                anchor(&mut clip.content);
+            }
+        }
+        for arrangement in &mut self.arrangements {
+            for timeline in arrangement.timelines.values_mut() {
+                for clip in &mut timeline.clips {
+                    anchor(&mut clip.content);
+                }
+            }
+        }
+    }
+
     /// Put a track at a playlist row, replacing the empty insert there
     /// and keeping the row's id and place, as the kind of track it needs
     /// to be (an instrument plays MIDI, anything else audio).
@@ -924,6 +957,96 @@ mod tests {
     }
 
     use super::*;
+
+    fn sample_clip(pool_id: &str, file: &str) -> crate::clip::ClipPlacement {
+        use crate::clip::{AudioClip, ClipContent, ClipPlacement};
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: format!("clip-{pool_id}"),
+                name: pool_id.into(),
+                source_path: pool_id.into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: 48_000,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                warp_markers: Vec::new(),
+                source_file: file.into(),
+                treatment: Default::default(),
+            }),
+            track_id: "insert-001".into(),
+            position_ticks: 0,
+            length_ticks: 3840,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    fn files_of(clips: &[crate::clip::ClipPlacement]) -> Vec<(String, String)> {
+        clips
+            .iter()
+            .filter_map(|c| match &c.content {
+                crate::clip::ClipContent::Audio(a) => {
+                    Some((a.source_path.clone(), a.source_file.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_collected_songs_samples_become_full_paths_and_keep_their_pool_ids() {
+        use crate::arrangement::{Arrangement, TrackTimeline};
+        let song_dir = std::env::temp_dir().join("Anthem");
+        let pack = std::env::temp_dir().join("packs").join("snare.wav");
+        let pack = pack.to_string_lossy().into_owned();
+
+        let mut p = Project::default();
+        let track = p.track_mut("insert-001").unwrap();
+        // Collected into the song's folder, so named relative to it.
+        track
+            .clips
+            .push(sample_clip("9f2c", "Anthem Samples/kick.wav"));
+        // Imported from a pack elsewhere: already a full path.
+        track.clips.push(sample_clip("41ab", &pack));
+        // A project from before `source_file`: the pool id is the path.
+        track.clips.push(sample_clip("77cd", ""));
+        // A clip that only exists in another arrangement.
+        let mut other = TrackTimeline::default();
+        other
+            .clips
+            .push(sample_clip("5e01", "Anthem Samples/vocal.wav"));
+        p.arrangements.push(Arrangement {
+            id: "arr-2".into(),
+            name: "Radio edit".into(),
+            timelines: [("insert-001".to_string(), other)].into_iter().collect(),
+        });
+
+        p.anchor_sample_files(&song_dir);
+
+        let kick = song_dir.join("Anthem Samples/kick.wav");
+        assert_eq!(
+            files_of(&p.track("insert-001").unwrap().clips),
+            vec![
+                ("9f2c".to_string(), kick.to_string_lossy().into_owned()),
+                ("41ab".to_string(), pack.clone()),
+                ("77cd".to_string(), String::new()),
+            ],
+            "the pool ids stay as they are; only the relative file moves"
+        );
+        let vocal = song_dir.join("Anthem Samples/vocal.wav");
+        assert_eq!(
+            files_of(&p.arrangements[0].timelines["insert-001"].clips),
+            vec![("5e01".to_string(), vocal.to_string_lossy().into_owned())],
+        );
+    }
 
     #[test]
     fn a_song_survives_being_sent_to_the_other_person() {
