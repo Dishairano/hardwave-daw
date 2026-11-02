@@ -15,11 +15,9 @@ import { t, useLanguage } from '../../../i18n'
  *    rest exist in state but never hit the React tree, so a 500-track
  *    session has the same cost as a 25-track session.
  *
- * 2. **GPU compositor scroll**. Native `scrollLeft` mutations invalidate
- *    layout each frame which Chromium hard-caps at 60 Hz. We disable the
- *    native overflow scroll and apply the offset as a `translate3d`
- *    transform on the inner container — pure compositor work, runs at the
- *    display's actual refresh rate (120 / 144 / 240 Hz).
+ * 2. **One scroll position**. The viewport has no scrollbar; the spring
+ *    below sets its `scrollLeft` once per animation frame, and the
+ *    virtualizer watches that to know which strips to mount.
  *
  * 3. **Spring-physics easing** on wheel input. Wheel deltas inject impulse
  *    into a velocity that a critically-damped spring pulls toward target.
@@ -82,15 +80,15 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
   const lastFrameRef = useRef(0)
 
   const applyTransform = useCallback(() => {
-    const inner = innerRef.current
-    if (!inner) return
-    inner.style.transform = `translate3d(${-currentRef.current.toFixed(2)}px,0,0)`
-    // Sync the virtualizer's notion of scroll position so it knows which
-    // strips to mount. @tanstack/react-virtual reads from the scroll
-    // element's scrollLeft, but since we don't use native scroll any more,
-    // we have to push the value ourselves via the API.
-    virtualizer.scrollToOffset(currentRef.current, { align: 'start' })
-  }, [virtualizer])
+    const viewport = viewportRef.current
+    if (!viewport) return
+    // The viewport's own scroll, which the virtualizer watches. The row was
+    // also moved by a transform, and the virtualizer's scrollToOffset
+    // scrolled the viewport as well: the strips went twice as far as the
+    // virtualizer thought, so the wrong ones showed and, past about twenty
+    // strips, none at all.
+    viewport.scrollLeft = currentRef.current
+  }, [])
 
   const getMaxScroll = useCallback(() => {
     const viewport = viewportRef.current
@@ -218,8 +216,6 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
           width: totalSize + STRIP_W,
           height: '100%',
           position: 'relative',
-          willChange: 'transform',
-          transform: 'translate3d(0,0,0)',
           contain: 'layout paint',
         }}
       >
