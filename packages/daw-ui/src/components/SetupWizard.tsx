@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import {
   type VelocityCurve,
@@ -62,6 +62,21 @@ export function SetupWizard() {
   const [activity, setActivity] = useState<MidiActivitySnapshot | null>(null)
   const [scanning, setScanning] = useState(false)
   const [driver, setDriver] = useState<{ ok: boolean; detail: string } | null>(null)
+  // The audio step's choice when it differs from what plays now: Continue
+  // applies it. A device picked and then Continue was dropped without a
+  // word, so the first song came out of the laptop speakers.
+  const pendingAudio = useRef<(() => Promise<boolean>) | null>(null)
+  const [continuing, setContinuing] = useState(false)
+  const onContinue = async () => {
+    if (step === 'audio' && pendingAudio.current) {
+      setContinuing(true)
+      const applied = await pendingAudio.current()
+      setContinuing(false)
+      // Not applied: the step says why, and stays.
+      if (!applied) return
+    }
+    next()
+  }
 
   const rescan = useCallback(async () => {
     setScanning(true)
@@ -157,7 +172,7 @@ export function SetupWizard() {
           {step === 'welcome' && (
             <WelcomeStep ports={ports} scanning={scanning} rescan={rescan} driver={driver} />
           )}
-          {step === 'audio' && <AudioStep />}
+          {step === 'audio' && <AudioStep pending={pendingAudio} />}
           {step === 'devices' && (
             <DevicesStep
               ports={ports}
@@ -208,7 +223,8 @@ export function SetupWizard() {
               <button
                 type="button"
                 className="hw-btn hw-btn-primary"
-                onClick={() => (step === 'test' ? next() : next())}
+                onClick={() => void onContinue()}
+                disabled={continuing}
               >
                 {t('Continue')}
               </button>
@@ -240,7 +256,22 @@ const BUFFER_CHOICES = [128, 256, 512, 1024]
  * wrong (system speakers instead of the interface). Reuses the same
  * commands as File → Audio settings; applying here writes the same
  * persisted prefs, so the two stay in sync. */
-function AudioStep() {
+/** What the audio step's three choices are set to. */
+export interface AudioChoice {
+  device: string | null
+  sampleRate: number
+  bufferSize: number
+}
+
+/** Whether the choice on screen is not what plays now. */
+export function audioChoiceChanged(active: AudioChoice | null, chosen: AudioChoice): boolean {
+  if (!active) return false
+  return active.device !== chosen.device
+    || active.sampleRate !== chosen.sampleRate
+    || active.bufferSize !== chosen.bufferSize
+}
+
+function AudioStep({ pending }: { pending: MutableRefObject<(() => Promise<boolean>) | null> }) {
   useLanguage()
   const [devices, setDevices] = useState<WizardAudioDevice[]>([])
   const [device, setDevice] = useState<string | null>(null)
@@ -249,6 +280,8 @@ function AudioStep() {
   const [applied, setApplied] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // What plays now, as read when the step opened or last applied.
+  const [active, setActive] = useState<AudioChoice | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -256,10 +289,16 @@ function AudioStep() {
       invoke<{ device: string | null; sample_rate: number; buffer_size: number }>('get_audio_config'),
     ])
       .then(([devs, cfg]) => {
+        const shown = {
+          device: cfg.device ?? devs.find((d) => d.is_default)?.name ?? null,
+          sampleRate: cfg.sample_rate,
+          bufferSize: cfg.buffer_size,
+        }
         setDevices(devs)
-        setDevice(cfg.device ?? devs.find((d) => d.is_default)?.name ?? null)
-        setSampleRate(cfg.sample_rate)
-        setBufferSize(cfg.buffer_size)
+        setDevice(shown.device)
+        setSampleRate(shown.sampleRate)
+        setBufferSize(shown.bufferSize)
+        setActive(shown)
       })
       .catch((e) => setError(String(e)))
   }, [])
@@ -270,18 +309,28 @@ function AudioStep() {
   const selected = devices.find((d) => d.name === device)
   const rates = selected?.sample_rates?.length ? selected.sample_rates : [44100, 48000]
 
-  const apply = async () => {
+  const apply = async (): Promise<boolean> => {
     setBusy(true)
     setError(null)
     try {
       await invoke('set_audio_config', { device, sampleRate, bufferSize })
       setApplied(tf('{device} @ {rate} Hz / {buffer} samples', { device: device ?? t('Default device'), rate: sampleRate, buffer: bufferSize }))
+      setActive({ device, sampleRate, bufferSize })
+      return true
     } catch (e) {
       setError(String(e))
+      return false
     } finally {
       setBusy(false)
     }
   }
+
+  // Hand Continue the choice while it is not what plays.
+  const changed = audioChoiceChanged(active, { device, sampleRate, bufferSize })
+  useEffect(() => {
+    pending.current = changed ? apply : null
+    return () => { pending.current = null }
+  })
 
   return (
     <>
