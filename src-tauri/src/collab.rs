@@ -164,6 +164,37 @@ pub fn wire_text(message: &SyncMessage, base64: bool) -> Result<String, String> 
     })
 }
 
+/// How fast this side sends to the room.
+///
+/// The room drops whatever comes faster than its allowance (SEND_RATE a
+/// second, SEND_BURST at once), without a word: a change to more tracks
+/// than that at once (the default song has 500 mixer tracks) reached the
+/// other side in part, and the two songs stayed different. Messages now
+/// wait their turn under an allowance a tenth below the room's, so a big
+/// change arrives whole, a few seconds later.
+pub struct Pacer(hardwave_room::TokenBucket);
+
+impl Default for Pacer {
+    fn default() -> Self {
+        Self(hardwave_room::TokenBucket::new(
+            hardwave_room::SEND_RATE * 0.9,
+            hardwave_room::SEND_BURST * 0.9,
+        ))
+    }
+}
+
+impl Pacer {
+    /// When a message of this kind may go, at `now` or later; its share of
+    /// the allowance is taken for then.
+    pub fn slot(&mut self, kind: &SyncKind, now: std::time::Instant) -> std::time::Instant {
+        let cost = hardwave_room::message_cost(kind);
+        let at = now + self.0.wait_for(cost, now);
+        // Always there by then: no message costs more than the burst.
+        let _ = self.0.try_take(cost, at);
+        at
+    }
+}
+
 fn hash_of(bytes: &[u8]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -969,6 +1000,42 @@ mod tests {
             wire_text(&song(10), false).unwrap(),
             serde_json::to_string(&song(10)).unwrap()
         );
+    }
+
+    /// A change to 500 tracks at once: sent all at once the room keeps 200
+    /// and drops the rest; paced, all 500 get in, even when the network
+    /// holds some back and lets them through together.
+    #[test]
+    fn a_change_to_500_tracks_arrives_whole() {
+        use std::time::{Duration, Instant};
+        let track = SyncKind::TrackState {
+            track_id: "t".into(),
+            index: 0,
+            blob: vec![0; 2000],
+        };
+        let cost = hardwave_room::message_cost(&track);
+        let room =
+            || hardwave_room::TokenBucket::new(hardwave_room::SEND_RATE, hardwave_room::SEND_BURST);
+        let start = Instant::now();
+        let mut at_once = room();
+        let kept = (0..500).filter(|_| at_once.try_take(cost, start)).count();
+        assert_eq!(kept, 200, "unpaced, the room drops the rest");
+
+        let mut pace = Pacer::default();
+        let mut relay = room();
+        let (mut now, mut arrived, mut accepted) = (start, start, 0);
+        for i in 0..500 {
+            now = pace.slot(&track, now);
+            // In order, some held back 300 ms and then let through together.
+            let delay = Duration::from_millis(if i % 50 < 25 { 300 } else { 0 });
+            arrived = arrived.max(now + delay);
+            if relay.try_take(cost, arrived) {
+                accepted += 1;
+            }
+        }
+        assert_eq!(accepted, 500);
+        // Paced, not stalled: (500 - 180) at 36 a second is about 9 s.
+        assert!(now - start < Duration::from_secs(10), "{:?}", now - start);
     }
 
     #[test]

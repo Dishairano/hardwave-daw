@@ -1989,6 +1989,7 @@ dependencies = [
  "hardwave-native-plugins",
  "hardwave-plugin-host",
  "hardwave-project",
+ "hardwave-room",
  "hex",
  "hound",
  "log",
