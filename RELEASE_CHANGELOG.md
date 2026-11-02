@@ -39,6 +39,7 @@
 - fix: a plug-in that fails to hand over its state at save time keeps the settings it had
 
 ### Improvements
+- fix(security): accept zip's extract advisory for the updater, with the reason
 - chore(permissions): the app's generated schemas list the new account and project commands
 - fix(project): a plug-in that cannot hand over its settings keeps the ones it saved
 - fix(project): Save As into another folder keeps the collected samples
