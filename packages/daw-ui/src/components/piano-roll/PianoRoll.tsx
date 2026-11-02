@@ -5,6 +5,7 @@ import { PianoKeyboard } from './PianoKeyboard'
 import { VelocityLane, NOTE_PROPERTY_LABEL, type NoteProperty } from './VelocityLane'
 import { CcLane, CcTool } from './CcLane'
 import { Minimap } from './Minimap'
+import { EmptyRollPicker } from './EmptyRollPicker'
 import {
   BUILT_IN_CC_LANES,
   customCcLane,
@@ -14,6 +15,7 @@ import {
 } from '../../stores/midiCcStore'
 import { DetachButton } from '../FloatingWindow'
 import { useTrackStore } from '../../stores/trackStore'
+import { addSynthWithNote } from '../../stores/pianoRollBinding'
 import { useProjectStore } from '../../stores/projectStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { useTransportStore } from '../../stores/transportStore'
@@ -598,7 +600,21 @@ export function PianoRoll() {
       window.addEventListener('mouseup', onUp)
       return
     }
-    if (!activeTrackId || !activeClipId) return
+    if (!activeTrackId || !activeClipId) {
+      // Nothing to draw in: a click adds Hardwave 3xOSC with the note where
+      // the click was, so no click in the roll does nothing.
+      if (e.button !== 0) return
+      const rect = canvasRef.current!.getBoundingClientRect()
+      const clickPitch = pitchFromY(e.clientY - rect.top + RULER_HEIGHT)
+      if (clickPitch < 0 || clickPitch >= 128) return
+      void addSynthWithNote({
+        pitch: snapToScale ? snapPitchToScale(clickPitch, scaleRoot, scaleType) : clickPitch,
+        startTick: Math.max(0, snapTick(tickFromX(e.clientX - rect.left + KEYBOARD_WIDTH))),
+        durationTicks: snap,
+        velocity: 0.8,
+      }).catch(err => useNotificationStore.getState().push('error', t('The instrument was not added'), { detail: String(err) }))
+      return
+    }
     const rect = canvasRef.current!.getBoundingClientRect()
     const mx = e.clientX - rect.left
     const my = e.clientY - rect.top
@@ -1847,9 +1863,9 @@ export function PianoRoll() {
     })
   }, [followPlayhead, pixelsPerTick, scrollX])
 
-  const emptyHint = !activeTrackId || !activeClipId
-    ? t('Select a MIDI track or double-click a MIDI clip to edit notes.')
-    : null
+  // Nothing to edit: the grid offers the song's channels and the
+  // instruments to add instead of a hint about tracks and clips.
+  const nothingToEdit = !activeTrackId || !activeClipId
 
   return (
     <div ref={containerRef}
@@ -1876,7 +1892,7 @@ export function PianoRoll() {
           <span style={{ width: 9, height: 9, borderRadius: 3, background: trackColor, flexShrink: 0 }} />
         )}
         <span style={{ fontSize: 12.5, fontWeight: 600, color: hw.textPrimary }}>
-          {activeTrackId && activeClipId ? (activeClipName || t('Untitled clip')) : t('No clip selected')}
+          {activeTrackId && activeClipId ? (activeClipName || t('Untitled clip')) : t('Pick an instrument')}
         </span>
         {activeTrack && <span style={{ fontSize: 11.5, color: hw.textMuted }}>{activeTrack.name}</span>}
         {selectedNotes.size > 0 && (
@@ -2692,8 +2708,13 @@ export function PianoRoll() {
               }
               setNoteCtx(null)
             }}
-            style={{ display: 'block', outline: 'none', cursor: tool === 'draw' || tool === 'chord' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default' }}
+            style={{
+              display: 'block', outline: 'none',
+              cursor: nothingToEdit ? 'copy' : tool === 'draw' || tool === 'chord' ? 'crosshair' : tool === 'erase' ? 'not-allowed' : 'default',
+              opacity: nothingToEdit ? 0.55 : 1,
+            }}
           />
+          {nothingToEdit && <EmptyRollPicker />}
           {hoverInfo && (
             <div style={{
               position: 'absolute',
@@ -2715,15 +2736,6 @@ export function PianoRoll() {
           )}
         </div>
 
-        {emptyHint && (
-          <div style={{
-            position: 'absolute', inset: 0, display: 'flex',
-            alignItems: 'center', justifyContent: 'center',
-            pointerEvents: 'none', color: hw.textFaint, fontSize: 12,
-          }}>
-            {emptyHint}
-          </div>
-        )}
       </div>
 
       <div style={{ position: 'relative' }}>

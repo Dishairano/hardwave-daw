@@ -23,6 +23,16 @@ export async function addInstrumentChannel(pluginId: string, name: string, selec
   return trackId
 }
 
+/** A new channel playing the built-in kick synth. Returns its id. */
+export async function addKickSynthChannel(select = true): Promise<string> {
+  const trackId = await invoke<string>('add_midi_track', { name: 'Kick' })
+  await invoke('set_track_instrument', { trackId, kind: 'kick_synth' })
+  const ts = useTrackStore.getState()
+  await ts.fetchTracks()
+  if (select) ts.selectTrack(trackId)
+  return trackId
+}
+
 function fileName(path: string): string {
   return path.split(/[\\/]/).pop() || path
 }

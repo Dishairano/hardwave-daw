@@ -102,6 +102,31 @@ function synthNotes() {
 
 // Browser Places tree: a small fake sample library for the screenshot
 // harness and Playwright. Shape matches the Rust `BrowserEntry`.
+let mockIds = 0
+type MockTrack = { id: string; name: string; kind: string; color: string; clips: Record<string, unknown>[]; inserts: Record<string, unknown>[]; instrument?: string }
+function mockSongEdit(cmd: string, args: Record<string, unknown> | undefined): string | null {
+  const song = (window as unknown as { __hwMockTracks?: MockTrack[] }).__hwMockTracks
+  const id = `mock-${cmd}-${++mockIds}`
+  const track = song?.find(t => t.id === args?.trackId)
+  switch (cmd) {
+    case 'add_midi_track': {
+      const base = song?.find(t => t.kind === 'Midi')
+      song?.push({ ...(base ?? {}), id, name: String(args?.name ?? 'Channel'), kind: 'Midi', color: '#3B82F6', clips: [], inserts: [], instrument: 'builtin_sine' } as MockTrack)
+      return id
+    }
+    case 'add_plugin_to_track':
+      track?.inserts.push({ id, pluginId: args?.pluginId, pluginName: String(args?.pluginId), enabled: true, wet: 1, sidechainSource: null })
+      return id
+    case 'create_midi_clip':
+      track?.clips.push({ id, name: 'MIDI Clip', kind: 'midi', source_id: '', position_ticks: 0, length_ticks: 3840, muted: false })
+      return id
+    case 'set_track_instrument':
+      if (track) track.instrument = String(args?.kind)
+      return null
+  }
+  return null
+}
+
 /** Where the mocked app installed its drums. */
 export const MOCK_DRUM_FOLDER = '/Applications/Hardwave DAW.app/Contents/Resources/drums'
 
@@ -275,6 +300,13 @@ const mock: TauriInternals = {
         return null
       case 'get_midi_notes':
         return synthNotes()
+      // A seeded song (window.__hwMockTracks) takes new channels, plug-ins
+      // and clips, so a spec can follow what a click made.
+      case 'add_midi_track':
+      case 'add_plugin_to_track':
+      case 'create_midi_clip':
+      case 'set_track_instrument':
+        return mockSongEdit(cmd, args as Record<string, unknown> | undefined)
       case 'search_library': {
         const q = String((args as { query?: string })?.query ?? '').toLowerCase()
         const pool = ['Kick Hard 01.wav', 'Kick Rawstyle 03.wav', 'Screech 150 F.wav']

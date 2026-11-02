@@ -337,4 +337,25 @@ export const nlEditors: Record<string, string> = {
   'the built-in synth.': 'de ingebouwde synth.',
   'Drop a sample on the channel to play it instead.': 'Sleep een sample op het kanaal om dat te laten spelen.',
   'The sample did not load': 'Het sample is niet geladen',
+  // ---- The empty piano roll
+  'Pick an instrument': 'Kies een instrument',
+  'Pick what to play': 'Kies wat je wilt spelen',
+  'Nothing to draw in yet. Choose a channel in this song or add an instrument, and the piano roll opens on it, ready to draw.':
+    'Nog niets om in te tekenen. Kies een kanaal in dit nummer of voeg een instrument toe, en de pianorol opent erop, klaar om te tekenen.',
+  'In this song': 'In dit nummer',
+  'Add an instrument': 'Voeg een instrument toe',
+  'VST3 and CLAP instruments': 'VST3- en CLAP-instrumenten',
+  '{n} found ›': '{n} gevonden ›',
+  'none found': 'geen gevonden',
+  '‹ Hardwave instruments': '‹ Hardwave-instrumenten',
+  'No instrument channels yet.': 'Nog geen instrumentkanalen.',
+  'The instrument was not added': 'Het instrument is niet toegevoegd',
+  'Or click anywhere in the grid: that adds Hardwave 3xOSC and puts the note where you clicked.':
+    'Of klik ergens in het raster: dat voegt Hardwave 3xOSC toe en zet de noot waar je klikte.',
+  'three oscillators: leads, plucks, basses': 'drie oscillatoren: leads, plucks, bassen',
+  'five wavetable banks': 'vijf wavetable-banken',
+  'eight-voice FM synth': 'FM-synth met acht stemmen',
+  'white, pink or brown noise': 'witte, roze of bruine ruis',
+  'one sample across the keys': 'één sample over de toetsen',
+  'the four-layer kick': 'de kick met vier lagen',
 }
