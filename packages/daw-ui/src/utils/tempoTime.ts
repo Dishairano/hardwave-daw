@@ -158,3 +158,11 @@ export function steadyBpmBetween(entries: readonly TempoPoint[], from: number, t
   }
   return start
 }
+
+/** The tempo that covers `from..to` in the same time at one steady speed:
+ *  the beats over the minutes they take. */
+export function averageBpmBetween(entries: readonly TempoPoint[], from: number, to: number): number {
+  if (to <= from) return bpmAtTick(entries, from)
+  const secs = secsAtTick(entries, to) - secsAtTick(entries, from)
+  return secs > 0 ? ((to - from) / PPQ) * 60 / secs : bpmAtTick(entries, from)
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PPQ, bpmAtTick, layoutBpm, sampleAtTick, secsAtTick, steadyBpmBetween, tickAtSample, tickAtSecs, type TempoPoint } from './tempoTime'
+import { PPQ, averageBpmBetween, bpmAtTick, layoutBpm, sampleAtTick, secsAtTick, steadyBpmBetween, tickAtSample, tickAtSecs, type TempoPoint } from './tempoTime'
 
 const BAR = PPQ * 4
 /** 150, a ramp up to 160 over bars 9 to 17, and back to 150 for the drop:
@@ -44,5 +44,12 @@ describe('ticks and seconds through the tempo map', () => {
 
   it('treats an empty map as the default song', () => {
     expect(secsAtTick([], PPQ)).toBeCloseTo(60 / 140, 9)
+  })
+
+  it('averages the tempo over a stretch the way the engine does', () => {
+    expect(averageBpmBetween(buildAndDrop, 0, BAR * 8)).toBeCloseTo(150, 9)
+    const avg = averageBpmBetween(buildAndDrop, BAR * 8, BAR * 16)
+    expect(avg).toBeGreaterThan(150)
+    expect(avg).toBeLessThan(160)
   })
 })

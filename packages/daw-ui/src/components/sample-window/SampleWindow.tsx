@@ -25,6 +25,8 @@ import { useTransportStore } from '../../stores/transportStore'
 import { useHistoryStore } from '../../stores/historyStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { PPQ } from '../../utils/meter'
+import { averageBpmBetween } from '../../utils/tempoTime'
+import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { FlatBox, FlatCheck, FlatKnob, FlatPanel, FlatSelect, FlatSwitch } from '../ui/flat/Flat'
 import type { PluginParam } from '../plugins/pluginDraw'
 import { rgbColour } from '../../lib/waveformColour'
@@ -282,6 +284,8 @@ interface Values {
   declick: Declick
   loadRegions: boolean
   loadSlices: boolean
+  /** Follows the song's tempo, or keeps its own speed. */
+  followsTempo: boolean
 }
 
 /** The command's own names for the same things. */
@@ -306,6 +310,7 @@ type Settings = Partial<{
   declick: Declick
   loadRegions: boolean
   loadSlices: boolean
+  followsTempo: boolean
 }>
 
 /** FL's declicking modes, in FL's order, as the engine names them. */
@@ -344,6 +349,7 @@ function valuesOf(clip: ClipInfo): Values {
     declick: asDeclick(t?.declick),
     loadRegions: t?.loadRegions ?? false,
     loadSlices: t?.loadSlices ?? false,
+    followsTempo: (t?.followBpm ?? 0) > 0,
   }
 }
 
@@ -369,7 +375,16 @@ function settingsOf(v: Partial<Values>): Settings {
   if (v.declick !== undefined) s.declick = v.declick
   if (v.loadRegions !== undefined) s.loadRegions = v.loadRegions
   if (v.loadSlices !== undefined) s.loadSlices = v.loadSlices
+  if (v.followsTempo !== undefined) s.followsTempo = v.followsTempo
   return s
+}
+
+/** How the sample meets a tempo change (the tempo lane mockup): stretched
+ *  along so a loop stays on the beat, or played as recorded. */
+const TEMPO_MODES = ['Follows the tempo', 'Keeps its speed'] as const
+const TEMPO_HINT: Record<(typeof TEMPO_MODES)[number], string> = {
+  'Follows the tempo': 'stretched with the song, pitch kept, so a loop stays on the beat',
+  'Keeps its speed': 'plays as recorded from where it starts, whatever the tempo does',
 }
 
 const MODES = ['Resample', 'Stretch'] as const
@@ -384,7 +399,7 @@ const timeFactor = (v: Values) => v.stretch / (v.resample ? Math.pow(2, v.pitch 
 function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
   useLanguage()
   const tracks = useTrackStore((s) => s.tracks)
-  const bpm = useTransportStore((s) => s.bpm)
+  const tempoEntries = useTempoMapStore((s) => s.entries)
   const track = tracks.find((t) => t.id === trackId)
   const clip = track?.clips.find((c) => c.id === clipId)
   const colorOverride = clip?.color
@@ -450,6 +465,13 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
 
   const color = colorOverride || track.color || '#10b981'
   const seconds = clip.sourceFrames && clip.sourceRate ? clip.sourceFrames / clip.sourceRate : 0
+  // The tempo the sample's beats are counted at: its own when it follows
+  // the tempo, else the song's where the clip sits. The transport's tempo
+  // is wherever the playhead is, which after a tempo change is another.
+  const followBpm = clip.treatment?.followBpm ?? 0
+  const bpm = followBpm > 0
+    ? followBpm
+    : averageBpmBetween(tempoEntries, clip.position_ticks, clip.position_ticks + Math.max(1, clip.length_ticks))
   const beatSec = 60 / Math.max(1, bpm)
   const naturalBeats = seconds / beatSec
   const beatsNow = naturalBeats * timeFactor(v)
@@ -555,6 +577,21 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
                   onPick={(m) => change({ resample: m === 'Resample' }, true, `Stretch mode ${m}`)}
                 />
                 <span className="sw-hint">{t(MODE_HINT[v.resample ? 'Resample' : 'Stretch'])}</span>
+                <span className="hwf-lab">{t('Tempo')}</span>
+                {(() => {
+                  // Warp markers pin a clip to the beats whatever this says.
+                  const warped = (clip.warpMarkers?.length ?? 0) > 0
+                  const mode = warped || v.followsTempo ? TEMPO_MODES[0] : TEMPO_MODES[1]
+                  return (
+                    <>
+                      <FlatSelect
+                        value={mode} options={TEMPO_MODES} label={(m) => t(m)} disabled={warped}
+                        onPick={(m) => change({ followsTempo: m === TEMPO_MODES[0] }, true, m === TEMPO_MODES[0] ? 'Sample follows the tempo' : 'Sample keeps its speed')}
+                      />
+                      <span className="sw-hint">{warped ? t('its warp markers hold it to the beat') : t(TEMPO_HINT[mode])}</span>
+                    </>
+                  )
+                })()}
               </div>
             </div>
           </FlatPanel>
