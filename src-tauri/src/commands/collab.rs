@@ -328,6 +328,7 @@ fn handle_project(
                             log::warn!("room: could not load the song's plug-ins: {e}");
                         }
                     });
+                    tell_windows_song_taken(app, engine, name);
                     log::info!("took the song \"{name}\" from the other side");
                 }
                 Err(e) => log::warn!("could not read the song they sent: {e}"),
@@ -378,6 +379,41 @@ pub(crate) fn take_room_song(
         engine.apply_track_mix(&master);
     }
     collab.remember_tracks(&engine.project.lock());
+}
+
+/// Every window shows the song taken from the room, as after opening one.
+///
+/// Nothing told them: the backend had the other side's song while the
+/// playlist, the mixer, the channel rack, the markers and the tempo still
+/// showed this side's old one, and the next edit in a window wrote its
+/// stale copy back into the song and so into the room. The parts go by
+/// the events a room edit of each already uses (taken there without being
+/// sent back); `daw:songTaken` has the track list read again and the song
+/// named as theirs, unsaved, so saving it asks where rather than writing
+/// over the song this side had open.
+fn tell_windows_song_taken(
+    app: &tauri::AppHandle,
+    engine: &Arc<parking_lot::Mutex<hardwave_engine::DawEngine>>,
+    name: &str,
+) {
+    let (rack, timeline) = {
+        let engine_guard = engine.lock();
+        let project = engine_guard.project.lock();
+        (
+            project.channel_rack_state.clone(),
+            project.timeline_state.clone(),
+        )
+    };
+    let _ = app.emit(
+        "daw:rackChanged",
+        serde_json::json!({ "payload": rack, "from": "room" }),
+    );
+    let _ = app.emit("daw:timelineChanged", timeline);
+    let _ = app.emit("daw:tempoChanged", ());
+    for section in ["arrangements", "macros", "vcas", "modulations"] {
+        let _ = app.emit("daw:songChanged", section);
+    }
+    let _ = app.emit("daw:songTaken", serde_json::json!({ "name": name }));
 }
 
 /// Apply one message and do what it asks of the transport.
