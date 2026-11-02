@@ -41,6 +41,11 @@ pub(crate) fn offline_insert_factory(
 /// `keep_effects` false the track's own effects, fader and sends go too and
 /// only an instrument stays: a consolidated clip stays on the track and
 /// would otherwise be run through them twice.
+///
+/// The track is rendered as it sounds unmuted and with nothing soloed. Its
+/// own mute button, or a solo on any other track, left it silent in the
+/// render: freezing a muted track froze silence, and consolidating while
+/// another track was soloed replaced the clips with an empty one.
 fn isolate_track_for_render(
     proj: &mut Project,
     target: &str,
@@ -48,6 +53,7 @@ fn isolate_track_for_render(
     is_instrument: &dyn Fn(&str) -> bool,
 ) {
     for t in proj.tracks.iter_mut() {
+        t.soloed = false;
         if matches!(t.kind, TrackKind::Master) {
             t.inserts.clear();
             t.volume_db = 0.0;
@@ -58,6 +64,7 @@ fn isolate_track_for_render(
         if t.id != target {
             continue;
         }
+        t.muted = false;
         t.output_bus = None;
         if !keep_effects {
             t.inserts.retain(|s| is_instrument(&s.plugin_id));
@@ -2443,6 +2450,27 @@ mod stem_and_freeze_tests {
             .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
         assert!(peak > 0.05, "the mix plays: {peak}");
         assert!(worst < 1e-3, "the stems add up to the mix: off by {worst}");
+    }
+
+    /// A muted track, or one silenced by a solo elsewhere, renders as it
+    /// sounds unmuted: freezing or bouncing it rendered silence.
+    #[test]
+    fn a_muted_track_or_a_solo_elsewhere_does_not_silence_the_render() {
+        let mut p = Project::default();
+        let vox = p.add_audio_track("Vox".into());
+        let drums = p.add_audio_track("Drums".into());
+        p.track_mut(&vox).unwrap().muted = true;
+        p.track_mut(&drums).unwrap().soloed = true;
+        p.track_mut(&drums).unwrap().muted = true;
+
+        super::isolate_track_for_render(&mut p, &vox, true, &|_| false);
+
+        assert!(!p.track(&vox).unwrap().muted);
+        assert!(p.tracks.iter().all(|t| !t.soloed), "no solo silences it");
+        assert!(
+            p.track(&drums).unwrap().muted,
+            "another track's own mute stays, as it keys sidechains as heard"
+        );
     }
 }
 
