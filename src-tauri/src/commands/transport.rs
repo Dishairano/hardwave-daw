@@ -514,15 +514,18 @@ pub fn set_position(state: State<AppState>, position: u64) {
     // The other person's playhead goes where yours does, so "listen
     // to this bit" means the same bar on both screens.
     {
-        let bpm = engine.transport.bpm.load(Ordering::Relaxed);
+        // The bar it is in, through the tempo map: at the transport's one
+        // tempo the other side was sent to another bar after a tempo change.
         let sample_rate = engine.current_sample_rate() as f64;
-        let beats = position as f64 / sample_rate * bpm / 60.0;
+        let tick = engine
+            .project
+            .lock()
+            .tempo_map
+            .samples_to_tick(position, sample_rate);
         state
             .collab
             .send(hardwave_project::multiplayer::SyncKind::Transport(
-                hardwave_project::multiplayer::TransportSync::Seek {
-                    tick: (beats * hardwave_midi::PPQ as f64) as u64,
-                },
+                hardwave_project::multiplayer::TransportSync::Seek { tick },
             ));
     }
     // Also queue for the audio thread so double-stop logic stays consistent.
@@ -551,9 +554,9 @@ pub fn set_position(state: State<AppState>, position: u64) {
     engine.send_command(TransportCommand::SetTimeSignature(num, den));
 }
 
+/// Set the song's opening tempo: the first entry of its tempo map.
 #[tauri::command]
 pub fn set_bpm(state: State<AppState>, bpm: f64) {
-    use std::sync::atomic::Ordering;
     if !bpm.is_finite() {
         return;
     }
@@ -563,13 +566,17 @@ pub fn set_bpm(state: State<AppState>, bpm: f64) {
     // history group, so this does not fill the list with one step per pixel.
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
-    engine.transport.bpm.store(bpm, Ordering::Relaxed);
-    engine.send_command(TransportCommand::SetBpm(bpm));
-    // Persist to project so save_project sees the current BPM.
-    let mut project = engine.project.lock();
-    if let Some(entry) = project.tempo_map.entries.get_mut(0) {
-        entry.bpm = bpm;
-    }
+    let before = {
+        let mut project = engine.project.lock();
+        let before = project.tempo_map.clone();
+        if let Some(entry) = project.tempo_map.entries.get_mut(0) {
+            entry.bpm = bpm;
+        }
+        before
+    };
+    // Only the transport's tempo changed here before: every note and clip
+    // stayed where the old tempo put it until something rebuilt the song.
+    crate::commands::project::after_tempo_change(&engine, &before);
 }
 
 /// Flip the transport's recording flag and start / stop the matching

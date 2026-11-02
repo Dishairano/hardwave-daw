@@ -1,6 +1,6 @@
 use crate::midi_map::MidiMapping;
 use crate::AppState;
-use hardwave_project::tempo::{TempoEntry, TempoRamp};
+use hardwave_project::tempo::{TempoEntry, TempoMap, TempoRamp};
 use hardwave_project::Project;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -482,6 +482,83 @@ fn ramp_from_str(s: &str) -> TempoRamp {
     }
 }
 
+/// Everything a change to the tempo map takes with it.
+///
+/// Audio that keeps its speed is made to cover its own audio again
+/// (`Project::follow_tempo_change`). The playhead, the loop and the punch
+/// range stay on the beats they were on, as the clips do. The transport
+/// reads the tempo and signature at the playhead, not the song's opening
+/// ones. And the graph is built again, because notes and clips are placed in
+/// samples from the map: the tempo field changed the map without that, so
+/// after typing a new tempo the song kept playing at the old one until
+/// something else rebuilt it.
+pub(crate) fn after_tempo_change(engine: &hardwave_engine::DawEngine, before: &TempoMap) {
+    use std::sync::atomic::Ordering;
+    let sample_rate = f64::from(engine.current_sample_rate().max(1));
+    let position = engine.transport.position();
+    let loop_range = (
+        engine.transport.loop_start.load(Ordering::Relaxed),
+        engine.transport.loop_end.load(Ordering::Relaxed),
+    );
+    let (punch_on, punch_in, punch_out) = engine.punch_samples();
+    let to_tick = |samples: u64| before.samples_to_tick(samples, sample_rate);
+    let (new_position, new_loop) = {
+        let mut project = engine.project.lock();
+        project.follow_tempo_change(before);
+        let map = &project.tempo_map;
+        // The same tick, where the new map puts it.
+        let kept = |samples: u64| map.tick_to_samples(to_tick(samples), sample_rate);
+        (kept(position), (kept(loop_range.0), kept(loop_range.1)))
+    };
+    if new_position != position {
+        engine.transport.set_position(new_position);
+        engine.send_command(hardwave_engine::TransportCommand::SetPosition(new_position));
+    }
+    if loop_range.1 > loop_range.0 && new_loop != loop_range {
+        engine
+            .transport
+            .loop_start
+            .store(new_loop.0, Ordering::Relaxed);
+        engine
+            .transport
+            .loop_end
+            .store(new_loop.1, Ordering::Relaxed);
+        engine.send_command(hardwave_engine::TransportCommand::SetLoop(
+            new_loop.0, new_loop.1,
+        ));
+    }
+    if punch_out > punch_in {
+        engine.set_punch_ticks(punch_on, to_tick(punch_in), to_tick(punch_out));
+    }
+    transport_follows_map(engine);
+    engine.rebuild_graph();
+}
+
+/// The transport's tempo and signature, read from the song's tempo map where
+/// the playhead is. While playing the audio thread does this every block;
+/// stopped, a new map (a tempo edit, an undo that brings back the old one)
+/// left the read-out and the click on the tempo from before.
+pub(crate) fn transport_follows_map(engine: &hardwave_engine::DawEngine) {
+    use std::sync::atomic::Ordering;
+    let sample_rate = f64::from(engine.current_sample_rate().max(1));
+    let position = engine.transport.position();
+    let (bpm, (num, den)) = {
+        let project = engine.project.lock();
+        let map = &project.tempo_map;
+        let tick = map.samples_to_tick(position, sample_rate);
+        (map.bpm_at(tick), map.time_sig_at(tick))
+    };
+    engine.transport.bpm.store(bpm, Ordering::Relaxed);
+    engine.send_command(hardwave_engine::TransportCommand::SetBpm(bpm));
+    engine.transport.time_sig.store(
+        hardwave_engine::transport::pack_time_sig(num, den),
+        Ordering::Relaxed,
+    );
+    engine.send_command(hardwave_engine::TransportCommand::SetTimeSignature(
+        num, den,
+    ));
+}
+
 /// Push the project's own time signature into the transport.
 ///
 /// The transport's signature is a pair of atomics the audio thread reads, and
@@ -574,15 +651,15 @@ pub fn add_tempo_entry(
     bpm: f64,
     ramp: String,
 ) -> Result<(), String> {
-    use std::sync::atomic::Ordering;
     if !bpm.is_finite() {
         return Err("bpm must be finite".into());
     }
     let bpm = bpm.clamp(20.0, 999.0);
     let engine = state.engine.lock();
     engine.snapshot_before_mutation();
-    {
+    let before = {
         let mut project = engine.project.lock();
+        let before = project.tempo_map.clone();
         if tick == 0 {
             return Err("Cannot add entry at tick 0 (that is the initial entry). Edit the first entry instead.".into());
         }
@@ -605,23 +682,19 @@ pub fn add_tempo_entry(
             ramp: ramp_from_str(&ramp),
         });
         project.tempo_map.entries.sort_by_key(|e| e.tick);
-        let first_bpm = project.tempo_map.entries[0].bpm;
-        engine.transport.bpm.store(first_bpm, Ordering::Relaxed);
-    }
-    engine.send_command(hardwave_engine::TransportCommand::SetBpm(
-        engine.transport.bpm.load(Ordering::Relaxed),
-    ));
-    engine.rebuild_graph();
+        before
+    };
+    after_tempo_change(&engine, &before);
     Ok(())
 }
 
 #[tauri::command]
 pub fn remove_tempo_entry(state: State<AppState>, index: usize) -> Result<(), String> {
-    use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
     engine.snapshot_before_mutation();
-    {
+    let before = {
         let mut project = engine.project.lock();
+        let before = project.tempo_map.clone();
         if index == 0 {
             return Err("Cannot remove the initial tempo entry at tick 0".into());
         }
@@ -629,13 +702,9 @@ pub fn remove_tempo_entry(state: State<AppState>, index: usize) -> Result<(), St
             return Err(format!("Index {index} out of range"));
         }
         project.tempo_map.entries.remove(index);
-        let first_bpm = project.tempo_map.entries[0].bpm;
-        engine.transport.bpm.store(first_bpm, Ordering::Relaxed);
-    }
-    engine.send_command(hardwave_engine::TransportCommand::SetBpm(
-        engine.transport.bpm.load(Ordering::Relaxed),
-    ));
-    engine.rebuild_graph();
+        before
+    };
+    after_tempo_change(&engine, &before);
     Ok(())
 }
 
@@ -647,15 +716,15 @@ pub fn set_tempo_entry(
     bpm: f64,
     ramp: String,
 ) -> Result<(), String> {
-    use std::sync::atomic::Ordering;
     if !bpm.is_finite() {
         return Err("bpm must be finite".into());
     }
     let bpm = bpm.clamp(20.0, 999.0);
     let engine = state.engine.lock();
     engine.snapshot_before_mutation();
-    {
+    let before = {
         let mut project = engine.project.lock();
+        let before = project.tempo_map.clone();
         if index >= project.tempo_map.entries.len() {
             return Err(format!("Index {index} out of range"));
         }
@@ -676,13 +745,9 @@ pub fn set_tempo_entry(
             entry.ramp = ramp_from_str(&ramp);
         }
         project.tempo_map.entries.sort_by_key(|e| e.tick);
-        let first_bpm = project.tempo_map.entries[0].bpm;
-        engine.transport.bpm.store(first_bpm, Ordering::Relaxed);
-    }
-    engine.send_command(hardwave_engine::TransportCommand::SetBpm(
-        engine.transport.bpm.load(Ordering::Relaxed),
-    ));
-    engine.rebuild_graph();
+        before
+    };
+    after_tempo_change(&engine, &before);
     Ok(())
 }
 
