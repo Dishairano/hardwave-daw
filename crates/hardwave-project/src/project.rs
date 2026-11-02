@@ -750,6 +750,53 @@ impl Project {
         self.tracks.iter_mut().find(|t| t.id == id)
     }
 
+    /// Move a clip from one track to another, to `position_ticks`.
+    ///
+    /// Everything is checked before the clip leaves its track. The clip used
+    /// to be taken off first, so a move the other track refused (an audio
+    /// clip dragged from one MIDI channel to the next) dropped it, and the
+    /// clip vanished from the song.
+    pub fn move_clip_to_track(
+        &mut self,
+        from_track_id: &str,
+        to_track_id: &str,
+        clip_id: &str,
+        position_ticks: u64,
+    ) -> Result<(), String> {
+        let from = self
+            .tracks
+            .iter()
+            .position(|t| t.id == from_track_id)
+            .ok_or_else(|| format!("Source track not found: {from_track_id}"))?;
+        let to = self
+            .tracks
+            .iter()
+            .position(|t| t.id == to_track_id)
+            .ok_or_else(|| format!("Destination track not found: {to_track_id}"))?;
+        let index = self.tracks[from]
+            .clips
+            .iter()
+            .position(|c| match &c.content {
+                crate::clip::ClipContent::Audio(a) => a.id == clip_id,
+                crate::clip::ClipContent::Midi(m) => m.id == clip_id,
+            })
+            .ok_or_else(|| format!("Clip not found on source track: {clip_id}"))?;
+        let content = &self.tracks[from].clips[index].content;
+        if !self.tracks[to].kind.holds(content) {
+            return Err(match content {
+                crate::clip::ClipContent::Audio(_) => {
+                    "An audio clip goes on an audio track or a MIDI channel".into()
+                }
+                crate::clip::ClipContent::Midi(_) => "A MIDI clip goes on a MIDI channel".into(),
+            });
+        }
+        let mut clip = self.tracks[from].clips.remove(index);
+        clip.position_ticks = position_ticks;
+        clip.track_id = to_track_id.to_string();
+        self.tracks[to].clips.push(clip);
+        Ok(())
+    }
+
     /// Upsert a plugin state chunk — replaces any prior chunk for the
     /// same `plugin_instance_id`. Called by the host when a plugin is
     /// destroyed so the next save captures its final state.
@@ -1584,5 +1631,116 @@ mod record_source_tests {
             vec![RecordSource::Interface(DEFAULT)],
             "the Audio settings input picked explicitly is the same input"
         );
+    }
+}
+
+#[cfg(test)]
+mod move_clip_tests {
+    use super::Project;
+    use crate::clip::{AudioClip, ClipContent, ClipPlacement, MidiClipRef};
+
+    fn audio(id: &str) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: id.into(),
+                name: id.into(),
+                source_path: "s".into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: 100,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: String::new(),
+                treatment: Default::default(),
+            }),
+            track_id: String::new(),
+            position_ticks: 0,
+            length_ticks: 960,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    fn midi(id: &str) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Midi(MidiClipRef {
+                id: id.into(),
+                clip: hardwave_midi::MidiClip::new(id.into(), id.into(), 960),
+            }),
+            ..audio(id)
+        }
+    }
+
+    fn ids_on(p: &Project, track: &str) -> Vec<String> {
+        p.track(track)
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Audio(a) => a.id.clone(),
+                ClipContent::Midi(m) => m.id.clone(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_refused_move_leaves_the_clip_where_it_was() {
+        let mut p = Project::default();
+        let audio_track = p.add_audio_track("Audio".into());
+        let channel = p.add_midi_track("Lead".into());
+        p.track_mut(&channel).unwrap().clips.push(midi("notes"));
+        let err = p
+            .move_clip_to_track(&channel, &audio_track, "notes", 1920)
+            .unwrap_err();
+        assert!(err.contains("MIDI channel"), "{err}");
+        assert_eq!(ids_on(&p, &channel), vec!["notes".to_string()]);
+        assert!(p
+            .move_clip_to_track(&channel, "missing", "notes", 0)
+            .is_err());
+        assert_eq!(
+            ids_on(&p, &channel),
+            vec!["notes".to_string()],
+            "still there after a move to a track that is gone"
+        );
+    }
+
+    #[test]
+    fn an_audio_clip_moves_from_one_midi_channel_to_another() {
+        // A consolidated part sits on its channel as an audio clip, and the
+        // engine plays it there. Dragging it to the next channel took it off
+        // its own and then refused it, so it was gone.
+        let mut p = Project::default();
+        let kick = p.add_midi_track("Kick".into());
+        let bass = p.add_midi_track("Bass".into());
+        p.track_mut(&kick).unwrap().clips.push(audio("part"));
+        p.move_clip_to_track(&kick, &bass, "part", 3840).unwrap();
+        assert!(ids_on(&p, &kick).is_empty());
+        assert_eq!(ids_on(&p, &bass), vec!["part".to_string()]);
+        let moved = &p.track(&bass).unwrap().clips[0];
+        assert_eq!(moved.position_ticks, 3840);
+        assert_eq!(moved.track_id, bass, "it knows its new track");
+    }
+
+    #[test]
+    fn a_midi_clip_moves_between_channels_and_audio_between_audio_tracks() {
+        let mut p = Project::default();
+        let a = p.add_audio_track("A".into());
+        let b = p.add_audio_track("B".into());
+        let m = p.add_midi_track("M".into());
+        let n = p.add_midi_track("N".into());
+        p.track_mut(&a).unwrap().clips.push(audio("vox"));
+        p.track_mut(&m).unwrap().clips.push(midi("notes"));
+        p.move_clip_to_track(&a, &b, "vox", 0).unwrap();
+        p.move_clip_to_track(&m, &n, "notes", 0).unwrap();
+        assert_eq!(ids_on(&p, &b), vec!["vox".to_string()]);
+        assert_eq!(ids_on(&p, &n), vec!["notes".to_string()]);
     }
 }

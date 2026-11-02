@@ -1507,10 +1507,9 @@ pub fn move_clip(
 
 /// Move a clip from one track to another at a new position.
 ///
-/// Both tracks must have a kind compatible with the clip content
-/// (audio clip ↔ audio track, midi clip ↔ midi track). Refuses the
-/// move otherwise so a stray vertical drag onto an audio track does
-/// not corrupt a midi-bearing chain.
+/// The destination has to play what the clip holds: an audio clip goes on
+/// an audio track or a MIDI channel, a MIDI clip on a MIDI channel. A move
+/// it refuses leaves the clip where it was.
 #[tauri::command]
 pub fn move_clip_to_track(
     state: State<AppState>,
@@ -1526,41 +1525,12 @@ pub fn move_clip_to_track(
     }
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-
-    // Pluck the clip out of the source track first so we hold no
-    // borrow when we touch the destination. Audio + Midi content
-    // types use independent id strings; check both shapes.
-    let src = project
-        .track_mut(&from_track_id)
-        .ok_or_else(|| format!("Source track not found: {}", from_track_id))?;
-    let idx = src
-        .clips
-        .iter()
-        .position(|c| match &c.content {
-            hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip_id,
-            hardwave_project::clip::ClipContent::Midi(mc) => mc.id == clip_id,
-        })
-        .ok_or_else(|| format!("Clip not found on source track: {}", clip_id))?;
-    let mut clip = src.clips.remove(idx);
-    clip.position_ticks = new_position_ticks;
-
-    let clip_is_audio = matches!(&clip.content, hardwave_project::clip::ClipContent::Audio(_));
-
-    let dst = project
-        .track_mut(&to_track_id)
-        .ok_or_else(|| format!("Destination track not found: {}", to_track_id))?;
-    let dst_is_audio = matches!(dst.kind, hardwave_project::track::TrackKind::Audio);
-    let dst_is_midi = matches!(dst.kind, hardwave_project::track::TrackKind::Midi);
-    if clip_is_audio && !dst_is_audio {
-        return Err("Cannot move audio clip to a non-audio track".into());
-    }
-    if !clip_is_audio && !dst_is_midi {
-        return Err("Cannot move MIDI clip to a non-MIDI track".into());
-    }
-    dst.clips.push(clip);
-
-    drop(project);
+    engine.project.lock().move_clip_to_track(
+        &from_track_id,
+        &to_track_id,
+        &clip_id,
+        new_position_ticks,
+    )?;
     engine.rebuild_graph();
     Ok(())
 }
