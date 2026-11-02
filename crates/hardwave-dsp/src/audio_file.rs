@@ -323,11 +323,31 @@ impl AudioFileReader {
                         ch_buf.extend(buf.chan(ch_idx).iter().map(|&s| s as f32 / 2147483648.0));
                     }
                 }
-                _ => {}
+                // 24-bit, what most sample packs' WAVs are, and the rarer
+                // depths: these were skipped, so the file came in with no
+                // audio at all and every clip of it played silence.
+                AudioBufferRef::S24(buf) => extend_channels(&mut channel_buffers, &buf),
+                AudioBufferRef::U24(buf) => extend_channels(&mut channel_buffers, &buf),
+                AudioBufferRef::S8(buf) => extend_channels(&mut channel_buffers, &buf),
+                AudioBufferRef::U8(buf) => extend_channels(&mut channel_buffers, &buf),
+                AudioBufferRef::U16(buf) => extend_channels(&mut channel_buffers, &buf),
+                AudioBufferRef::U32(buf) => extend_channels(&mut channel_buffers, &buf),
+                AudioBufferRef::F64(buf) => extend_channels(&mut channel_buffers, &buf),
             }
         }
 
         Ok((info, channel_buffers))
+    }
+}
+
+/// A decoded block, in whatever sample type the file holds, onto the end of
+/// each channel as -1 to 1.
+fn extend_channels<S>(channels: &mut [Vec<f32>], buf: &symphonia::core::audio::AudioBuffer<S>)
+where
+    S: symphonia::core::sample::Sample + symphonia::core::conv::IntoSample<f32>,
+{
+    for (ch_buf, ch_idx) in channels.iter_mut().zip(0..buf.spec().channels.count()) {
+        ch_buf.extend(buf.chan(ch_idx).iter().map(|&s| s.into_sample()));
     }
 }
 
@@ -374,6 +394,54 @@ mod hostile_files {
             (info.sample_rate, info.channels, ch[0].len()),
             (48_000, 2, 480)
         );
+    }
+
+    /// A WAV at `bits` written by hound, two channels, a frame at half
+    /// scale up and one at half scale down.
+    fn wav_at(bits: u16) -> Vec<u8> {
+        let path = std::env::temp_dir().join(format!("hw-depth-{}-{bits}.wav", std::process::id()));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: bits,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        let half = 1i32 << (bits - 2);
+        for _ in 0..100 {
+            for v in [half, -half] {
+                if bits == 8 {
+                    w.write_sample(v as i8).unwrap();
+                } else {
+                    w.write_sample(v).unwrap();
+                }
+            }
+        }
+        w.finalize().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        bytes
+    }
+
+    /// Most of a real FL project's samples were 24-bit WAVs: each read as a
+    /// file with no audio in it, so its clips played silence.
+    #[test]
+    fn every_bit_depth_reads_as_audio() {
+        for bits in [8u16, 16, 24, 32] {
+            let (info, ch) = read(&wav_at(bits)).unwrap();
+            assert_eq!((info.channels, ch.len()), (2, 2), "{bits}-bit");
+            assert_eq!(ch[0].len(), 100, "{bits}-bit: every frame");
+            assert!(
+                (ch[0][0] - 0.5).abs() < 0.01,
+                "{bits}-bit left: {}",
+                ch[0][0]
+            );
+            assert!(
+                (ch[1][0] + 0.5).abs() < 0.01,
+                "{bits}-bit right: {}",
+                ch[1][0]
+            );
+        }
     }
 
     #[test]

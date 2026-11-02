@@ -782,6 +782,130 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The founder's FL 26 project at 130 BPM, cut down to one clip: a
+    /// 126 BPM loop of 7.62 s (a 24-bit WAV at 44.1 kHz) whose TIME knob
+    /// fits it to 16 beats, placed for one bar from half way into it.
+    /// Through the command's own steps: the .flp read with its sample
+    /// beside it, the sample loaded as a song's open loads it, then each
+    /// clip finished from what was loaded. A 24-bit WAV loaded as no audio
+    /// at all, so the clip kept no stretch and started at the file's start,
+    /// and played silence.
+    #[test]
+    fn a_stretched_24_bit_loop_is_finished_from_the_sample_the_open_loads() {
+        fn event(body: &mut Vec<u8>, id: u8, data: &[u8]) {
+            body.push(id);
+            if id >= 192 {
+                let mut len = data.len();
+                loop {
+                    let byte = (len & 0x7F) as u8;
+                    len >>= 7;
+                    body.push(if len > 0 { byte | 0x80 } else { byte });
+                    if len == 0 {
+                        break;
+                    }
+                }
+            }
+            body.extend_from_slice(data);
+        }
+        let dir = std::env::temp_dir().join(format!("hw-flp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 24,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(dir.join("126_RvbBeat_01_663.wav"), spec).unwrap();
+        for i in 0..336_000i32 {
+            let v = ((i % 400) - 200) * 20_000;
+            w.write_sample(v).unwrap();
+            w.write_sample(-v).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let mut body = Vec::new();
+        event(&mut body, 156, &130_000u32.to_le_bytes()); // 130 BPM
+        event(&mut body, 64, &0u16.to_le_bytes());
+        event(&mut body, 21, &[4]); // an audio clip channel
+        let mut params = vec![0u8; 168];
+        // TIME 16 beats at FL's 192 a beat, the Auto stretch mode: the
+        // bytes as the founder's project has them.
+        params[96..112].copy_from_slice(&[
+            0x00, 0x00, 0x40, 0x45, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0, 0, 0,
+        ]);
+        event(&mut body, 215, &params);
+        let sample =
+            "C:\\Users\\DISHAI~1\\AppData\\Local\\Temp\\Image-Line\\126_RvbBeat_01_663.wav";
+        let mut text: Vec<u8> = sample
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
+        text.extend_from_slice(&[0, 0]);
+        event(&mut body, 196, &text);
+        let mut item = Vec::new();
+        item.extend_from_slice(&10_752u32.to_le_bytes());
+        item.extend_from_slice(&20480u16.to_le_bytes());
+        item.extend_from_slice(&0u16.to_le_bytes()); // channel 0
+        item.extend_from_slice(&384u32.to_le_bytes()); // a bar at 96 a beat
+        item.extend_from_slice(&499u16.to_le_bytes()); // playlist track 1
+        item.resize(24, 0);
+        item.extend_from_slice(&3_809.523_7f32.to_le_bytes()); // FL's start, ms
+        item.extend_from_slice(&5_714.274f32.to_le_bytes()); // FL's end, ms
+        event(&mut body, 233, &item);
+        let mut flp = b"FLhd".to_vec();
+        flp.extend_from_slice(&6u32.to_le_bytes());
+        flp.extend_from_slice(&0u16.to_le_bytes());
+        flp.extend_from_slice(&1u16.to_le_bytes());
+        flp.extend_from_slice(&96u16.to_le_bytes());
+        flp.extend_from_slice(b"FLdt");
+        flp.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        flp.extend_from_slice(&body);
+        let flp_path = dir.join("RyZe Take U TIme.flp");
+        std::fs::write(&flp_path, &flp).unwrap();
+
+        let (_, built) = build_from_flp(&flp_path, &SampleFinder::new(Some(&dir))).unwrap();
+        let engine = hardwave_engine::DawEngine::new();
+        let missing = engine
+            .audio_source_loader(None)
+            .load_sources_of(&built.project, |_, _| {});
+        assert!(missing.is_empty(), "{missing:?}");
+        let mut project = built.project;
+        apply_fixups(&mut project, &engine.audio_pool, &built.audio_fixups);
+
+        let clip = project
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .find_map(|c| match &c.content {
+                ClipContent::Audio(a) => Some(a.clone()),
+                _ => None,
+            })
+            .expect("the clip");
+        let frames = engine
+            .audio_pool
+            .get(&clip.source_path)
+            .map(|b| b.num_frames as f64)
+            .unwrap_or(0.0);
+        assert!(frames > 0.0, "the sample's audio is loaded");
+        assert!(
+            (clip.stretch_ratio - 0.969).abs() < 0.001,
+            "16 beats at 130 BPM from 7.62 s: {}",
+            clip.stretch_ratio
+        );
+        let at = |f: u64| f as f64 / frames;
+        assert!(
+            (at(clip.source_start) - 0.5).abs() < 1e-4,
+            "starts half way, as FL: {}",
+            at(clip.source_start)
+        );
+        assert!(
+            (at(clip.source_end) - 0.75).abs() < 1e-4,
+            "ends three quarters in, at FL's own end: {}",
+            at(clip.source_end)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_sample_beside_the_project_is_found_by_its_name() {
         let dir = std::env::temp_dir().join(format!("hw-flp-{}", uuid::Uuid::new_v4()));
