@@ -3652,7 +3652,12 @@ impl EngineCallback {
         let plan = {
             let project = self.project.lock();
             let mut acc = Vec::new();
-            for t in &project.tracks {
+            // A frozen track plays a render that already went through its
+            // plug-ins, and playback parks them (see `rebuild_graph`). They
+            // were loaded for every export all the same, so its effects ran
+            // twice and an instrument on it played over the render with no
+            // notes to play.
+            for t in project.tracks.iter().filter(|t| !t.frozen) {
                 for s in &t.inserts {
                     let state = project.plugin_state(&s.id).map(|e| e.chunk.clone());
                     acc.push((
@@ -7106,6 +7111,34 @@ mod offline_insert_tests {
         assert!(
             peak_without > 1e-3,
             "without the factory the source should still sound, got peak={peak_without}"
+        );
+    }
+
+    /// A frozen track's plug-ins stay out of an export, as they stay out
+    /// of playback: the render it plays already went through them.
+    #[test]
+    fn an_export_leaves_a_frozen_track_s_plug_ins_out() {
+        let engine = build_engine_with_silenced_sine();
+        {
+            let mut project = engine.project.lock();
+            for track in project.tracks.iter_mut().filter(|t| !t.inserts.is_empty()) {
+                for clip in track.clips.iter_mut() {
+                    clip.lane = hardwave_project::clip::FREEZE_LANE;
+                }
+                track.frozen = true;
+            }
+        }
+        let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
+            (id == "test.silencer").then(|| {
+                Box::new(Silencer {
+                    desc: silencer_desc(),
+                }) as Box<dyn HostedPlugin>
+            })
+        };
+        let peak = render_peak(&engine, Some(&factory));
+        assert!(
+            peak > 0.1,
+            "the frozen render plays, not run through the silencer again: peak {peak}"
         );
     }
 }
