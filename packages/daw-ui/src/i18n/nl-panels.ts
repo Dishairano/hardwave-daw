@@ -61,6 +61,7 @@ export const nlPanels: Record<string, string> = {
   'You are in the room': 'Je bent in de ruimte',
   'Everything you missed has been applied.': 'Alles wat je gemist hebt is toegepast.',
   'You were away too long to replay: ask them to send the project.': 'Je was te lang weg om alles na te spelen: vraag of ze het project sturen.',
+  'Get the song from them to start from what they have.': 'Haal het nummer van hen op om te beginnen met wat zij hebben.',
   'Room {room}, code {code}': 'Ruimte {room}, code {code}',
   'Invite copied': 'Uitnodiging gekopieerd',
   'Work together': 'Samenwerken',
