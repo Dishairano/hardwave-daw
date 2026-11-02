@@ -39,6 +39,18 @@ impl TrackKind {
     pub fn is_audio_bearing(&self) -> bool {
         !matches!(self, TrackKind::Master | TrackKind::Automation)
     }
+
+    /// Whether a track of this kind plays a clip of this content: an audio
+    /// clip on an audio track or on a MIDI channel (a consolidated part, a
+    /// sample dropped on it), a MIDI clip only on a MIDI channel.
+    pub fn holds(&self, content: &crate::clip::ClipContent) -> bool {
+        match content {
+            crate::clip::ClipContent::Audio(_) => {
+                matches!(self, TrackKind::Audio | TrackKind::Midi)
+            }
+            crate::clip::ClipContent::Midi(_) => matches!(self, TrackKind::Midi),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
