@@ -209,6 +209,15 @@ beside it plays as usual. "Every MIDI input" reads them all as the desk,
 which is how it worked before there was a choice. The switch, the
 protocol and the input are remembered between launches.
 
+A controller plugged in while the DAW runs (or while it was closed) is
+turned on by itself, and a message names it and says what its keys
+play, with Turn off. Turn off is remembered for that controller, so it
+never turns on by itself again; Settings > MIDI can still connect it. An
+input named like a desk is not opened as a keyboard: the message offers
+Use as control surface instead. Virtual ports (loopMIDI and the like)
+are left alone. Settings > MIDI also switches MIDI input off as a whole,
+and sets each input's velocity curve (every input starts on Linear).
+
 A MIDI track can also read MPE, from its own menu, so a controller can
 bend one note of a chord without bending the rest. And a track can take
 a tuning from a Scala file, which the built-in instruments follow; a

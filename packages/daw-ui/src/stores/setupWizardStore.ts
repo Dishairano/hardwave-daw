@@ -64,6 +64,9 @@ interface SetupWizardState {
    * engine's reason when the port would not open; the choice is kept, and
    * the engine opens the port when the device comes back. */
   setMidiInputEnabled: (portName: string, enabled: boolean) => Promise<void>
+  /** Remember an input as on or off without opening or closing it: a
+   * control surface offered once stays off unless it is taken up. */
+  rememberMidiInput: (portName: string, enabled: boolean) => void
 }
 
 /** Whether a MIDI input is on: what was chosen for it, or on when nothing
@@ -113,6 +116,8 @@ export const useSetupWizardStore = create<SetupWizardState>()(
         set((s) => ({ midiInputs: { ...s.midiInputs, [portName]: enabled } }))
         await invoke(enabled ? 'open_midi_input' : 'close_midi_input', { portName })
       },
+      rememberMidiInput: (portName, enabled) =>
+        set((s) => ({ midiInputs: { ...s.midiInputs, [portName]: enabled } })),
     }),
     {
       name: 'hw-setup-wizard',

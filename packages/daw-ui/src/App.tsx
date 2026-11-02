@@ -7,7 +7,7 @@ import type { MenuDef, MenuItem } from './components/HwTopMenu'
 import { usePatternStore } from './stores/patternStore'
 import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from './stores/uiPreferencesStore'
 import { Roadmap } from './components/roadmap/Roadmap'
-import { AudioSettings, focusSettingsTab } from './components/settings/AudioSettings'
+import { AudioSettings, focusSettingsTab, type SettingsTab } from './components/settings/AudioSettings'
 import { ThemePicker } from './components/settings/ThemePicker'
 import { useMixerSettingsStore } from './stores/mixerSettingsStore'
 import { usePlaylistToolStore } from './stores/playlistToolStore'
@@ -41,6 +41,7 @@ import { VirtualKeyboard } from './components/transport/VirtualKeyboard'
 import './components/transport/VirtualKeyboard.css'
 import { SetupWizard } from './components/SetupWizard'
 import './components/SetupWizard.css'
+import { startMidiHotplug } from './lib/midiHotplug'
 import { ProjectInfoDialog } from './components/ProjectInfoDialog'
 import { TempoTapper } from './components/TempoTapper'
 import { applySavedAudioPrefs } from './stores/audioPrefsStore'
@@ -866,6 +867,17 @@ export function App() {
     return () => { for (const u of unlistens) u() }
   }, [])
 
+  // A message (a controller plugged in) opens Settings on a tab.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const tab = (e as CustomEvent<SettingsTab | undefined>).detail
+      if (tab) focusSettingsTab(tab)
+      setShowAudioSettings(true)
+    }
+    window.addEventListener('daw:openSettings', open)
+    return () => window.removeEventListener('daw:openSettings', open)
+  }, [])
+
   // The tempo menu and the SIG pill open the tempo map.
   useEffect(() => {
     const open = () => setShowTempoMap(true)
@@ -1031,6 +1043,9 @@ export function App() {
     // them on every launch or they only apply in the session they were set.
     applySavedMidiInputSettings()
     applySavedAudioPrefs()
+    // A controller plugged in later (or while the DAW was closed) is turned
+    // on by itself, with a message.
+    void startMidiHotplug()
 
     // Cancellation flag matches the pattern used at :397-402 below — if
     // the splash is dismissed (or the effect tears down) before the
