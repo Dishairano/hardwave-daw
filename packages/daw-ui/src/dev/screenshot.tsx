@@ -377,6 +377,37 @@ function Harness() {
           <StemsDialog trackId="t" clipId="c" clipName="Vocal bounce" onClose={noop} />
         </div>
       )
+    // The account at the top right: ?account=pro (default) | free | trial |
+    // cancelled | staff | signedout | ended | offline, and ?open=1 opens
+    // its panel the way a click does.
+    case 'account': {
+      const which = params.get('account') || 'pro'
+      const signedIn = (plan: unknown) => ({
+        state: 'signedIn', name: 'Dishairano', email: 'dis…@hardwavestudios.com', plan,
+      })
+      const scenes: Record<string, unknown> = {
+        pro: signedIn({ kind: 'pro', via: 'subscription', until: null }),
+        trial: signedIn({ kind: 'pro', via: 'trial', until: null }),
+        cancelled: signedIn({ kind: 'pro', via: 'subscription', until: '2026-12-12' }),
+        staff: signedIn({ kind: 'pro', via: 'staff', until: null }),
+        free: signedIn({ kind: 'free' }),
+        signedout: { state: 'signedOut' },
+        ended: { state: 'ended' },
+        offline: { state: 'unreachable' },
+      }
+      ;(globalThis as { __hwAccount?: unknown }).__hwAccount = scenes[which] ?? scenes.pro
+      if (params.get('open')) {
+        setTimeout(() => (document.querySelector('.hw-acct') as HTMLElement | null)?.click(), 600)
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Raw Drop">
+            <HwSecondRow />
+          </HwTopbar>
+          <Arrangement onSetHint={noop} />
+        </div>
+      )
+    }
     case 'perftest':
       // Press Start the way a person would, so the shot shows a result.
       setTimeout(() => {

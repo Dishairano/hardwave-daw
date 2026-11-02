@@ -8,14 +8,14 @@
  *   node scripts/screenshot.mjs                 # sweep all panels → /tmp/daw-<panel>.png
  *   node scripts/screenshot.mjs playlist out.png  # one panel to a file
  *
- * Panels: playlist | mixer | channelrack | pianoroll | wizard | browser | settings | macros | presets | midifx | manual | modulation | reference | scripts | spectral | session | collab | presence | workspace | newproject | perftest | stems | collabhost
+ * Panels: playlist | mixer | channelrack | pianoroll | wizard | browser | settings | macros | presets | midifx | manual | modulation | reference | scripts | spectral | session | collab | presence | workspace | newproject | perftest | stems | collabhost | account
  */
 import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account']
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL
@@ -76,6 +76,10 @@ try {
       // SHOT_MENU=1 opens its right-click menu.
       + (process.env.SHOT_PLUGIN ? `&id=${process.env.SHOT_PLUGIN}` : '')
       + (process.env.SHOT_MENU ? '&menu=1' : '')
+      // SHOT_ACCOUNT=free shows the account in that state (panel account);
+      // SHOT_OPEN=1 opens its panel.
+      + (process.env.SHOT_ACCOUNT ? `&account=${process.env.SHOT_ACCOUNT}` : '')
+      + (process.env.SHOT_OPEN ? '&open=1' : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     await page.screenshot({ path: out, scale: 'device' })

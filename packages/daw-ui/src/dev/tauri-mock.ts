@@ -261,6 +261,27 @@ const mock: TauriInternals = {
         return '/home/user/Documents/Hardwave/From Workspace/Raw Drop/Raw Drop.hwp'
       case 'save_to_workspace':
         return { workspace: 'Dishaion', folder: '/Hardwave DAW/Raw Drop', sent: 3, unchanged: 6, missing: [] }
+      // The Hardwave account (commands/account.rs). A scene sets
+      // `__hwAccount`; signing in with the password "wrong" is refused
+      // the way the site refuses it.
+      case 'account_status':
+        return (globalThis as { __hwAccount?: unknown }).__hwAccount ?? { state: 'signedOut' }
+      case 'account_sign_in': {
+        if (args?.password === 'wrong') {
+          throw 'That e-mail address and password do not match an account.'
+        }
+        const signedIn = {
+          state: 'signedIn', name: 'Dishairano', email: 'dis…@hardwavestudios.com',
+          plan: { kind: 'pro', via: 'subscription', until: null },
+        }
+        ;(globalThis as { __hwAccount?: unknown }).__hwAccount = signedIn
+        return signedIn
+      }
+      case 'account_sign_out':
+        ;(globalThis as { __hwAccount?: unknown }).__hwAccount = { state: 'signedOut' }
+        return { state: 'signedOut' }
+      case 'account_open_page':
+        return null
       case 'collab_status':
         // A screenshot scene can put the room in a state of its own.
         return (globalThis as { __hwCollabStatus?: unknown }).__hwCollabStatus
