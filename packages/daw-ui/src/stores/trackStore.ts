@@ -78,6 +78,17 @@ export function inputLabel(channel: InputChannel | null | undefined): string {
   return channel.mono ? `In ${channel.first + 1}` : `In ${channel.first + 1}-${channel.first + 2}`
 }
 
+/** One clip's part in a finished playlist drag: where it was and where it
+ *  ends up, and for a resize its length before and after. */
+export interface ClipDragEdit {
+  trackId: string
+  clipId: string
+  fromPositionTicks: number
+  positionTicks: number
+  fromLengthTicks?: number
+  lengthTicks?: number
+}
+
 export interface ClipInfo {
   id: string
   name: string
@@ -387,15 +398,10 @@ interface TrackState {
   moveClipLocal: (trackId: string, clipId: string, newPositionTicks: number) => void
   /// Same idea as moveClipLocal but for resize — local-only length update.
   resizeClipLocal: (trackId: string, clipId: string, newLengthTicks: number) => void
-  /// Persist a clip's final post-drag position+length to the backend in
-  /// one IPC + one fetchTracks. Call this once on mouseup after a drag
-  /// that used moveClipLocal/resizeClipLocal.
-  commitClipDrag: (
-    trackId: string,
-    clipId: string,
-    newPositionTicks: number,
-    newLengthTicks?: number,
-  ) => Promise<void>
+  /// Persist a finished drag that used moveClipLocal/resizeClipLocal: each
+  /// clip's final position, and for a resize its length, as one undo step.
+  /// Only what changed is sent, so a click that moved nothing is no step.
+  commitClipDrag: (edits: ClipDragEdit[], label: string) => Promise<void>
   /// Persist a dragged left edge: the start is cut off (or a cut start comes
   /// back) and everything after it keeps playing where it did.
   commitClipTrimStart: (trackId: string, clipId: string, newPositionTicks: number) => Promise<void>
@@ -572,9 +578,11 @@ export const useTrackStore = create<TrackState>((set, get) => ({
 
   beginHistoryGroup: async () => {
     // A failure here only costs finer-grained undo, so it is not worth a
-    // toast: the mutations still happen.
+    // toast: the mutations still happen. A begin inside an open group is
+    // part of it (the engine ignores it too), so the group keeps the time
+    // it started and its name still finds the step it took.
+    if (!historyGroupOpen) historyGroupSince = Date.now()
     historyGroupOpen = true
-    historyGroupSince = Date.now()
     await invoke('begin_history_group').catch(() => {})
   },
 
@@ -1055,15 +1063,29 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     }))
   },
 
-  commitClipDrag: async (trackId, clipId, newPositionTicks, newLengthTicks) => {
-    // Single IPC roundtrip at the end of the drag. We deliberately skip
-    // the per-frame fetchTracks() that the regular moveClip/resizeClip
-    // would do — the store has been kept in sync optimistically by
-    // moveClipLocal/resizeClipLocal during the drag, so one final
-    // fetchTracks at the end is enough to reconcile with the backend.
-    await invoke('move_clip', { trackId, clipId, newPositionTicks })
-    if (newLengthTicks !== undefined) {
-      await invoke('resize_clip', { trackId, clipId, newLengthTicks })
+  commitClipDrag: async (edits, label) => {
+    // Sent once at the end of the drag. We deliberately skip the per-frame
+    // fetchTracks() that the regular moveClip/resizeClip would do: the
+    // store has been kept in sync optimistically by moveClipLocal /
+    // resizeClipLocal during the drag, so one final fetchTracks at the end
+    // is enough to reconcile with the backend.
+    //
+    // Every command used to be sent, each its own undo step: a click on a
+    // clip left a step that changed nothing, a resize took two undos and a
+    // group of clips moved together came back one clip per undo.
+    const moves = edits.filter(e => e.positionTicks !== e.fromPositionTicks)
+    const resizes = edits.filter(e => e.lengthTicks !== undefined && e.lengthTicks !== e.fromLengthTicks)
+    if (moves.length === 0 && resizes.length === 0) return
+    await get().beginHistoryGroup()
+    try {
+      for (const e of moves) {
+        await invoke('move_clip', { trackId: e.trackId, clipId: e.clipId, newPositionTicks: e.positionTicks })
+      }
+      for (const e of resizes) {
+        await invoke('resize_clip', { trackId: e.trackId, clipId: e.clipId, newLengthTicks: e.lengthTicks })
+      }
+    } finally {
+      await get().endHistoryGroup(label)
     }
     await get().fetchTracks()
   },

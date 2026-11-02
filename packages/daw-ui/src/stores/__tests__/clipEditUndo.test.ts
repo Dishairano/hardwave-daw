@@ -48,4 +48,59 @@ describe('clip edits and undo', () => {
     ])
     expect(labelsSent()).toEqual(['Delete 3 clips'])
   })
+
+  it('a click on a clip that moved nothing is no undo step', async () => {
+    await useTrackStore.getState().commitClipDrag(
+      [{ trackId: 'a', clipId: 'c1', fromPositionTicks: 0, positionTicks: 0 }],
+      'Move clip',
+    )
+    expect(sent()).toEqual([])
+  })
+
+  it('a resize sends only the new length, as one step', async () => {
+    await useTrackStore.getState().commitClipDrag(
+      [{ trackId: 'a', clipId: 'c1', fromPositionTicks: 0, positionTicks: 0, fromLengthTicks: 960, lengthTicks: 1920 }],
+      'Resize clip',
+    )
+    expect(sent()).toEqual(['begin_history_group', 'resize_clip', 'end_history_group', 'label_undo_step'])
+    expect(labelsSent()).toEqual(['Resize clip'])
+  })
+
+  it('a group of clips moved together is one step', async () => {
+    await useTrackStore.getState().commitClipDrag(
+      [
+        { trackId: 'a', clipId: 'c1', fromPositionTicks: 0, positionTicks: 480 },
+        { trackId: 'a', clipId: 'c2', fromPositionTicks: 960, positionTicks: 1440 },
+        { trackId: 'b', clipId: 'c3', fromPositionTicks: 0, positionTicks: 480 },
+      ],
+      'Move 3 clips',
+    )
+    expect(sent()).toEqual([
+      'begin_history_group',
+      'move_clip', 'move_clip', 'move_clip',
+      'end_history_group',
+      'label_undo_step',
+    ])
+    expect(labelsSent()).toEqual(['Move 3 clips'])
+  })
+
+  it('a drag that already opened its step keeps it open until the release closes it', async () => {
+    // A move onto another track opens the step while the clip is still held.
+    const store = useTrackStore.getState()
+    await store.beginHistoryGroup()
+    await store.moveClipToTrack('a', 'b', 'c1', 480)
+    await store.commitClipDrag(
+      [{ trackId: 'b', clipId: 'c1', fromPositionTicks: 480, positionTicks: 960 }],
+      'Move clip to track',
+    )
+    expect(sent()).toEqual([
+      'begin_history_group',
+      'move_clip_to_track',
+      'begin_history_group',
+      'move_clip',
+      'end_history_group',
+      'label_undo_step',
+    ])
+    expect(labelsSent()).toEqual(['Move clip to track'])
+  })
 })
