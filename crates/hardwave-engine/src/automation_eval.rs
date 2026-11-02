@@ -20,9 +20,19 @@ pub struct AutomatedMix {
     pub pan_automated: bool,
 }
 
+/// The bottom of a volume lane is silence, as the bottom of a send lane is
+/// and as the fader reads it (-∞). It played -60 dB, so a fade-out drawn
+/// all the way down left the part playing quietly under what came next.
 fn db_to_linear(db: f64) -> f32 {
-    10.0_f64.powf(db / 20.0) as f32
+    if db <= VOLUME_LANE_FLOOR_DB {
+        0.0
+    } else {
+        10.0_f64.powf(db / 20.0) as f32
+    }
 }
+
+/// The level at the bottom of a volume lane, in dB.
+const VOLUME_LANE_FLOOR_DB: f64 = -60.0;
 
 /// Evaluate `lanes` then `clips` at `tick`. Where both drive the same thing
 /// the clip wins, as in FL. Plug-in parameters are stored 0..1 and reach
@@ -114,6 +124,37 @@ mod tests {
         let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
         assert_eq!(mix.volume_linear, 0.8);
         assert_eq!(mix.mute, None);
+    }
+
+    /// A volume lane drawn to the bottom is silence, not -60 dB, whether it
+    /// is a lane or an automation clip.
+    #[test]
+    fn the_bottom_of_a_volume_lane_is_silence() {
+        use hardwave_project::automation::{AutomationPoint, CurveMode};
+        let lane = AutomationLane {
+            id: "l".into(),
+            target: AutomationTarget::TrackVolume,
+            points: vec![AutomationPoint {
+                tick: 0,
+                value: 0.0,
+                curve: CurveMode::Linear,
+                tension: 0.0,
+            }],
+            visible: true,
+        };
+        let mut chain = InsertChain::new();
+        let mix = evaluate(&[lane], &[], 0, 0.8, 0.0, &mut chain);
+        assert_eq!(mix.volume_linear, 0.0);
+
+        let mut clip = AutomationClip::new("c", AutomationTarget::TrackVolume, 0, 960);
+        clip.lane.points = vec![AutomationPoint {
+            tick: 0,
+            value: 0.0,
+            curve: CurveMode::Linear,
+            tension: 0.0,
+        }];
+        let mix = evaluate(&[], &[clip], 10, 0.8, 0.0, &mut chain);
+        assert_eq!(mix.volume_linear, 0.0);
     }
 
     /// A new automation clip has no points yet: the track keeps its fader
