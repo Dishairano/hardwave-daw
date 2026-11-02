@@ -491,6 +491,8 @@ pub fn run() {
             commands::modulation::set_modulation,
             commands::modulation::delete_modulation,
             commands::starter::create_starter_song,
+            commands::new_song::add_new_song_channels,
+            commands::new_song::get_drum_folder,
             commands::stems::separate_stems,
             commands::stems::stop_stems,
             commands::stems::stems_service,

@@ -3,7 +3,8 @@
     "createUpdaterArtifacts": false,
     "resources": [
       "test_assets/*",
-      "binaries/*"
+      "binaries/*",
+      "drums/*"
     ],
     "windows": {
       "signCommand": null

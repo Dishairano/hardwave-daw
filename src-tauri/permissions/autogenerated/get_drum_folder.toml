@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-drum-folder"
+description = "Enables the get_drum_folder command without any pre-configured scope."
+commands.allow = ["get_drum_folder"]
+
+[[permission]]
+identifier = "deny-get-drum-folder"
+description = "Denies the get_drum_folder command without any pre-configured scope."
+commands.deny = ["get_drum_folder"]

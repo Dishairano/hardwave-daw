@@ -95,6 +95,7 @@ import { useTrackStore } from './stores/trackStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import type { LayoutName, PanelKey } from './lib/workspaceLayout'
 import { SILENT_SEND_DB, TEMPLATE_ROWS, mixingTemplateSends, templateRowTargets } from './lib/templateRows'
+import { startNewSong } from './stores/instrumentChannels'
 import { followSelectionInPianoRoll } from './stores/pianoRollBinding'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
@@ -1230,15 +1231,21 @@ export function App() {
         // The song template the DAW starts with, when one is picked and no
         // crash is waiting to be recovered.
         const startWith = useGeneralPrefsStore.getState().startupTemplate
+        let fromTemplate = false
         if (!crashed && startWith && !useProjectStore.getState().filePath) {
           try {
             await useProjectStore.getState().newFromSongTemplate(startWith)
             await useTrackStore.getState().fetchTracks()
+            fromTemplate = true
           } catch {
-            // The template is gone: start empty and stop asking for it.
+            // The template is gone: start new and stop asking for it.
             useGeneralPrefsStore.getState().setStartupTemplate(null)
           }
         }
+        // Otherwise the song the DAW starts with is a new one, and a new
+        // song opens with its drums: closing the setup wizard, or the start
+        // screen, leaves a rack that plays.
+        if (!fromTemplate && !useProjectStore.getState().filePath) await startNewSong()
       } catch {}
     })()
 
@@ -1506,11 +1513,8 @@ export function App() {
       })
       return
     }
-    if (id === 'beat4') {
-      await ts.addAudioTrack('Kick')
-      await ts.addAudioTrack('Snare')
-      await ts.addAudioTrack('Hi-Hat')
-      await ts.addAudioTrack('Bass')
+    if (id === 'drums') {
+      await startNewSong()
     } else if (id === 'vocal' || id === 'mixing') {
       // On the first playlist rows, where they are seen (see templateRows).
       await ts.fetchTracks()
