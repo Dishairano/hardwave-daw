@@ -28,6 +28,7 @@ pub mod sidechain_routing;
 pub mod step_rack;
 pub mod templates;
 pub mod tempo;
+pub mod tempo_follow;
 pub mod track;
 pub mod vca;
 

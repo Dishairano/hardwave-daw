@@ -554,12 +554,16 @@ fn apply_surface(
         cs::SurfaceAction::Tempo { bpm } => {
             let bpm = bpm.clamp(20.0, 999.0);
             let eng = engine.lock();
-            eng.transport.bpm.store(bpm, Ordering::Relaxed);
-            eng.send_command(hardwave_engine::transport::TransportCommand::SetBpm(bpm));
-            let mut project = eng.project.lock();
-            if let Some(entry) = project.tempo_map.entries.get_mut(0) {
-                entry.bpm = bpm;
-            }
+            let before = {
+                let mut project = eng.project.lock();
+                let before = project.tempo_map.clone();
+                if let Some(entry) = project.tempo_map.entries.get_mut(0) {
+                    entry.bpm = bpm;
+                }
+                before
+            };
+            // The song follows, as it does from the tempo field.
+            crate::commands::project::after_tempo_change(&eng, &before);
         }
         cs::SurfaceAction::Pan { strip, value } => {
             let Some(track_id) = track_of(strip) else {

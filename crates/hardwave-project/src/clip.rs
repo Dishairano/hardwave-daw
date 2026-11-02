@@ -119,6 +119,13 @@ pub struct SampleTreatment {
     pub load_regions: bool,
     #[serde(default)]
     pub load_slices: bool,
+    /// The tempo the sample is in, when it follows the song's tempo: at that
+    /// tempo it plays at its own speed, and a faster or slower song stretches
+    /// it along, pitch kept, so a loop stays on the beat. None keeps its
+    /// speed: it plays as recorded from where it starts, whatever the tempo
+    /// does. Last, like every field added after the file format was set.
+    #[serde(default)]
+    pub follow_bpm: Option<f64>,
 }
 
 fn one() -> f64 {
@@ -141,6 +148,7 @@ impl Default for SampleTreatment {
             declick: DeclickMode::OutOnly,
             load_regions: false,
             load_slices: false,
+            follow_bpm: None,
         }
     }
 }
@@ -248,6 +256,31 @@ impl AudioClip {
         } else {
             stretch
         }
+    }
+
+    /// Whether the clip is held to the beat when the tempo changes: it
+    /// follows the tempo, or warp markers pin its audio to ticks.
+    pub fn follows_tempo(&self) -> bool {
+        self.follow_bpm().is_some() || !self.warp_markers.is_empty()
+    }
+
+    /// The tempo a clip that follows the tempo is in, when it has a usable one.
+    pub fn follow_bpm(&self) -> Option<f64> {
+        self.treatment
+            .follow_bpm
+            .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+    }
+
+    /// How many frames of its file (at `file_rate`) a clip that follows the
+    /// tempo plays per tick, whatever the tempo is: that is what keeps it on
+    /// the beat. None for a clip that keeps its speed.
+    pub fn file_frames_per_tick(&self, file_rate: f64) -> Option<f64> {
+        let bpm = self.follow_bpm()?;
+        let factor = self.time_factor();
+        if file_rate <= 0.0 || factor <= 0.0 {
+            return None;
+        }
+        Some(file_rate * 60.0 / (hardwave_midi::PPQ as f64 * bpm * factor))
     }
 }
 
