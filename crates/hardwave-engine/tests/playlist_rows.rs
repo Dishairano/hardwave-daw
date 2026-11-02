@@ -1,5 +1,6 @@
 //! Playlist rows as the engine hears them: a row's switch (FL's track
-//! mute) and solo silence what sits on the row, wherever it plays through.
+//! mute) and solo silence what sits on the row, wherever it plays through;
+//! an automation clip moves the knob of the track it targets.
 
 mod common;
 
@@ -196,4 +197,40 @@ fn an_automation_clip_on_a_muted_row_does_not_move_its_knob() {
     engine.project.lock().rows[1].muted = true;
     let out = render(&engine, 6);
     assert!(peak(&out, 3, 5) > 0.3, "its row is off: the volume stays");
+}
+
+/// FL's automation clip is a channel of its own: placed on an automation
+/// track, it moves the knob of the track it names.
+#[test]
+fn an_automation_clip_moves_the_track_it_targets() {
+    let (engine, id) = held_tone();
+    let auto = {
+        let mut p = engine.project.lock();
+        let auto = p.add_automation_track("Pad volume".into());
+        p.track_mut(&auto).unwrap().automation_clips.push(duck(&id));
+        auto
+    };
+    let untargeted = render(&engine, 6);
+    assert!(
+        peak(&untargeted, 3, 5) > 0.3,
+        "with no target it moves its own (automation) track: nothing"
+    );
+    engine
+        .project
+        .lock()
+        .track_mut(&auto)
+        .unwrap()
+        .automation_clips[0]
+        .target_track = Some(id.clone());
+    let out = render(&engine, 6);
+    assert!(peak(&out, 0, 2) > 0.3, "before the clip");
+    assert!(peak(&out, 3, 5) < 0.01, "the clip turns the pad down");
+    // Its row switched off: the knob stays where it is.
+    {
+        let mut p = engine.project.lock();
+        p.track_mut(&auto).unwrap().automation_clips[0].row = Some(0);
+        p.rows[0].muted = true;
+    }
+    let out = render(&engine, 6);
+    assert!(peak(&out, 3, 5) > 0.3);
 }
