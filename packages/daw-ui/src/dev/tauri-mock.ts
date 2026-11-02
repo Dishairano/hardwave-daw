@@ -129,6 +129,35 @@ const mockListeners = new Map<string, Array<(e: { event: string; id: number; pay
 const mockCalls: Array<{ cmd: string; args?: Record<string, unknown> }> = []
 ;(window as unknown as { __hwMockCalls?: typeof mockCalls }).__hwMockCalls = mockCalls
 
+/** MIDI inputs and the control surface as the backend would hold them, so
+ *  a spec can open an input or pick the desk and read the result back. The
+ *  surface is on, so the settings' MIDI tab shows the desk pickers; no
+ *  input is open until one is opened. */
+const mockMidiOpen: string[] = []
+const mockSurface = {
+  enabled: true,
+  bank: 0,
+  bankCount: 3,
+  protocol: 'mackie' as 'mackie' | 'hui',
+  // null until a desk input is chosen: an open input named like a desk is
+  // then the desk, "found".
+  chosen: null as { input: string | null } | null,
+}
+const mockDeskStatus = () => {
+  const found = mockSurface.chosen === null
+    ? mockMidiOpen.find(p => /\b(x-?touch|mcu|mackie|icon|platform|faderport|uf8|hui)\b/i.test(p)) ?? null
+    : null
+  const input = mockSurface.chosen ? mockSurface.chosen.input : found
+  return {
+    enabled: mockSurface.enabled,
+    bank: mockSurface.bank,
+    bankCount: mockSurface.bankCount,
+    protocol: mockSurface.protocol,
+    input,
+    found: found !== null,
+  }
+}
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   unregisterCallback: () => {},
@@ -387,9 +416,18 @@ const mock: TauriInternals = {
       case 'set_worker_threads':
         return null
       case 'get_control_surface':
-        return { enabled: false, bank: 0, bankCount: 3 }
+        return mockDeskStatus()
       case 'set_control_surface_enabled':
+        mockSurface.enabled = Boolean(args?.enabled)
+        return null
       case 'set_control_surface_bank':
+        mockSurface.bank = Number(args?.bank ?? 0)
+        return null
+      case 'set_control_surface_protocol':
+        mockSurface.protocol = args?.protocol === 'hui' ? 'hui' : 'mackie'
+        return null
+      case 'set_control_surface_input':
+        mockSurface.chosen = { input: (args?.input as string | null | undefined) || null }
         return null
       case 'get_channel_offsets':
         return { input: 0, output: 0 }
@@ -728,11 +766,22 @@ const mock: TauriInternals = {
       case 'get_input_meter':
         return { peak_l: 0, peak_r: 0, running: false, sample_rate: 48000, buffer_size: 512 }
       case 'list_midi_inputs':
-        // Two named ports so the setup wizard's device and velocity steps can
-        // be photographed with something in them.
-        return ['Akai MPK Mini mk3', 'Novation Launchkey 49']
+        // Named ports so the setup wizard's device and velocity steps can
+        // be photographed with something in them, and a desk beside the
+        // keyboards for the control surface's input picker.
+        return ['Akai MPK Mini mk3', 'Novation Launchkey 49', 'X-Touch']
+      case 'open_midi_input': {
+        const port = String(args?.portName ?? '')
+        if (port && !mockMidiOpen.includes(port)) mockMidiOpen.push(port)
+        return null
+      }
+      case 'close_midi_input': {
+        const at = mockMidiOpen.indexOf(String(args?.portName ?? ''))
+        if (at >= 0) mockMidiOpen.splice(at, 1)
+        return null
+      }
       case 'get_midi_activity':
-        return { open_ports: [], ms_since_last_event: null }
+        return { open_ports: [...mockMidiOpen], ms_since_last_event: null }
       // Event plugin — let listeners register harmlessly.
       case 'plugin:event|listen': {
         const ev = String(args?.event ?? '')
