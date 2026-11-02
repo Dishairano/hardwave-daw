@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { hw } from '../../theme'
 import { usePluginStore } from '../../stores/pluginStore'
+import { hasSuitePlugins } from '../../stores/pluginCatalogStore'
 import { useTrackStore } from '../../stores/trackStore'
 import { useBrowserStore, isSameOrInsideDiskPath, type FolderNode } from '../../stores/browserStore'
 import { useSampleEditorStore } from '../../stores/sampleEditorStore'
@@ -342,7 +343,7 @@ function PluginsTab() {
       {/* The Hardwave plug-ins are free in here and paid in every
           other host, which is worth saying where a producer is
           looking for plug-ins rather than only on the website. */}
-      {!scanning && !plugins.some(p => (p.vendor || '').toLowerCase().includes('hardwave')) && (
+      {!scanning && !hasSuitePlugins(plugins) && (
         <div style={{
           margin: '6px 8px', padding: 10, fontSize: 12, lineHeight: 1.5,
           color: hw.textSecondary, background: 'rgba(255,255,255,0.03)',

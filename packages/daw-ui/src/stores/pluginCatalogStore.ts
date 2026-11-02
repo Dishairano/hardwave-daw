@@ -50,6 +50,16 @@ export function isHardwaveNative(p: Pick<PluginDescriptor, 'vendor'>): boolean {
   return vendor === 'hardwave' || vendor === 'hardwave studios'
 }
 
+/**
+ * Whether any Hardwave plug-in from the Suite is installed. The built-ins
+ * are Hardwave's too, and always there, so they do not count: the
+ * browser's note pointing at the Suite asked "is there anything by
+ * Hardwave?" and never showed, the built-ins always answering yes.
+ */
+export function hasSuitePlugins(plugins: Pick<PluginDescriptor, 'id' | 'vendor'>[]): boolean {
+  return plugins.some((p) => isHardwaveNative(p) && !p.id.startsWith('hardwave.native.'))
+}
+
 interface PluginCatalogState {
   plugins: PluginDescriptor[]
   loaded: boolean
