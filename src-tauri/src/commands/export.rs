@@ -1977,24 +1977,33 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
         if let Some(track) = project.track_mut(&source_track_id) {
-            for placement in track.clips.iter_mut() {
-                let is_render = match &placement.content {
-                    hardwave_project::clip::ClipContent::Audio(ac) => ac.id == clip.clip_id,
-                    hardwave_project::clip::ClipContent::Midi(_) => false,
-                };
-                if is_render {
-                    placement.lane = hardwave_project::clip::FREEZE_LANE;
-                }
-            }
-            track.frozen = true;
+            place_freeze_render(track, &clip.clip_id);
         }
     }
     state.engine.lock().rebuild_graph();
     Ok(rendered)
 }
 
-/// Put the live chain back. The render stays on the freeze lane, so
-/// freezing again with nothing changed is instant.
+/// Move a freeze render onto the track's freeze lane and freeze the track.
+/// The render an earlier freeze left there goes: a frozen track plays every
+/// clip on that lane, so freezing, unfreezing and freezing again played the
+/// old render and the new one together, crossfading from one to the other
+/// across the whole song.
+fn place_freeze_render(track: &mut hardwave_project::track::Track, clip_id: &str) {
+    use hardwave_project::clip::{ClipContent, FREEZE_LANE};
+    track
+        .clips
+        .retain(|placement| placement.lane != FREEZE_LANE);
+    for placement in track.clips.iter_mut() {
+        if matches!(&placement.content, ClipContent::Audio(ac) if ac.id == clip_id) {
+            placement.lane = FREEZE_LANE;
+        }
+    }
+    track.frozen = true;
+}
+
+/// Put the live chain back. The render stays on the freeze lane until the
+/// track is frozen again.
 #[tauri::command]
 pub fn unfreeze_track(state: State<AppState>, track_id: String) -> Result<(), String> {
     state.engine.lock().snapshot_before_mutation();
@@ -2255,6 +2264,36 @@ mod stem_and_freeze_tests {
             pre_fader: false,
             enabled: true,
         }
+    }
+
+    #[test]
+    fn freezing_again_replaces_the_render_the_last_freeze_left() {
+        let mut p = Project::default();
+        let id = p.add_audio_track("Vox".into());
+        let t = p.track_mut(&id).unwrap();
+        t.clips.push(audio("take", "take", 100, &id));
+        let mut old = audio("old-render", "old", 100, &id);
+        old.lane = FREEZE_LANE;
+        t.clips.push(old);
+        // Unfrozen, then frozen again: the new render lands on lane 0 first.
+        t.clips.push(audio("new-render", "new", 100, &id));
+
+        super::place_freeze_render(t, "new-render");
+
+        assert!(t.frozen);
+        let on_lane: Vec<(&str, u32)> = t
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Audio(a) => (a.id.as_str(), c.lane),
+                ClipContent::Midi(m) => (m.id.as_str(), c.lane),
+            })
+            .collect();
+        assert_eq!(
+            on_lane,
+            [("take", 0), ("new-render", FREEZE_LANE)],
+            "one render on the freeze lane, the part where it was"
+        );
     }
 
     #[test]
