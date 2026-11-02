@@ -170,6 +170,18 @@ pub fn split_clip(
     // A MIDI clip shorter than its content lets go of everything past its
     // end, so the left part needs no notes removed.
     clip.length_ticks = at_ticks - start;
+    // The fades belong to the clip's outer edges. Both parts used to keep
+    // both, so a split faded the sound out and back in at the cut, a dip
+    // that was not there before. A fade the cut runs through stays with its
+    // own edge, as long as that part, so the level at the cut still meets.
+    if let ClipContent::Audio(a) = &mut clip.content {
+        a.fade_in_ticks = a.fade_in_ticks.min(clip.length_ticks);
+        a.fade_out_ticks = 0;
+    }
+    if let ClipContent::Audio(a) = &mut right.content {
+        a.fade_in_ticks = 0;
+        a.fade_out_ticks = a.fade_out_ticks.min(right.length_ticks);
+    }
     Ok(right)
 }
 
@@ -610,6 +622,46 @@ mod tests {
         let three_beats = map.tick_to_samples(4 * BEAT, RATE) - map.tick_to_samples(BEAT, RATE);
         assert_near(source_start(&c), three_beats, "left half: the last beat");
         assert_eq!(source_start(&right), 0);
+    }
+
+    fn fades(c: &ClipPlacement) -> (u64, u64) {
+        match &c.content {
+            ClipContent::Audio(a) => (a.fade_in_ticks, a.fade_out_ticks),
+            ClipContent::Midi(_) => panic!("audio clip expected"),
+        }
+    }
+
+    #[test]
+    fn a_split_keeps_the_fades_on_the_outer_edges_and_none_at_the_cut() {
+        let mut a = audio(0, 8 * beat_samples());
+        a.fade_in_ticks = BEAT;
+        a.fade_out_ticks = 2 * BEAT;
+        let mut c = placed(ClipContent::Audio(a), 0, 8 * BEAT);
+        let right = split_clip(&mut c, 4 * BEAT, "r", &TempoMap::default(), RATE, 1.0).unwrap();
+        assert_eq!(fades(&c), (BEAT, 0), "the left part fades in only");
+        assert_eq!(
+            fades(&right),
+            (0, 2 * BEAT),
+            "the right part fades out only"
+        );
+    }
+
+    #[test]
+    fn a_split_inside_a_fade_leaves_it_on_its_own_edge_as_long_as_that_part() {
+        let mut a = audio(0, 8 * beat_samples());
+        a.fade_in_ticks = 3 * BEAT;
+        a.fade_out_ticks = 3 * BEAT;
+        let mut c = placed(ClipContent::Audio(a.clone()), 0, 8 * BEAT);
+        let right = split_clip(&mut c, BEAT, "r", &TempoMap::default(), RATE, 1.0).unwrap();
+        // The left part is all fade-in and reaches full level at the cut,
+        // where the right part starts at full level.
+        assert_eq!(fades(&c), (BEAT, 0));
+        assert_eq!(fades(&right), (0, 3 * BEAT));
+
+        let mut c = placed(ClipContent::Audio(a), 0, 8 * BEAT);
+        let right = split_clip(&mut c, 7 * BEAT, "r", &TempoMap::default(), RATE, 1.0).unwrap();
+        assert_eq!(fades(&c), (3 * BEAT, 0));
+        assert_eq!(fades(&right), (0, BEAT), "all fade-out, from full level");
     }
 
     #[test]
