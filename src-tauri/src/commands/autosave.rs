@@ -216,6 +216,7 @@ mod tests {
                 warp_markers: Vec::new(),
                 source_file: file.into(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "insert-001".into(),
             position_ticks: 0,

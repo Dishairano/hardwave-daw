@@ -2371,6 +2371,7 @@ mod stem_and_freeze_tests {
                 fade_out_curve: Default::default(),
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: track.into(),
             position_ticks: 0,
