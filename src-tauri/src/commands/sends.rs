@@ -75,27 +75,12 @@ pub fn list_sends(state: State<AppState>) -> Vec<SendEdge> {
     out
 }
 
-/// Returns true if `src` can reach `dst` by following existing send edges.
-/// Used to reject cycles at add-time so the topological sort always terminates.
+/// Returns true if `src` can reach `dst`: by sends, and by outputs and
+/// sidechain keys too. Used to reject cycles at add-time. Only sends were
+/// followed, so a bus could send back into a track routed to it, and the
+/// loop silenced the whole song.
 fn send_path_exists(project: &hardwave_project::Project, src: &str, dst: &str) -> bool {
-    let mut stack = vec![src.to_string()];
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    while let Some(cur) = stack.pop() {
-        if cur == dst {
-            return true;
-        }
-        if !seen.insert(cur.clone()) {
-            continue;
-        }
-        if let Some(track) = project.track(&cur) {
-            for send in &track.sends {
-                if send.enabled {
-                    stack.push(send.target.clone());
-                }
-            }
-        }
-    }
-    false
+    hardwave_project::mixer::feeds(&project.tracks, src, dst)
 }
 
 #[tauri::command]

@@ -18,6 +18,47 @@ pub struct ChannelStrip {
     pub pan: f64,
 }
 
+/// Whether sound leaving track `from` arrives at track `to`: through its
+/// output, an enabled send, or as the sidechain key of a plug-in, and on
+/// from there. Routing `to` into `from` in any of those ways would close a
+/// loop. Sends used to be checked only against sends, and outputs only
+/// against outputs, so a bus could send back into a track playing into it.
+pub fn feeds(tracks: &[crate::track::Track], from: &str, to: &str) -> bool {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut stack: Vec<&str> = vec![from];
+    while let Some(id) = stack.pop() {
+        if id == to {
+            return true;
+        }
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(track) = tracks.iter().find(|t| t.id == id) else {
+            continue;
+        };
+        stack.extend(track.output_bus.as_deref());
+        stack.extend(
+            track
+                .sends
+                .iter()
+                .filter(|s| s.enabled)
+                .map(|s| s.target.as_str()),
+        );
+        // A track with a plug-in keyed from this one takes its sound too.
+        stack.extend(
+            tracks
+                .iter()
+                .filter(|t| {
+                    t.inserts
+                        .iter()
+                        .any(|slot| slot.sidechain_source.as_deref() == Some(id))
+                })
+                .map(|t| t.id.as_str()),
+        );
+    }
+    false
+}
+
 /// The tracks that stay audible while some are soloed, or None when none
 /// is. A soloed track is heard through everything its sound passes on its
 /// way out (its bus, that bus's bus, the tracks it sends to), and a soloed
@@ -87,6 +128,40 @@ mod tests {
             .unwrap_or_default();
         ids.sort();
         ids
+    }
+
+    /// A bus a track plays into, through its output, a send or a sidechain
+    /// key, is fed by that track; a track elsewhere is not.
+    #[test]
+    fn feeds_follows_outputs_sends_and_sidechain_keys() {
+        let mut vox = track("vox", Some("bus"), false);
+        vox.inserts.push(crate::track::PluginSlot {
+            id: "comp".into(),
+            plugin_id: "compressor".into(),
+            enabled: true,
+            state: None,
+            sidechain_source: Some("kick".into()),
+            wet: 1.0,
+        });
+        let mut bus = track("bus", None, false);
+        bus.sends.push(Send {
+            target: "reverb".into(),
+            gain_db: 0.0,
+            pre_fader: false,
+            enabled: true,
+        });
+        let tracks = [
+            vox,
+            bus,
+            track("reverb", None, false),
+            track("kick", None, false),
+            track("lead", None, false),
+        ];
+        assert!(feeds(&tracks, "vox", "bus"), "by its output");
+        assert!(feeds(&tracks, "vox", "reverb"), "on through the bus's send");
+        assert!(feeds(&tracks, "kick", "reverb"), "as a key, then onward");
+        assert!(!feeds(&tracks, "reverb", "vox"));
+        assert!(!feeds(&tracks, "lead", "bus"));
     }
 
     #[test]

@@ -1913,6 +1913,12 @@ fn set_plugin_sidechain_source_body(
         if project.track(src).is_none() {
             return Err(format!("Source track not found: {}", src));
         }
+        // Keyed from a track this one plays into (its bus, or a track it
+        // sends to): the key would need this track's sound first. The loop
+        // silenced the whole song.
+        if hardwave_project::mixer::feeds(&project.tracks, &track_id, src) {
+            return Err("This track plays into that one; keying from it would make a loop".into());
+        }
     }
 
     let track = project

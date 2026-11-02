@@ -1487,22 +1487,12 @@ pub fn set_track_output_bus(
             if !project.tracks.iter().any(|t| &t.id == bus_id) {
                 return Err("target track not found".into());
             }
-            // Reject obvious cycles: if the target already routes (directly or
-            // transitively) back to this track, the routing would form a loop.
-            let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-            let mut cursor = Some(bus_id.clone());
-            while let Some(next) = cursor {
-                if next == track_id {
-                    return Err("routing would form a cycle".into());
-                }
-                if !visited.insert(next.clone()) {
-                    break;
-                }
-                cursor = project
-                    .tracks
-                    .iter()
-                    .find(|t| t.id == next)
-                    .and_then(|t| t.output_bus.clone());
+            // Reject cycles: if the target already reaches this track (by
+            // its output, a send or a sidechain key), routing into it would
+            // form a loop. Only outputs were followed, so a track could be
+            // routed into a bus that sent back to it.
+            if hardwave_project::mixer::feeds(&project.tracks, bus_id, &track_id) {
+                return Err("routing would form a cycle".into());
             }
         }
         if let Some(track) = project.track_mut(&track_id) {

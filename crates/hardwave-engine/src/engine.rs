@@ -4849,6 +4849,19 @@ impl EngineCallback {
                 if dst_node == src_node {
                     continue;
                 }
+                // A send into something that already plays into this track
+                // (a bus it is routed to, through outputs, other sends or a
+                // sidechain) would close a loop, and a loop silenced the
+                // whole song: the graph runs nothing in or after it. The
+                // send is left out and everything else plays.
+                if self.graph.reaches(dst_node, src_node) {
+                    log::warn!(
+                        "send {send_index} from track {} to {} would loop back; left out",
+                        track.id,
+                        send.target
+                    );
+                    continue;
+                }
                 let gain = if send.gain_db <= -100.0 {
                     0.0
                 } else {
@@ -4917,6 +4930,16 @@ impl EngineCallback {
                 }
             }
             for src_node in sources {
+                // Keyed from a track this one plays into (its own bus): the
+                // key would need this track's sound before it is made. The
+                // loop silenced everything, as with a send; it is left out.
+                if self.graph.reaches(dst_node, src_node) {
+                    log::warn!(
+                        "sidechain into track {} from a track it plays into would loop back; left out",
+                        track.id
+                    );
+                    continue;
+                }
                 self.graph.connect_with_gain(src_node, 0, dst_node, 2, 1.0);
                 self.graph.connect_with_gain(src_node, 1, dst_node, 3, 1.0);
             }
@@ -7838,6 +7861,50 @@ mod monitoring_tests {
             level > 0.2,
             "the bus carries the input to master, got {level}"
         );
+    }
+
+    /// The vocal playing into its bus, and the bus pointed back at the
+    /// vocal: by a send, or as the key of a compressor on the vocal.
+    fn song_with_loop_back(by_send: bool) -> Project {
+        let mut song = armed_song();
+        let mut bus = hardwave_project::Track::new_audio("bus".into(), "Vocal bus".into());
+        let vox = song.tracks.iter_mut().find(|t| t.id == "vox").unwrap();
+        vox.output_bus = Some("bus".into());
+        if by_send {
+            bus.sends.push(hardwave_project::mixer::Send {
+                target: "vox".into(),
+                gain_db: 0.0,
+                pre_fader: false,
+                enabled: true,
+            });
+        } else {
+            vox.inserts.push(hardwave_project::track::PluginSlot {
+                id: "comp".into(),
+                plugin_id: "compressor".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: Some("bus".into()),
+                wet: 1.0,
+            });
+        }
+        song.tracks.push(bus);
+        song
+    }
+
+    /// A send or a sidechain key that loops back made the graph skip the
+    /// loop and everything after it, master included: one click in a send
+    /// or sidechain menu and the whole song went silent. The loop is left
+    /// out and the rest plays.
+    #[test]
+    fn a_send_or_key_that_loops_back_does_not_silence_the_song() {
+        for by_send in [true, false] {
+            let mut r = rig(song_with_loop_back(by_send));
+            let level = heard(&mut r);
+            assert!(
+                level > 0.2,
+                "by send: {by_send}, the vocal still reaches the master, got {level}"
+            );
+        }
     }
 
     /// A song with one track playing a steady 0.5 for a second, and an
