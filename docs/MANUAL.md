@@ -186,11 +186,20 @@ Settings > MIDI also joins an Ableton Link session: the tempo and the
 start and stop are then shared with everything else on the network that
 speaks Link, and the row says how many other apps are in the session.
 
-Settings > MIDI switches on a Mackie Control (MCU) desk: eight faders
-with mute, solo and arm, the transport keys, and bank left and right,
-with the faders and mute lights sent back when you change bank or mute
-from the desk. HUI is not supported yet, and the scribble strips and the
-LED rings are not driven.
+Settings > MIDI switches on a control surface: a desk speaking Mackie
+Control (MCU) or HUI, picked beside the switch. It gives you eight
+faders with mute, solo and arm, the V-pots for pan, the transport keys,
+and bank left and right. The motor faders, lights and LED rings follow
+the mix, and the scribble strips show each track's name (with its level
+on a Mackie desk; a HUI desk has room for four letters).
+
+The next picker says which MIDI input is the desk. An input named like a
+known desk (X-Touch, MCU, Mackie, iCON, Platform, FaderPort, UF8, HUI) is
+picked by itself and marked "found"; a desk with another name is picked
+by hand. Only that input is read as the desk, so a keyboard plugged in
+beside it plays as usual. "Every MIDI input" reads them all as the desk,
+which is how it worked before there was a choice. The switch, the
+protocol and the input are remembered between launches.
 
 A MIDI track can also read MPE, from its own menu, so a controller can
 bend one note of a chord without bending the rest. And a track can take
