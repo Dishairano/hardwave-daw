@@ -1243,6 +1243,7 @@ impl AudioNode for MidiTrackNode {
 
         let mut peak_l = 0.0_f32;
         let mut peak_r = 0.0_f32;
+        let mut pre_peak = 0.0_f32;
         let mut energy_acc = 0.0_f32;
 
         // KickSynth voicing: render the block into a temp buffer up-front,
@@ -1815,6 +1816,18 @@ impl AudioNode for MidiTrackNode {
                 start,
                 self.stereo_separation,
             );
+            // The pre-fader tap on ports 2/3, as an audio track has it, and
+            // the pre-fader peak taken from it. Nothing wrote 2/3 here, so a
+            // pre-fader send from an instrument track sent silence, and the
+            // pre-fader meter showed the post-fader level.
+            for i in 0..n {
+                pre_peak = pre_peak.max(first[0][i].abs()).max(rest[0][i].abs());
+            }
+            if let [right, tap_l, tap_r, ..] = rest {
+                let m = n.min(tap_l.len()).min(tap_r.len());
+                tap_l[..m].copy_from_slice(&first[0][..m]);
+                tap_r[..m].copy_from_slice(&right[..m]);
+            }
             let (g0, g1) = self.gain_ramp.step((vol * pan_l, vol * pan_r));
             crate::track_node::apply_ramped(&mut first[0][..n], &mut rest[0][..n], g0, g1);
             for i in 0..n {
@@ -1825,6 +1838,7 @@ impl AudioNode for MidiTrackNode {
             }
         } else if let Some(buf) = outputs.get_mut(0) {
             for s in buf.iter_mut().take(block_size) {
+                pre_peak = pre_peak.max(s.abs());
                 *s *= vol * pan_l;
                 peak_l = peak_l.max(s.abs());
                 energy_acc += *s * *s;
@@ -1837,7 +1851,7 @@ impl AudioNode for MidiTrackNode {
         let to_db = |v: f32| if v > 0.0 { 20.0 * v.log10() } else { -120.0 };
         let peak_db_l = to_db(peak_l);
         let peak_db_r = to_db(peak_r);
-        let pre_peak_db = peak_db_l.max(peak_db_r);
+        let pre_peak_db = to_db(pre_peak);
         let rms_inst = (energy_acc / block_size as f32).sqrt();
         // Smoothing: ~100 ms time-constant at typical block sizes.
         self.rms_smooth = self.rms_smooth * 0.9 + rms_inst * 0.1;
@@ -2107,6 +2121,29 @@ mod tests {
             peak > 0.0,
             "live NoteOn should produce audible output, got peak={peak}"
         );
+    }
+
+    /// A pre-fader send reads ports 2/3. An instrument track left them at
+    /// zero, so its pre-fader sends were silent; with the fader all the way
+    /// down they still carry the synth, and the pre-fader meter sees it.
+    #[test]
+    fn the_pre_fader_tap_carries_the_sound_with_the_fader_down() {
+        let mut node = make_node();
+        node.set_volume_db(-200.0);
+        let mut out = vec![vec![0.0_f32; 256]; 4];
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let events = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 69,
+            velocity: 0.9,
+        }];
+        node.process(&inputs, &mut out, &events, &mut Vec::new(), &ctx);
+        let peak = |ch: &[f32]| ch.iter().fold(0.0_f32, |a, b| a.max(b.abs()));
+        assert!(peak(&out[0]) < 1e-6, "the fader is down");
+        assert!(peak(&out[2]) > 0.01 && peak(&out[3]) > 0.01);
+        assert!(node.meter.pre_fader_peak_db.load(Ordering::Relaxed) > -60.0);
     }
 
     /// A chord held on the keyboard when another track is picked: the
