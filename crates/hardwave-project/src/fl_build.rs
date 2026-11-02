@@ -1675,6 +1675,7 @@ mod tests {
             current_arrangement: 0,
             pattern_colors: Vec::new(),
             playlist_track_colors: Vec::new(),
+            rack_groups: Vec::new(),
         }
     }
 
