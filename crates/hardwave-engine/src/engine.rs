@@ -2831,7 +2831,11 @@ impl DawEngine {
             Arc::clone(&self.record_last_pos),
             worker_pool,
             Arc::clone(&self.reference),
-            Arc::clone(&self.reference_on),
+            // A render is the song. The reference switch, left on from
+            // comparing, made the master play the reference record in place
+            // of the mix, so an export (or a freeze, a bounce, a stem) was
+            // somebody else's record.
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
             Arc::clone(&self.reference_gain_centi_db),
             // An export plays the song as written, not whatever was
             // launched when the button was pressed, so the render gets
@@ -8897,6 +8901,30 @@ mod track_render_tests {
 
     fn peak(s: &[f32]) -> f32 {
         s.iter().fold(0.0f32, |m, &v| m.max(v.abs()))
+    }
+
+    /// A render is the song even with the reference switched on for
+    /// comparing: that made the export the reference record.
+    #[test]
+    fn a_render_is_the_mix_with_the_reference_switched_on() {
+        let (engine, _id, len) = sine_song();
+        let heard = render(&engine, len, |_| {});
+        engine.audio_pool.insert(
+            "record".to_string(),
+            crate::AudioBuffer {
+                channels: vec![vec![0.9; len as usize], vec![0.9; len as usize]],
+                sample_rate: SR,
+                num_frames: len as usize,
+            },
+        );
+        engine.set_reference_source(Some("record"));
+        engine.set_reference_on(true);
+        let exported = render(&engine, len, |_| {});
+        let diff = worst_difference(&heard, &exported);
+        assert!(
+            diff < 1e-6,
+            "the export is the mix, not the record: worst difference {diff}"
+        );
     }
 
     /// A bounced part plays back as loud as the part it replaced. It came
