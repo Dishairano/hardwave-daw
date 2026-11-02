@@ -44,20 +44,24 @@ pub fn new_project(state: State<AppState>) {
     }
 }
 
-#[tauri::command]
-pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> {
-    // Ask the audio thread to snapshot plug-in state BEFORE we take the
-    // project lock. snapshot_plugin_states blocks the UI thread on a
-    // SyncReceiver while the audio thread harvests `get_state()` from
-    // every loaded plug-in. With a 500 ms timeout the call almost
-    // always returns within one or two audio blocks — and on the rare
-    // miss we silently fall back to whatever was previously written.
-    let snapshot = {
-        let engine = state.engine.lock();
-        engine.snapshot_plugin_states(std::time::Duration::from_millis(500))
-    };
+/// What belongs to the song but lives outside it until it is written:
+/// every plug-in's settings as it plays now, and the MIDI Learn mappings.
+pub(crate) struct LiveState {
+    plugin_states: Option<std::collections::HashMap<(String, String), Vec<u8>>>,
+    midi_mappings: Option<String>,
+}
 
-    let mapping_blob = {
+/// Read the live state. The plug-ins are asked BEFORE the song's lock is
+/// taken: `snapshot_plugin_states` waits while the audio thread harvests
+/// `get_state()` from every loaded plug-in. With a 500 ms timeout the call
+/// almost always returns within one or two audio blocks, and on the rare
+/// miss the song keeps the settings it last had.
+pub(crate) fn live_state(state: &AppState) -> LiveState {
+    let plugin_states = state
+        .engine
+        .lock()
+        .snapshot_plugin_states(std::time::Duration::from_millis(500));
+    let midi_mappings = {
         let m = state.midi_mappings.lock();
         if m.mappings.is_empty() {
             None
@@ -65,25 +69,47 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
             serde_json::to_string(&m.mappings).ok()
         }
     };
-    let engine = state.engine.lock();
-    let mut project = engine.project.lock();
-    // Flush the live timeline into the active arrangement so the saved
-    // file reflects exactly what's on screen.
-    project.capture_active_arrangement();
-    project.midi_mappings = mapping_blob;
+    LiveState {
+        plugin_states,
+        midi_mappings,
+    }
+}
 
-    // Write the harvested plug-in states into the project before we
-    // serialize. Looked up by slot_id so future `hydrate_chains_from_project`
-    // can replay the bytes via `plugin.set_state(...)`.
-    if let Some(map) = snapshot {
-        for (track_id, slot_id) in map.keys().cloned().collect::<Vec<_>>() {
-            // Format hint defaults to "unknown" — load only cares about
-            // matching slot_id, the format is preserved per slot's
-            // descriptor lookup at hydrate time.
-            let bytes = map[&(track_id.clone(), slot_id.clone())].clone();
-            project.set_plugin_state(slot_id, "unknown", bytes);
+impl LiveState {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        plugin_states: std::collections::HashMap<(String, String), Vec<u8>>,
+        midi_mappings: Option<String>,
+    ) -> Self {
+        Self {
+            plugin_states: Some(plugin_states),
+            midi_mappings,
         }
     }
+
+    /// Write it into `project`, and the live timeline into the active
+    /// arrangement, so the file holds exactly what is on screen and playing.
+    pub(crate) fn write_into(self, project: &mut Project) {
+        project.capture_active_arrangement();
+        project.midi_mappings = self.midi_mappings;
+        // Looked up by slot id, so `hydrate_chains_from_project` can replay
+        // the bytes through `plugin.set_state(...)`. The format hint is
+        // "unknown": loading only matches the slot id, and the format comes
+        // from the slot's descriptor when the plug-in is made.
+        if let Some(map) = self.plugin_states {
+            for ((_, slot_id), bytes) in map {
+                project.set_plugin_state(slot_id, "unknown", bytes);
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> {
+    let live = live_state(&state);
+    let engine = state.engine.lock();
+    let mut project = engine.project.lock();
+    live.write_into(&mut project);
 
     let target = PathBuf::from(&path);
     let result = project.save(&target).map_err(|e| e.to_string());
