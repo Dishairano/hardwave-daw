@@ -8,14 +8,14 @@
  *   node scripts/screenshot.mjs                 # sweep all panels → /tmp/daw-<panel>.png
  *   node scripts/screenshot.mjs playlist out.png  # one panel to a file
  *
- * Panels: playlist | mixer | channelrack | pianoroll | wizard | browser | settings | macros | presets | midifx | manual | modulation | reference | scripts | spectral | session | collab | presence | workspace | newproject | perftest | stems | collabhost | account
+ * Panels: playlist | mixer | channelrack | pianoroll | wizard | newcontroller | browser | settings | macros | presets | midifx | manual | modulation | reference | scripts | spectral | session | collab | presence | workspace | newproject | perftest | stems | collabhost | account
  */
 import { spawn } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'wizard', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account']
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL
@@ -67,6 +67,8 @@ try {
       + (process.env.SHOT_TIMESIG_AT ? `&timesigat=${process.env.SHOT_TIMESIG_AT}` : '')
       // SHOT_STEP=velocity opens the setup wizard on that step.
       + (process.env.SHOT_STEP ? `&step=${process.env.SHOT_STEP}` : '')
+      // SHOT_KIND=desk: a control surface is plugged in (newcontroller).
+      + (process.env.SHOT_KIND ? `&kind=${process.env.SHOT_KIND}` : '')
       // SHOT_TONE=1: Settings > Audio just after Apply, the test tone playing.
       + (process.env.SHOT_TONE ? '&tone=1' : '')
       // SHOT_TAB=midi opens the settings window on that tab.

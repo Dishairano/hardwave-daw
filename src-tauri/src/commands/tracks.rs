@@ -739,6 +739,67 @@ pub fn set_keyboard_track(state: State<AppState>, track_id: Option<String>) {
     }
 }
 
+/// What a MIDI keyboard plays now, for the message that says a controller
+/// was turned on: the armed tracks when any are, otherwise the one channel
+/// the keyboard follows.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct KeyboardTarget {
+    /// Names of the tracks armed for input.
+    pub armed: Vec<String>,
+    /// The channel played when nothing is armed, by name.
+    pub keyboard: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_keyboard_target(state: State<AppState>) -> KeyboardTarget {
+    let engine = state.engine.lock();
+    let project = engine.project.lock();
+    keyboard_target(&project)
+}
+
+fn keyboard_target(project: &hardwave_project::Project) -> KeyboardTarget {
+    let armed: Vec<String> = project
+        .tracks
+        .iter()
+        .filter(|t| {
+            t.armed && t.monitor_input && !matches!(t.kind, hardwave_project::TrackKind::Master)
+        })
+        .map(|t| t.name.clone())
+        .collect();
+    let keyboard = hardwave_engine::engine::keyboard_track_of(project)
+        .and_then(|id| project.tracks.iter().find(|t| t.id == id))
+        .map(|t| t.name.clone());
+    KeyboardTarget { armed, keyboard }
+}
+
+#[cfg(test)]
+mod keyboard_target_tests {
+    use super::*;
+    use hardwave_project::{Project, Track};
+
+    #[test]
+    fn the_keys_play_the_armed_tracks_or_the_channel_followed() {
+        let mut project = Project::default();
+        assert_eq!(
+            keyboard_target(&project),
+            KeyboardTarget {
+                armed: vec![],
+                keyboard: None
+            },
+            "a new song has nothing to play"
+        );
+        project
+            .tracks
+            .push(Track::new_midi("lead".into(), "Lead".into()));
+        assert_eq!(keyboard_target(&project).keyboard.as_deref(), Some("Lead"));
+        let mut bass = Track::new_midi("bass".into(), "Bass".into());
+        bass.armed = true;
+        bass.monitor_input = true;
+        project.tracks.push(bass);
+        assert_eq!(keyboard_target(&project).armed, vec!["Bass".to_string()]);
+    }
+}
+
 /// One saved mixer state: every track's fader, pan, mute and solo, its
 /// width, its sends, and each plug-in: whether it is on, how much of it is
 /// heard, and its own settings (the EQ curve, the compressor's threshold).

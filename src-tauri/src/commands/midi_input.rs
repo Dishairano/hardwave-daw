@@ -22,6 +22,16 @@ pub fn list_midi_inputs(_state: State<AppState>) -> Vec<String> {
     hardwave_midi::MidiInputManager::available_ports()
 }
 
+/// The MIDI inputs there now, each with what it is by its name (a keyboard,
+/// a control surface or a virtual port), for the first run and for a
+/// controller plugged in while the DAW was closed. Off the window's thread:
+/// listing the inputs can take seconds on a busy machine, and this is asked
+/// at launch.
+#[tauri::command]
+pub async fn list_midi_input_kinds() -> Vec<crate::midi_hotplug::InputSeen> {
+    crate::midi_hotplug::kinds(&hardwave_midi::MidiInputManager::available_ports())
+}
+
 #[tauri::command]
 pub fn open_midi_input(state: State<AppState>, port_name: String) -> Result<(), String> {
     let mut manager = state.midi_input.lock();

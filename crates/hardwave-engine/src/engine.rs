@@ -5890,7 +5890,7 @@ pub fn guard_output(block: &mut [f32]) -> bool {
 
 /// The MIDI track a keyboard plays when nothing is armed: the one picked
 /// last, if it is still a MIDI track, else the first MIDI track.
-fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> {
+pub fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> {
     keyboard_track_ref(project).map(str::to_string)
 }
 
