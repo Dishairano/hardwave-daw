@@ -49,11 +49,7 @@ pub async fn start_collab(
     code: Option<String>,
 ) -> Result<CollabJoined, String> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let token = crate::collab::load_token().ok_or_else(|| {
-        "sign in first. Opening any Hardwave plug-in and signing in there is enough: \
-         every Hardwave program on this machine shares one sign-in."
-            .to_string()
-    })?;
+    let token = crate::commands::account::token_or_sign_in_first()?;
     let room = room.unwrap_or_default();
     let code = code.unwrap_or_default();
 

@@ -188,11 +188,7 @@ pub async fn separate_stems(
     project_path: Option<String>,
 ) -> Result<StemsResult, String> {
     STOP.store(false, Ordering::SeqCst);
-    let token = crate::collab::load_token().ok_or_else(|| {
-        "sign in first. Opening any Hardwave plug-in and signing in there is enough: \
-         every Hardwave program on this machine shares one sign-in."
-            .to_string()
-    })?;
+    let token = crate::commands::account::token_or_sign_in_first()?;
     let (clip, file) = {
         let state = app.state::<AppState>();
         let engine = state.engine.lock();
