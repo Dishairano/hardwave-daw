@@ -995,8 +995,12 @@ impl AudioNode for MidiTrackNode {
                 self.fader_pan,
                 &mut self.chain,
             );
+            // The VCA stays on a level drawn in automation, as on an
+            // audio track.
             self.volume = if mix.mute == Some(true) {
                 0.0
+            } else if mix.volume_automated {
+                mix.volume_linear * self.meter.vca_gain()
             } else {
                 mix.volume_linear
             };
