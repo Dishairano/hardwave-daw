@@ -717,6 +717,8 @@ pub fn run() {
             commands::engine::get_master_samples,
             commands::engine::get_audio_devices,
             commands::engine::get_audio_config,
+            commands::engine::play_test_tone,
+            commands::engine::get_test_tone,
             commands::engine::set_audio_config,
             commands::engine::get_audio_input_devices,
             commands::engine::get_audio_input_config,

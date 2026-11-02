@@ -24,6 +24,7 @@ pub mod parallel;
 /// float the meters and gain-reduction channels use.
 pub use atomic_float;
 pub mod preview_player;
+pub mod test_tone;
 pub mod track_node;
 pub mod transport;
 

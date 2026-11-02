@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-test-tone"
+description = "Enables the get_test_tone command without any pre-configured scope."
+commands.allow = ["get_test_tone"]
+
+[[permission]]
+identifier = "deny-get-test-tone"
+description = "Denies the get_test_tone command without any pre-configured scope."
+commands.deny = ["get_test_tone"]

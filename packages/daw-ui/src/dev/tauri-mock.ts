@@ -158,6 +158,21 @@ const mockDeskStatus = () => {
   }
 }
 
+/** The sound card as the backend would hold it, so the setup wizard's
+ *  audio step and Settings > Audio can apply a device and read it back, and the
+ *  test tone it then plays. A spec makes the device fail to open with
+ *  `window.__hwAudioFails = 'reason'`. */
+const mockAudio = { device: 'Focusrite Scarlett 2i2' as string | null, sampleRate: 48000, bufferSize: 512, outputPair: 0 }
+const mockTone = { startedAt: 0 }
+type MockWindow = {
+  __hwAudioFails?: string
+  /** Hold the test tone's meters mid-play, for a still picture. */
+  __hwToneHold?: boolean
+  /** Outputs on the Focusrite (default 2), for an output pair to pick. */
+  __hwOutputChannels?: number
+}
+const mockWin = () => window as unknown as MockWindow
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   unregisterCallback: () => {},
@@ -430,8 +445,9 @@ const mock: TauriInternals = {
         mockSurface.chosen = { input: (args?.input as string | null | undefined) || null }
         return null
       case 'get_channel_offsets':
-        return { input: 0, output: 0 }
+        return { input: 0, output: mockAudio.outputPair }
       case 'set_channel_offsets':
+        mockAudio.outputPair = Number(args?.output ?? 0)
         return null
       case 'get_library_folder':
       case 'set_library_folder':
@@ -733,11 +749,42 @@ const mock: TauriInternals = {
         return null
       case 'get_audio_devices':
         return [
-          { name: 'Focusrite Scarlett 2i2', is_default: false, sample_rates: [44100, 48000, 96000], max_channels: 2 },
+          { name: 'Focusrite Scarlett 2i2', is_default: false, sample_rates: [44100, 48000, 96000], max_channels: mockWin().__hwOutputChannels ?? 2 },
           { name: 'Speakers (Realtek HD Audio)', is_default: true, sample_rates: [44100, 48000], max_channels: 2 },
         ]
       case 'get_audio_config':
-        return { device: 'Focusrite Scarlett 2i2', sample_rate: 48000, buffer_size: 512 }
+        return { device: mockAudio.device, sample_rate: mockAudio.sampleRate, buffer_size: mockAudio.bufferSize }
+      case 'set_audio_config': {
+        const fails = mockWin().__hwAudioFails
+        if (fails) throw fails
+        mockAudio.device = (args?.device as string | null | undefined) ?? null
+        mockAudio.sampleRate = Number(args?.sampleRate ?? 48000)
+        mockAudio.bufferSize = Number(args?.bufferSize ?? 512)
+        return null
+      }
+      case 'play_test_tone': {
+        const fails = mockWin().__hwAudioFails
+        if (fails) throw fails
+        mockTone.startedAt = Date.now()
+        return {
+          device: mockAudio.device ?? 'Speakers (Realtek HD Audio)',
+          outputs: `${mockAudio.outputPair + 1}/${mockAudio.outputPair + 2}`,
+          sampleRate: mockAudio.sampleRate,
+          bufferSize: mockAudio.bufferSize,
+        }
+      }
+      case 'get_test_tone': {
+        if (mockWin().__hwToneHold) return { playing: true, side: 'right', peakLeft: 0.0063, peakRight: 0.126 }
+        // 0.4 s on the left, then 0.4 s on the right, at -18 dBFS.
+        const ms = Date.now() - mockTone.startedAt
+        const side = ms < 400 ? 'left' : ms < 800 ? 'right' : 'idle'
+        return {
+          playing: side !== 'idle',
+          side,
+          peakLeft: side === 'left' ? 0.126 : 0,
+          peakRight: side === 'right' ? 0.126 : 0,
+        }
+      }
       // Settings window (screenshot harness renders it headless).
       case 'get_audio_input_devices':
         return [{ name: 'Focusrite Scarlett 2i2', is_default: true, sample_rates: [44100, 48000, 96000], max_channels: 2 }]
