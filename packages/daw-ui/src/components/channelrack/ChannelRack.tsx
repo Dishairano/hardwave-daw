@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { hw } from '../../theme'
 import { useTrackStore } from '../../stores/trackStore'
 import { usePatternStore, STEPS_PER_PATTERN, PATTERN_COLORS, STEP_GRAPH_RANGES, STEP_GRAPH_DEFAULTS, STEP_GRAPH_LABELS, type StepGraphKind } from '../../stores/patternStore'
@@ -8,13 +9,19 @@ import { DetachButton, detachPanel } from '../FloatingWindow'
 import { ParameterContextMenu } from '../ParameterContextMenu'
 import { invoke } from '@tauri-apps/api/core'
 import { usePluginCatalogStore } from '../../stores/pluginCatalogStore'
-import { usePluginStore } from '../../stores/pluginStore'
 import type { TrackInfo } from '../../stores/trackStore'
 import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { mixHex } from '../../lib/color'
 import { channelKindShown, type ChannelKindFilter } from '../../lib/channelKindFilter'
 import { t, tf, useLanguage } from '../../i18n'
+import { addInstrumentChannel as addInstrumentChannelTo, channelSound } from '../../stores/instrumentChannels'
+import { useTransportStore } from '../../stores/transportStore'
+import { previewChannel, stepPreviewMs } from '../../lib/channelPreview'
+import { useDropTarget } from '../../lib/pointerDrag'
+import { sendToChannel } from '../browser/fileActions'
+import { KickSynthEditor } from '../KickSynthEditor'
+import { ChannelNameTip, channelTip } from './ChannelNameTip'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -62,7 +69,6 @@ export function ChannelRack() {
   // the built-in synths and the sampler to offer.
   useEffect(() => { void usePluginCatalogStore.getState().ensureLoaded() }, [])
   const catalogById = usePluginCatalogStore(s => s.byId)
-  const addPluginToTrack = usePluginStore(s => s.addToTrack)
   const instrumentPlugins = useMemo(
     () => allPlugins.filter(p => p.category === 'Instrument'),
     [allPlugins],
@@ -73,12 +79,9 @@ export function ChannelRack() {
   const addInstrumentChannel = useCallback(async (pluginId: string, pluginName: string) => {
     setInstPickerOpen(false)
     try {
-      const trackId = await invoke<string>('add_midi_track', { name: pluginName })
-      await addPluginToTrack(trackId, pluginId)
-      await fetchTracks()
-      selectTrack(trackId)
+      await addInstrumentChannelTo(pluginId, pluginName)
     } catch (e) { console.error('add instrument channel failed', e) }
-  }, [addPluginToTrack, fetchTracks, selectTrack])
+  }, [])
 
   const channelInstrumentSlot = useCallback(
     (ch: TrackInfo) => ch.inserts?.find(s => catalogById(s.pluginId)?.category === 'Instrument'),
@@ -94,6 +97,49 @@ export function ChannelRack() {
       ownWindow: isBuiltIn(inst.pluginId),
     })
   }, [channelInstrumentSlot])
+  // A click on a channel's name, or on a step that turns on, plays the
+  // channel once, so the first click proves it makes a sound. While the
+  // song plays, a step is heard when the pattern reaches it.
+  const hearChannel = (ch: TrackInfo, velocity: number) => {
+    if (ch.kind !== 'Midi') { void previewChannelSample(ch.id); return }
+    // An armed track takes the keyboard's notes; the preview would play it.
+    if (tracks.some(tr => tr.armed && tr.monitorInput)) return
+    void previewChannel(ch.id, velocity, stepPreviewMs(useTransportStore.getState().bpm))
+  }
+  // The tooltip on a channel's name, after the mouse rests there.
+  const [nameTip, setNameTip] = useState<{ id: string; x: number; y: number } | null>(null)
+  const nameTipTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const restOnName = (e: React.MouseEvent, id: string) => {
+    if (nameTipTimer.current) clearTimeout(nameTipTimer.current)
+    const x = e.clientX + 12
+    const y = e.clientY + 16
+    nameTipTimer.current = setTimeout(() => setNameTip({ id, x, y }), 600)
+  }
+  const leaveName = () => {
+    if (nameTipTimer.current) clearTimeout(nameTipTimer.current)
+    nameTipTimer.current = null
+    setNameTip(null)
+  }
+  useEffect(() => () => { if (nameTipTimer.current) clearTimeout(nameTipTimer.current) }, [])
+  // The kick synth's editor, opened by a double-click on a kick channel.
+  const [kickEditorTrack, setKickEditorTrack] = useState<string | null>(null)
+  // A sample dragged from the browser onto a channel goes into its sampler.
+  const rowsRef = useRef<HTMLDivElement>(null)
+  const [sampleOver, setSampleOver] = useState<string | null>(null)
+  const channelUnder = (x: number, y: number) =>
+    (document.elementFromPoint(x, y)?.closest('[data-channel-id]') as HTMLElement | null)?.dataset.channelId ?? null
+  useDropTarget(rowsRef, {
+    accepts: (data) => data.startsWith('file:'),
+    onOver: (d) => setSampleOver(channelUnder(d.clientX, d.clientY)),
+    onLeave: () => setSampleOver(null),
+    onDrop: (d) => {
+      const id = channelUnder(d.clientX, d.clientY)
+      if (!id) return
+      sendToChannel(id, d.data.slice('file:'.length))
+        .then(refused => { if (refused) useNotificationStore.getState().push('warning', refused) })
+        .catch(report('The sample did not load'))
+    },
+  })
   // Channels are decoupled from playlist inserts. The 500 pre-allocated
   // `insert-NNN` tracks are mixer/playlist slots, not channels — they
   // don't belong in the Channel Rack. Channels start empty; the user
@@ -755,7 +801,7 @@ export function ChannelRack() {
       </div>
 
       {/* Channel rows */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div ref={rowsRef} style={{ flex: 1, overflowY: 'auto' }}>
         {channelRows.map((row) => {
           if (row.kind === 'folderHeader') {
             const f = row.folder
@@ -823,6 +869,7 @@ export function ChannelRack() {
           return (
             <div
               key={ch.id}
+              data-channel-id={ch.id}
               draggable
               onDragStart={(e) => {
                 setDragSource(ch.id)
@@ -853,7 +900,9 @@ export function ChannelRack() {
                 borderBottom: '1px solid rgba(255,255,255,0.05)',
                 borderTop: dragOverIndex === ci ? `2px solid ${hw.accent}` : '2px solid transparent',
                 opacity: dragSource === ch.id ? 0.4 : 1,
-                background: selected ? 'rgba(255,255,255,0.045)' : 'transparent',
+                background: sampleOver === ch.id ? 'rgba(124,201,255,0.08)' : selected ? 'rgba(255,255,255,0.045)' : 'transparent',
+                outline: sampleOver === ch.id ? `1px dashed ${hw.accent}` : 'none',
+                outlineOffset: -1,
                 paddingLeft: inFolder ? 6 : 0,
               }}
             >
@@ -925,13 +974,29 @@ export function ChannelRack() {
                 {stripNumber.get(ch.outputBus ?? ch.id) ?? '-'}
               </div>
 
-              {/* 5. Channel name */}
+              {/* 5. Channel name, with what it plays on the right */}
               <div
-                onClick={(e) => pickName(e, ch.id)}
-                onDoubleClick={(e) => { e.stopPropagation(); startRename(ch.id, ch.name) }}
+                data-testid="channel-name"
+                onClick={(e) => {
+                  pickName(e, ch.id)
+                  if (!e.ctrlKey && !e.metaKey && !e.shiftKey) hearChannel(ch, DEFAULT_VEL)
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation()
+                  leaveName()
+                  // The kick synth's editor, as the tooltip says; a kick is
+                  // renamed from its right-click menu.
+                  if (ch.instrument === 'kick_synth' && !channelInstrumentSlot(ch)) setKickEditorTrack(ch.id)
+                  else startRename(ch.id, ch.name)
+                }}
+                onMouseEnter={(e) => restOnName(e, ch.id)}
+                onMouseMove={(e) => { if (!nameTip) restOnName(e, ch.id) }}
+                onMouseLeave={leaveName}
+                onMouseDown={() => { if (nameTip) leaveName() }}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
+                  leaveName()
                   setCtxMenu({ x: e.clientX, y: e.clientY, trackId: ch.id })
                 }}
                 style={{
@@ -982,13 +1047,28 @@ export function ChannelRack() {
                     }}
                   />
                 ) : (
-                  <span style={{
-                    fontSize: 12.5, color: selected ? hw.textBright : hw.textPrimary,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    fontWeight: 600,
-                  }}>
-                    {ch.name}
-                  </span>
+                  <>
+                    <span style={{
+                      fontSize: 12.5, color: selected ? hw.textBright : hw.textPrimary,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      fontWeight: 600, minWidth: 0,
+                    }}>
+                      {ch.name}
+                    </span>
+                    {(() => {
+                      const sound = channelSound(ch)
+                      if (!sound) return null
+                      return (
+                        <small data-testid="channel-sound" style={{
+                          marginLeft: 'auto', fontSize: 10, fontWeight: 500, color: '#8b8b93',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          flexShrink: 1, minWidth: 0, maxWidth: 76,
+                        }}>
+                          {sound}
+                        </small>
+                      )
+                    })()}
+                  </>
                 )}
               </div>
 
@@ -1034,6 +1114,7 @@ export function ChannelRack() {
                       onClick={(e) => {
                         if (e.altKey && active) { previewChannelSample(ch.id); return }
                         toggleStep(ch.id, i)
+                        if (!active && !useTransportStore.getState().playing) hearChannel(ch, DEFAULT_VEL)
                       }}
                       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setStep(ch.id, i, 0) }}
                       onMouseDown={(e) => {
@@ -1625,6 +1706,27 @@ export function ChannelRack() {
             }}
           />
         )
+      })()}
+      {kickEditorTrack && (() => {
+        const ch = tracks.find(x => x.id === kickEditorTrack)
+        if (!ch) return null
+        // Over the whole app, where the playlist's badge opens it, not
+        // inside the rack, which can be shorter than the editor.
+        return createPortal(
+          <KickSynthEditor
+            trackId={ch.id}
+            patchLayers={ch.kickPatch?.layers ?? [null, null, null, null]}
+            drive={ch.kickPatch?.drive ?? 0}
+            onClose={() => setKickEditorTrack(null)}
+          />,
+          document.querySelector('.fl-app') ?? document.body,
+        )
+      })()}
+      {nameTip && renamingId !== nameTip.id && (() => {
+        const ch = tracks.find(x => x.id === nameTip.id)
+        const inst = ch && channelInstrumentSlot(ch)
+        const tip = ch && channelTip(ch, inst ? inst.pluginName : undefined)
+        return tip ? <ChannelNameTip tip={tip} x={nameTip.x} y={nameTip.y} /> : null
       })()}
     </div>
   )

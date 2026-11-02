@@ -608,6 +608,7 @@ pub fn run() {
             commands::tracks::set_track_stereo_separation,
             commands::tracks::set_keyboard_track,
             commands::tracks::get_keyboard_target,
+            commands::tracks::get_keyboard_track,
             commands::tracks::set_track_mix_live,
             commands::tracks::set_track_delay_samples,
             commands::tracks::set_track_pitch_semitones,

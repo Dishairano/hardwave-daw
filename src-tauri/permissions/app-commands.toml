@@ -231,6 +231,7 @@ permissions = [
   "allow-set-track-stereo-separation",
   "allow-set-keyboard-track",
   "allow-get-keyboard-target",
+  "allow-get-keyboard-track",
   "allow-set-track-mix-live",
   "allow-set-track-delay-samples",
   "allow-set-track-pitch-semitones",

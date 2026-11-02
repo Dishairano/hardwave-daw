@@ -324,4 +324,17 @@ export const nlEditors: Record<string, string> = {
   'in key': 'in de toonsoort',
   'out of key': 'buiten de toonsoort',
   'Tuning the note failed': 'Het stemmen van de noot is mislukt',
+
+  // ---- Channel rack: what a channel plays
+  'Kick synth': 'Kick-synth',
+  '{file} in Hardwave Sampler.': '{file} in Hardwave Sampler.',
+  'Click a step or the name to hear it.': 'Klik op een stap of op de naam om hem te horen.',
+  'Drop another sample on the channel to swap it.': 'Sleep een ander sample op het kanaal om het te wisselen.',
+  'Hardwave Sampler, with no sample yet.': 'Hardwave Sampler, nog zonder sample.',
+  'Drop a sample on the channel to load it.': 'Sleep een sample op het kanaal om het te laden.',
+  'the kick synth.': 'de kick-synth.',
+  'Double-click the name for its editor.': 'Dubbelklik op de naam voor de editor.',
+  'the built-in synth.': 'de ingebouwde synth.',
+  'Drop a sample on the channel to play it instead.': 'Sleep een sample op het kanaal om dat te laten spelen.',
+  'The sample did not load': 'Het sample is niet geladen',
 }
