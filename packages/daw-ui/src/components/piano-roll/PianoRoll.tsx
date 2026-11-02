@@ -18,7 +18,7 @@ import { useProjectStore } from '../../stores/projectStore'
 import { useGeneralPrefsStore } from '../../stores/generalPrefsStore'
 import { useTransportStore } from '../../stores/transportStore'
 import { useRecordingPrefsStore } from '../../stores/recordingPrefsStore'
-import { useTempoMapStore } from '../../stores/tempoMapStore'
+import { tickOfSample, useTempoMapStore } from '../../stores/tempoMapStore'
 import { segmentAt } from '../../utils/meter'
 import { decodeMidi, rescaleNotes } from '../../utils/midi'
 import { useNotificationStore } from '../../stores/notificationStore'
@@ -1561,9 +1561,7 @@ export function PianoRoll() {
       if (ts.editCursorTicks != null) {
         originTick = ts.editCursorTicks
       } else {
-        const sr = ts.sampleRate || 48000
-        const samplesPerTick = (sr * 60) / (ts.bpm * PPQ)
-        originTick = Math.round(ts.positionSamples / samplesPerTick)
+        originTick = Math.round(tickOfSample(ts.positionSamples, ts.sampleRate))
       }
       await insertNotesFromClipboard(originTick)
       return
@@ -1660,9 +1658,7 @@ export function PianoRoll() {
     if (ts.editCursorTicks != null) {
       originTick = ts.editCursorTicks
     } else {
-      const sr = ts.sampleRate || 48000
-      const samplesPerTick = (sr * 60) / (ts.bpm * PPQ)
-      originTick = Math.round(ts.positionSamples / samplesPerTick)
+      originTick = Math.round(tickOfSample(ts.positionSamples, ts.sampleRate))
     }
     const snappedTick = Math.max(0, Math.round(originTick / snap) * snap)
     ts.setEditCursor(snappedTick + snap)
@@ -1726,9 +1722,7 @@ export function PianoRoll() {
     if (ts.editCursorTicks != null) {
       originTick = ts.editCursorTicks
     } else {
-      const sr = ts.sampleRate || 48000
-      const samplesPerTick = (sr * 60) / (ts.bpm * PPQ)
-      originTick = Math.round(ts.positionSamples / samplesPerTick)
+      originTick = Math.round(tickOfSample(ts.positionSamples, ts.sampleRate))
     }
     const snappedTick = Math.max(0, Math.round(originTick / snap) * snap)
     const velocity = Math.max(0.01, Math.min(1, qwertyVelocity / 127))
@@ -1830,9 +1824,7 @@ export function PianoRoll() {
   useEffect(() => {
     if (!followPlayhead) return
     const follow = (st: { positionSamples: number; bpm: number; sampleRate: number }) => {
-      const sr = st.sampleRate || 48000
-      const samplesPerTick = (sr * 60) / (st.bpm * PPQ)
-      const playheadTick = st.positionSamples / samplesPerTick
+      const playheadTick = tickOfSample(st.positionSamples, st.sampleRate)
       const container = containerRef.current
       if (!container) return
       const w = container.clientWidth - KEYBOARD_WIDTH

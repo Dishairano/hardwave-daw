@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account', 'tunenotes']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account', 'tunenotes', 'tempolane']
 /** What to do on a panel before it is photographed, as a person would. */
 const ACTIONS = {
   // Open NOTES, choose "go", and hold it mid-drag a semitone and a half up,
@@ -107,6 +107,9 @@ try {
       // SHOT_OPEN=1 opens its panel.
       + (process.env.SHOT_ACCOUNT ? `&account=${process.env.SHOT_ACCOUNT}` : '')
       + (process.env.SHOT_OPEN ? '&open=1' : '')
+      // SHOT_LANE=menu or drag: the tempo lane's menu open, or a point being
+      // dragged (panel tempolane).
+      + (process.env.SHOT_LANE ? `&lane=${process.env.SHOT_LANE}` : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     if (ACTIONS[panel]) await ACTIONS[panel](page)

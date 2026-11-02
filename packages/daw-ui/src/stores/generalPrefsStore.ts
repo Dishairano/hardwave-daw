@@ -46,6 +46,10 @@ interface GeneralPrefsState {
   timecodeFps: TimecodeFps
   /** The FPS meter overlay (Tools > Show FPS meter, Ctrl+Shift+F). */
   showFpsMeter: boolean
+  /** The tempo lane under the playlist's ruler, shown or hidden with the
+   *  TEMPO chip. */
+  tempoLaneShown: boolean
+  setTempoLaneShown: (v: boolean) => void
   /** The song template the DAW starts with, by name; none starts empty. */
   startupTemplate: string | null
   setStartupTemplate: (name: string | null) => void
@@ -71,6 +75,8 @@ export const useGeneralPrefsStore = create<GeneralPrefsState>()(
       rulerUnits: 'bars',
       timecodeFps: 25,
       showFpsMeter: false,
+      tempoLaneShown: true,
+      setTempoLaneShown: (tempoLaneShown) => set({ tempoLaneShown }),
       startupTemplate: null,
       setStartupTemplate: (startupTemplate) => set({ startupTemplate }),
       setNoteNaming: (noteNaming) => set({ noteNaming }),

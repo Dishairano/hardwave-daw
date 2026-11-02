@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
-import { useTempoMapStore } from '../stores/tempoMapStore'
+import { tempoChanged, useTempoMapStore } from '../stores/tempoMapStore'
 import { barBeatAtTick, meterSegments } from '../utils/meter'
 import { t, tf, useLanguage } from '../i18n'
 
@@ -48,8 +48,10 @@ export function TempoMapDialog({ onClose }: Props) {
     try {
       const list = await invoke<TempoEntryInfo[]>('get_tempo_entries')
       setEntries(list)
-      // The playlist draws its bars from the same map, so it has to be told.
+      // The playlist draws its bars from the same map, so it has to be told,
+      // and audio that keeps its speed is a new length under a new tempo.
       await useTempoMapStore.getState().refresh()
+      tempoChanged()
       setErr(null)
     } catch (e) {
       setErr(String(e))

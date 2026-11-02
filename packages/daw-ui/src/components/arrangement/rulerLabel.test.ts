@@ -19,4 +19,13 @@ describe('the ruler', () => {
     expect(rulerLabel((1.999 / 2) * BAR, 1, 'timecode', 120, 30, 48000)).toBe('00:01:29')
     expect(rulerLabel(BAR, 2, 'timecode', 120, 30, 48000)).toBe('00:02:00')
   })
+
+  it('reads the time through the tempo map', () => {
+    // A bar at 120, then 240: bar 3 starts 2 + 1 seconds in.
+    const map = [
+      { tick: 0, bpm: 120, ramp: 'instant' },
+      { tick: BAR, bpm: 240, ramp: 'instant' },
+    ]
+    expect(rulerLabel(BAR * 2, 3, 'time', map, 25, 48000)).toBe('0:03.0')
+  })
 })

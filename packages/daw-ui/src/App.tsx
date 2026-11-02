@@ -110,6 +110,7 @@ import { useNotificationStore } from './stores/notificationStore'
 import { applyCustomBg, useThemeStore } from './stores/themeStore'
 import { hw } from './theme'
 import { friendlyLoadError } from './utils/loadErrors'
+import { sampleOfTick, tickOfSample } from './stores/tempoMapStore'
 
 interface UpdateInfo {
   version: string
@@ -376,12 +377,10 @@ export function App() {
    */
   const loopRangeTicks = useCallback((): { at: number; length: number } | null => {
     const t = useTransportStore.getState()
-    const samplesPerTick = (t.sampleRate || 48000) * 60 / (Math.max(1, t.bpm) * 960)
-    if (samplesPerTick <= 0 || t.loopEnd <= t.loopStart) return null
-    return {
-      at: Math.round(t.loopStart / samplesPerTick),
-      length: Math.round((t.loopEnd - t.loopStart) / samplesPerTick),
-    }
+    if (t.loopEnd <= t.loopStart) return null
+    // Through the tempo map: the loop's bars, wherever a tempo change put them.
+    const at = Math.round(tickOfSample(t.loopStart, t.sampleRate))
+    return { at, length: Math.round(tickOfSample(t.loopEnd, t.sampleRate)) - at }
   }, [])
 
   /**
@@ -588,8 +587,7 @@ export function App() {
       return
     }
     const t = useTransportStore.getState()
-    const samplesPerTick = (t.sampleRate || 48000) * 60 / (Math.max(1, t.bpm) * 960)
-    t.playRange(Math.round(first * samplesPerTick), Math.round(last * samplesPerTick))
+    t.playRange(sampleOfTick(first, t.sampleRate), sampleOfTick(last, t.sampleRate))
   }, [])
 
   const captureRecentMidi = useCallback(async () => {
@@ -1786,8 +1784,7 @@ export function App() {
   const pasteAtPlayhead = useCallback(() => {
     const transport = useTransportStore.getState()
     const tracks = useTrackStore.getState()
-    const sr = transport.sampleRate || 48000
-    const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+    const playheadTicks = Math.round(tickOfSample(transport.positionSamples, transport.sampleRate))
     const pasteAt = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
     tracks.pasteClipsAtPosition(pasteAt).then(({ pasted, skipped }) => {
       if (skipped > 0) {
@@ -1942,20 +1939,13 @@ export function App() {
       if (e.code === 'MediaTrackNext' || e.code === 'MediaTrackPrevious') {
         // FL maps FF/RW to "jump to next/previous time marker".
         e.preventDefault()
-        const sr = transport.sampleRate || 48000
-        const PPQ = 960
-        const playheadTicks = Math.round(
-          (transport.positionSamples / sr) * (transport.bpm / 60) * PPQ,
-        )
+        const playheadTicks = Math.round(tickOfSample(transport.positionSamples, transport.sampleRate))
         const ms = useMarkerStore.getState()
         const target =
           e.code === 'MediaTrackNext'
             ? ms.jumpToNext(playheadTicks)
             : ms.jumpToPrev(playheadTicks)
-        if (target) {
-          const secs = target.tick / PPQ / (transport.bpm / 60)
-          transport.setPosition(Math.round(secs * sr))
-        }
+        if (target) transport.setPosition(sampleOfTick(target.tick, transport.sampleRate))
         return
       }
 
@@ -2000,8 +1990,7 @@ export function App() {
           if (!sel) return
           const t = tracks.tracks.find(tr => tr.clips.some(c => c.id === sel))
           if (!t) return
-          const sr = transport.sampleRate || 48000
-          const playheadTicks = Math.round((transport.positionSamples / sr) * (transport.bpm / 60) * 960)
+          const playheadTicks = Math.round(tickOfSample(transport.positionSamples, transport.sampleRate))
           const atTicks = transport.editCursorTicks != null ? transport.editCursorTicks : playheadTicks
           const clip = t.clips.find(c => c.id === sel)
           if (clip && atTicks > clip.position_ticks && atTicks < clip.position_ticks + clip.length_ticks) {
@@ -2014,9 +2003,7 @@ export function App() {
           const allClips = tracks.tracks.flatMap(t => t.clips || [])
           if (allClips.length > 0) {
             const lastEnd = Math.max(...allClips.map(c => c.position_ticks + c.length_ticks))
-            const sr = transport.sampleRate || 48000
-            const samplesPerTick = (sr * 60) / (transport.bpm * 960)
-            transport.setPosition(Math.round(lastEnd * samplesPerTick))
+            transport.setPosition(sampleOfTick(lastEnd, transport.sampleRate))
           }
           return
         }

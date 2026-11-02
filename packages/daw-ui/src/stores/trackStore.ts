@@ -139,10 +139,15 @@ export interface ClipInfo {
     /** Show the file's regions and slice markers. */
     loadRegions?: boolean
     loadSlices?: boolean
+    /** The tempo the sample is in when it follows the song's tempo; null
+     *  when it keeps its speed. */
+    followBpm?: number | null
   }
   /** A fingerprint of the notes tuned by hand in the sample window's NOTES
    *  view; absent when none are. It changes when an undo changes them. */
   tuneKey?: string
+  /** Warp markers pinning the file to ticks; empty for a plain clip. */
+  warpMarkers?: { clip_tick: number; source_sample: number }[]
   /** Where the file is on disk. */
   sourceFile?: string
   /** The fades in time, at the tempo where the clip sits. */
@@ -1355,6 +1360,9 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (ok) {
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().undoOne()
+      // The step may have been a tempo change: the lane and the grid read
+      // the map again.
+      void import('./tempoMapStore').then(({ useTempoMapStore }) => useTempoMapStore.getState().refresh())
       await get().fetchTracks()
       await rehydrateRack()
     }
@@ -1366,6 +1374,9 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (ok) {
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().redoOne()
+      // The step may have been a tempo change: the lane and the grid read
+      // the map again.
+      void import('./tempoMapStore').then(({ useTempoMapStore }) => useTempoMapStore.getState().refresh())
       await get().fetchTracks()
       await rehydrateRack()
     }
