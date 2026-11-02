@@ -41,7 +41,9 @@ interface ProjectState {
   saveProject: (path?: string) => Promise<void>
   /** Save the open song under a new name or folder, always asking where. */
   saveProjectAs: () => Promise<void>
-  loadProject: (path: string) => Promise<void>
+  /** Open a song. `asRecovered` opens an auto-save as a new, unsaved song
+   *  instead of as the file it was read from. */
+  loadProject: (path: string, opts?: { asRecovered?: boolean }) => Promise<void>
   /** Open an FL Studio project as a new, unsaved song. */
   importFlProject: (path: string) => Promise<FlImportReport>
   /** Keep the open song as a template: the whole song, plug-ins and all. */
@@ -120,7 +122,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await get().saveProject(target)
   },
 
-  loadProject: async (path: string) => {
+  loadProject: async (path: string, opts?: { asRecovered?: boolean }) => {
     // The open runs off the window's thread now, so the window stays alive
     // and can say how far it is.
     const openingName = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'song'
@@ -145,9 +147,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // The playlist's bar grid comes from the loaded project's tempo map, so a
     // song in 7/8 draws in 7/8 from the moment it opens.
     await useTempoMapStore.getState().refresh()
-    const name = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'Untitled'
-    set({ filePath: path, projectName: name, dirty: false })
-    get().pushRecent(path)
+    if (opts?.asRecovered) {
+      // An auto-save sits in the app's own cache folder, among the files the
+      // app deletes after every save. Opened as the song's file, Ctrl+S wrote
+      // the recovered work back into that folder and the clean-up right after
+      // deleted it. It opens as an unsaved song instead, so saving asks where,
+      // and it stays out of the recent files.
+      set({ filePath: null, projectName: 'Recovered song', dirty: true })
+    } else {
+      const name = path.split(/[\\/]/).pop()?.replace('.hwp', '') || 'Untitled'
+      set({ filePath: path, projectName: name, dirty: false })
+      get().pushRecent(path)
+    }
     reportMissingAudioSources().catch(() => {})
   },
 
