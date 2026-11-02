@@ -33,6 +33,7 @@ import { paintSlotOccupied, paintSlotTick } from './paint'
 import { zoomStep } from './zoom'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { useProjectStore } from '../../stores/projectStore'
+import { reloadTimelineState } from '../../stores/timelineState'
 import { bpmAt, flagEntry, tempoFlags } from './tempoFlags'
 import { gridLines } from '../../utils/meter'
 import { mixHex, hexLuma } from '../../lib/color'
@@ -2363,7 +2364,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     try {
       await invoke(command, args)
       markEdited()
-      if (movesMusic) await useTrackStore.getState().fetchTracks()
+      // Moving music moves the markers after it in the song too.
+      if (movesMusic) await Promise.all([useTrackStore.getState().fetchTracks(), reloadTimelineState()])
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
     } catch (e) {
       useNotificationStore.getState().push('warning', failure, { detail: String(e) })

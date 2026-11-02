@@ -22,7 +22,7 @@ const {
   resetTimelineState,
 } = await import('../timelineState')
 
-const { startTimelineSync } = await import('../timelineState')
+const { startTimelineSync, reloadTimelineState } = await import('../timelineState')
 const { useProjectStore } = await import('../projectStore')
 
 const marker = (id: string, tick: number) => ({
@@ -154,5 +154,25 @@ describe('startTimelineSync', () => {
 
     useMarkerStore.getState().addMarker(1920, 'Break')
     await vi.waitFor(() => expect(useProjectStore.getState().dirty).toBe(true))
+  })
+})
+
+describe('reloadTimelineState', () => {
+  it('takes the markers the engine moved, and does not send the old ones back', async () => {
+    startTimelineSync()
+    hydrateTimelineState(JSON.stringify({ markers: [marker('drop', 3840)] }))
+    // Let a marker push left by an earlier test go out first.
+    await new Promise(r => setTimeout(r, 300))
+    invokeMock.mockClear()
+    // Two bars inserted before the drop: the engine moved its marker.
+    invokeMock.mockImplementation((cmd: string) => Promise.resolve(
+      cmd === 'get_timeline_state' ? JSON.stringify({ markers: [marker('drop', 3840 + 7680)] }) : null,
+    ))
+    await reloadTimelineState()
+    expect(useMarkerStore.getState().markers.map(m => m.tick)).toEqual([3840 + 7680])
+    await new Promise(r => setTimeout(r, 300))
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'set_timeline_state')).toEqual([])
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValue(null)
   })
 })
