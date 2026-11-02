@@ -1616,14 +1616,25 @@ pub async fn consolidate_track_range(
 
     let (path, _, _) = rendered;
 
-    // Replacing the pieces with the render is one step, so one undo puts
-    // the original clips back.
     let state: State<AppState> = app.state();
-    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    place_consolidated(&engine, &source_track_id, &path, start_ticks, end_ticks)?;
+    Ok(path)
+}
+
+/// Replace a track's clips inside a range with the consolidated render, as
+/// one undo step: one undo puts the original clips back.
+fn place_consolidated(
+    engine: &DawEngine,
+    track_id: &str,
+    path: &str,
+    start_ticks: u64,
+    end_ticks: u64,
+) -> Result<(), String> {
+    engine.snapshot_before_mutation();
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
-        if let Some(track) = project.track_mut(&source_track_id) {
+        if let Some(track) = project.track_mut(track_id) {
             // Only what lies inside the range goes: a clip that merely
             // overlaps the edge is left alone rather than silently cut.
             track.clips.retain(|c| {
@@ -1632,28 +1643,27 @@ pub async fn consolidate_track_range(
             });
         }
     }
-    let clip = crate::commands::audio::import_audio_file_blocking(
-        state.clone(),
-        source_track_id.clone(),
-        path.clone(),
+    let clip = crate::commands::audio::place_audio_file(
+        engine,
+        track_id.to_string(),
+        path.to_string(),
         Some(start_ticks),
     )?;
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
         fit_render_clip(
             &mut project,
-            &source_track_id,
+            track_id,
             &clip.clip_id,
             start_ticks,
             end_ticks,
         );
     }
-    state.engine.lock().rebuild_graph();
-    Ok(path)
+    engine.rebuild_graph();
+    Ok(())
 }
 
-/// Render one track through its plug-ins to audio, put the result on a new/// Render one track through its plug-ins to audio, put the result on a new
+/// Render one track through its plug-ins to audio, put the result on a new
 /// track, and mute the original.
 ///
 /// A track with three plug-ins on it costs that CPU on every block, for the
@@ -1744,16 +1754,28 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
 
     let (path, track_name) = rendered;
 
-    // Placing it is one undo step together with muting the original.
     let state: State<AppState> = app.state();
-    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    place_bounce(&engine, &source_track_id, &track_name, &path, end_ticks)?;
+    Ok(path)
+}
+
+/// Put a bounce on a new track and mute the original, as one undo step:
+/// one undo takes the new track away and unmutes the original.
+fn place_bounce(
+    engine: &DawEngine,
+    source_track_id: &str,
+    track_name: &str,
+    path: &str,
+    end_ticks: u64,
+) -> Result<String, String> {
+    engine.snapshot_before_mutation();
     let new_track_id = {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
         // Into the same bus as the original, so the bus's effects still
         // shape it; the render left them out.
         let bus = project
-            .track(&source_track_id)
+            .track(source_track_id)
             .and_then(|t| t.output_bus.clone());
         let id = project.add_audio_track(format!("{track_name} (bounced)"));
         if let Some(t) = project.track_mut(&id) {
@@ -1761,22 +1783,21 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
         }
         id
     };
-    let clip = crate::commands::audio::import_audio_file_blocking(
-        state.clone(),
+    let clip = crate::commands::audio::place_audio_file(
+        engine,
         new_track_id.clone(),
-        path.clone(),
+        path.to_string(),
         Some(0),
     )?;
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
         fit_render_clip(&mut project, &new_track_id, &clip.clip_id, 0, end_ticks);
-        if let Some(t) = project.track_mut(&source_track_id) {
+        if let Some(t) = project.track_mut(source_track_id) {
             t.muted = true;
         }
     }
-    state.engine.lock().rebuild_graph();
-    Ok(path)
+    engine.rebuild_graph();
+    Ok(new_track_id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2092,25 +2113,36 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
     .await
     .map_err(|e| e.to_string())??;
 
-    // Placing the render and flipping the switch are one undo step.
     let state: State<AppState> = app.state();
-    state.engine.lock().snapshot_before_mutation();
-    let clip = crate::commands::audio::import_audio_file_blocking(
-        state.clone(),
-        source_track_id.clone(),
-        rendered.clone(),
+    let engine = state.engine.lock();
+    place_freeze(&engine, &source_track_id, &rendered, end_ticks)?;
+    Ok(rendered)
+}
+
+/// Put a freeze render on its track's freeze lane and freeze the track, as
+/// one undo step: one undo unfreezes it.
+fn place_freeze(
+    engine: &DawEngine,
+    track_id: &str,
+    path: &str,
+    end_ticks: u64,
+) -> Result<(), String> {
+    engine.snapshot_before_mutation();
+    let clip = crate::commands::audio::place_audio_file(
+        engine,
+        track_id.to_string(),
+        path.to_string(),
         Some(0),
     )?;
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
-        fit_render_clip(&mut project, &source_track_id, &clip.clip_id, 0, end_ticks);
-        if let Some(track) = project.track_mut(&source_track_id) {
+        fit_render_clip(&mut project, track_id, &clip.clip_id, 0, end_ticks);
+        if let Some(track) = project.track_mut(track_id) {
             place_freeze_render(track, &clip.clip_id);
         }
     }
-    state.engine.lock().rebuild_graph();
-    Ok(rendered)
+    engine.rebuild_graph();
+    Ok(())
 }
 
 /// Move a freeze render onto the track's freeze lane and freeze the track.
@@ -2805,6 +2837,124 @@ mod stem_and_freeze_tests {
             p.track(&drums).unwrap().muted,
             "another track's own mute stays, as it keys sidechains as heard"
         );
+    }
+}
+
+#[cfg(test)]
+mod placing_tests {
+    use super::{place_bounce, place_consolidated, place_freeze};
+    use hardwave_engine::DawEngine;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+    use std::path::Path;
+
+    /// A short steady stereo file, as a render writes one.
+    pub(super) fn render_file(dir: &Path, frames: usize, level: f32) -> String {
+        let path = dir.join("render.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for _ in 0..frames * 2 {
+            w.write_sample(level).unwrap();
+        }
+        w.finalize().unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    pub(super) fn clip(id: &str, track: &str, at: u64, len: u64) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: id.into(),
+                name: id.into(),
+                source_path: id.into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: 100,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: String::new(),
+                treatment: Default::default(),
+                tuned_notes: Vec::new(),
+            }),
+            track_id: track.into(),
+            position_ticks: at,
+            length_ticks: len,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    fn clip_ids(engine: &DawEngine, track: &str) -> Vec<String> {
+        let p = engine.project.lock();
+        p.track(track)
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Audio(a) => a.id.clone(),
+                ClipContent::Midi(m) => m.id.clone(),
+            })
+            .collect()
+    }
+
+    /// Bouncing, freezing and consolidating are one undo step each. Each
+    /// took two: the import of the render took a step of its own, so the
+    /// first undo only took the new clip away and left the original clips
+    /// gone, the track muted, or the bounced track there and empty.
+    #[test]
+    fn bouncing_freezing_and_consolidating_each_take_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let id = {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Vox".into());
+            let t = p.track_mut(&id).unwrap();
+            t.clips.push(clip("a", &id, 0, 960));
+            t.clips.push(clip("b", &id, 960, 960));
+            id
+        };
+        let steps = || engine.history_sizes().0;
+
+        let before = steps();
+        place_consolidated(&engine, &id, &file, 0, 1920).unwrap();
+        assert_eq!(clip_ids(&engine, &id).len(), 1, "glued into one");
+        assert_eq!(steps(), before + 1, "consolidating is one step");
+        assert!(engine.undo());
+        assert_eq!(
+            clip_ids(&engine, &id),
+            ["a", "b"],
+            "one undo brings both back"
+        );
+
+        let before = steps();
+        let tracks = engine.project.lock().tracks.len();
+        place_bounce(&engine, &id, "Vox", &file, 1920).unwrap();
+        assert_eq!(steps(), before + 1, "bouncing is one step");
+        assert!(engine.undo());
+        let p = engine.project.lock();
+        assert_eq!(p.tracks.len(), tracks, "one undo takes the new track away");
+        assert!(!p.track(&id).unwrap().muted, "and unmutes the original");
+        drop(p);
+
+        let before = steps();
+        place_freeze(&engine, &id, &file, 1920).unwrap();
+        assert!(engine.project.lock().track(&id).unwrap().frozen);
+        assert_eq!(steps(), before + 1, "freezing is one step");
+        assert!(engine.undo());
+        assert!(!engine.project.lock().track(&id).unwrap().frozen);
+        assert_eq!(clip_ids(&engine, &id), ["a", "b"], "and leaves no render");
     }
 }
 
