@@ -1771,6 +1771,24 @@ impl AudioNode for MidiTrackNode {
             }
         }
 
+        // What other tracks route or send into this one, mixed in before
+        // its plug-ins, as an audio track does with its input. The mixer
+        // offers an instrument track as an output and a send target, and
+        // everything routed to one was dropped.
+        if let ([left, right, ..], Some(in_l), Some(in_r)) =
+            (&mut *outputs, inputs.first(), inputs.get(1))
+        {
+            let n = block_size
+                .min(left.len())
+                .min(right.len())
+                .min(in_l.len())
+                .min(in_r.len());
+            for i in 0..n {
+                left[i] += in_l[i];
+                right[i] += in_r[i];
+            }
+        }
+
         // Pre-fader insert FX: synth → inserts → fader → pan. Empty chain
         // is a no-op, so tracks without FX pay nothing.
         if !self.chain.slots.is_empty() {
@@ -2151,6 +2169,20 @@ mod tests {
         assert!(peak(&out[0]) < 1e-6, "the fader is down");
         assert!(peak(&out[2]) > 0.01 && peak(&out[3]) > 0.01);
         assert!(node.meter.pre_fader_peak_db.load(Ordering::Relaxed) > -60.0);
+    }
+
+    /// Sound routed or sent into an instrument track goes through it, as
+    /// through any channel. It was dropped: nothing reached the master.
+    #[test]
+    fn sound_routed_into_an_instrument_track_comes_out_of_it() {
+        let mut node = make_node();
+        let ctx = ctx_at(48_000.0, 256, 0, true);
+        let routed = vec![0.5_f32; 256];
+        let inputs: [&[f32]; 4] = [&routed, &routed, &[0.0; 256], &[0.0; 256]];
+        let mut out = vec![vec![0.0_f32; 256]; 4];
+        node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+        let peak = out[0].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.3, "the routed sound comes out: {peak}");
     }
 
     /// Muted while it plays, an instrument track's meter falls to silence
