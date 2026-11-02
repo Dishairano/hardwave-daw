@@ -120,6 +120,14 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
     result
 }
 
+/// The file "Save new version" writes the song at `path` to: the next
+/// version number not already in its folder.
+#[tauri::command]
+pub fn next_song_version_path(path: String) -> Result<String, String> {
+    Project::next_version_path(std::path::Path::new(&path))
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Open a song. Off the window's thread: as a sync command the whole open
 /// (reading the file, decoding every sample, loading every plug-in) ran on
 /// it, under the engine's lock, and the window said Not Responding until it

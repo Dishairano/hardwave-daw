@@ -360,6 +360,45 @@ impl Project {
         write_atomic(path, json.as_bytes())
     }
 
+    /// Where "Save new version" writes the song at `current`: its name with
+    /// the next number, `Anthem_2.hwp` after `Anthem.hwp` and `Anthem_4.hwp`
+    /// after `Anthem_3.hwp`, passing over every number already taken in that
+    /// folder. Writing over an older version is exactly what saving a new
+    /// one is meant to avoid.
+    pub fn next_version_path(current: &Path) -> Result<std::path::PathBuf, String> {
+        let dir = current.parent().unwrap_or_else(|| Path::new(""));
+        let stem = current
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled".into());
+        let ext = current
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "hwp".into());
+        let (base, first) = match stem.rsplit_once('_') {
+            Some((base, digits))
+                if !base.is_empty()
+                    && (1..=9).contains(&digits.len())
+                    && digits.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                (base.to_string(), digits.parse::<u64>().unwrap_or(1) + 1)
+            }
+            _ => (stem, 2),
+        };
+        for n in first..first + 10_000 {
+            let candidate = dir.join(format!("{base}_{n}.{ext}"));
+            // Only a name known to be free is used: a folder that cannot be
+            // read counts as taken, not as empty.
+            if matches!(candidate.try_exists(), Ok(false)) {
+                return Ok(candidate);
+            }
+        }
+        Err(format!(
+            "Could not find a free name for a new version in {}",
+            dir.display()
+        ))
+    }
+
     /// Turn every sample named relative to the song's folder into a full
     /// path inside `dir`, the folder those names are relative to.
     ///
@@ -909,6 +948,37 @@ mod tests {
             files_of(&p.arrangements[0].timelines["insert-001"].clips),
             vec![("5e01".to_string(), vocal.to_string_lossy().into_owned())],
         );
+    }
+
+    #[test]
+    fn a_new_version_never_takes_the_name_of_one_already_there() {
+        let dir = std::env::temp_dir().join(format!("hwp-versions-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["Anthem.hwp", "Anthem_2.hwp", "Anthem_3.hwp", "Anthem_5.hwp"] {
+            std::fs::write(dir.join(name), b"a song").unwrap();
+        }
+
+        // From the first file, Anthem_2 and Anthem_3 are already versions.
+        assert_eq!(
+            Project::next_version_path(&dir.join("Anthem.hwp")).unwrap(),
+            dir.join("Anthem_4.hwp")
+        );
+        // An older version open: the newer ones after it are kept too.
+        assert_eq!(
+            Project::next_version_path(&dir.join("Anthem_2.hwp")).unwrap(),
+            dir.join("Anthem_4.hwp")
+        );
+        assert_eq!(
+            Project::next_version_path(&dir.join("Anthem_5.hwp")).unwrap(),
+            dir.join("Anthem_6.hwp")
+        );
+        // An underscore that is part of the name is not a version number.
+        assert_eq!(
+            Project::next_version_path(&dir.join("Kick_heavy.hwp")).unwrap(),
+            dir.join("Kick_heavy_2.hwp")
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

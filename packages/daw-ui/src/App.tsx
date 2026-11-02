@@ -1656,9 +1656,9 @@ export function App() {
   }, [saveProject, showErrorDialog])
 
   // Save the current project under an auto-suffixed name. FL Studio's
-  // "Save new version" — picks the next free MyProject_N.hwd in the
-  // same directory and saves there without prompting. Useful for
-  // version-stamping after a big change.
+  // "Save new version": the next MyProject_N.hwp not already in the same
+  // folder, saved there without prompting, and the song carries on in it.
+  // Useful for version-stamping after a big change.
   const handleSaveNewVersion = useCallback(async () => {
     const current = useProjectStore.getState().filePath
     if (!current) {
@@ -1666,14 +1666,11 @@ export function App() {
       await handleSaveProjectAs()
       return
     }
-    // Strip extension + trailing _N. e.g. "Track_3.hwd" → base "Track" + ext ".hwd"
-    const match = current.match(/^(.*?)(?:_(\d+))?(\.[^.]+)?$/)
-    const base = match?.[1] ?? current
-    const ext = match?.[3] ?? '.hwd'
-    let n = 2
-    if (match?.[2]) n = parseInt(match[2], 10) + 1
-    const candidate = `${base}_${n}${ext}`
     try {
+      // Asked of the backend, which can see the folder: the number used to
+      // be the open file's plus one, so with Song_2 open, Song_3 was written
+      // over even when it was already there.
+      const candidate = await invoke<string>('next_song_version_path', { path: current })
       await saveProject(candidate)
       await invoke('autosave_clear').catch(() => {})
     } catch (err) {
