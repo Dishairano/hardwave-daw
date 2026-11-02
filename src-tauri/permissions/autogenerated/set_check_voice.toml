@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-check-voice"
+description = "Enables the set_check_voice command without any pre-configured scope."
+commands.allow = ["set_check_voice"]
+
+[[permission]]
+identifier = "deny-set-check-voice"
+description = "Denies the set_check_voice command without any pre-configured scope."
+commands.deny = ["set_check_voice"]

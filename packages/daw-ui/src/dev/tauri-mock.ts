@@ -158,8 +158,8 @@ const mockDeskStatus = () => {
   }
 }
 
-/** The sound card as the backend would hold it, so the setup wizard's
- *  audio step and Settings > Audio can apply a device and read it back, and the
+/** The sound card as the backend would hold it, so the first run's Sound
+ *  step and Settings > Audio can apply a device and read it back, and the
  *  test tone it then plays. A spec makes the device fail to open with
  *  `window.__hwAudioFails = 'reason'`. */
 const mockAudio = { device: 'Focusrite Scarlett 2i2' as string | null, sampleRate: 48000, bufferSize: 512, outputPair: 0 }
@@ -170,6 +170,8 @@ type MockWindow = {
   __hwToneHold?: boolean
   /** The MIDI inputs plugged in (default: two keyboards and a desk). */
   __hwMidiPorts?: string[]
+  /** The last key played, as the Controller step reads it. */
+  __hwLastNote?: { note: number; velocity: number }
   /** Outputs on the Focusrite (default 2), for an output pair to pick. */
   __hwOutputChannels?: number
 }
@@ -797,6 +799,8 @@ const mock: TauriInternals = {
         return mockMidiPorts().map(port => ({ port, kind: mockInputKind(port) }))
       case 'get_keyboard_target':
         return { armed: [], keyboard: 'Lead' }
+      case 'set_check_voice':
+        return null
       // Settings window (screenshot harness renders it headless).
       case 'get_audio_input_devices':
         return [{ name: 'Focusrite Scarlett 2i2', is_default: true, sample_rates: [44100, 48000, 96000], max_channels: 2 }]
@@ -825,8 +829,8 @@ const mock: TauriInternals = {
       case 'get_input_meter':
         return { peak_l: 0, peak_r: 0, running: false, sample_rate: 48000, buffer_size: 512 }
       case 'list_midi_inputs':
-        // Named ports so the setup wizard's device and velocity steps can
-        // be photographed with something in them, and a desk beside the
+        // Named ports so Settings > MIDI and the first run's Controller step
+        // can be photographed with something in them, and a desk beside the
         // keyboards for the control surface's input picker.
         return mockMidiPorts()
       case 'open_midi_input': {
@@ -839,8 +843,10 @@ const mock: TauriInternals = {
         if (at >= 0) mockMidiOpen.splice(at, 1)
         return null
       }
-      case 'get_midi_activity':
-        return { open_ports: [...mockMidiOpen], ms_since_last_event: null }
+      case 'get_midi_activity': {
+        const last = mockWin().__hwLastNote ?? null
+        return { open_ports: [...mockMidiOpen], ms_since_last_event: last ? 120 : null, last_note: last }
+      }
       // Event plugin — let listeners register harmlessly.
       case 'plugin:event|listen': {
         const ev = String(args?.event ?? '')

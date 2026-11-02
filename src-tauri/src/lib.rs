@@ -819,6 +819,7 @@ pub fn run() {
             // MIDI input (live)
             commands::midi_input::list_midi_inputs,
             commands::midi_input::list_midi_input_kinds,
+            commands::midi_input::set_check_voice,
             commands::midi_input::open_midi_input,
             commands::midi_input::close_midi_input,
             commands::midi_input::close_all_midi_inputs,

@@ -627,6 +627,9 @@ pub struct DawEngine {
     /// thread.
     test_tone: crate::test_tone::TestToneRequest,
 
+    /// The plain sine voice the first run's Controller step plays keys on.
+    check_voice: crate::check_voice::CheckVoiceSwitch,
+
     /// Behaviour switches from the Audio settings panel, read by the audio
     /// thread every block.
     audio_prefs: crate::audio_prefs::AudioPrefs,
@@ -780,6 +783,7 @@ impl DawEngine {
             metronome: crate::metronome::MetronomeSettings::new(),
             preview: crate::preview_player::PreviewRequest::new(),
             test_tone: crate::test_tone::TestToneRequest::new(),
+            check_voice: crate::check_voice::CheckVoiceSwitch::new(),
             audio_prefs: crate::audio_prefs::AudioPrefs::new(),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
@@ -1374,9 +1378,10 @@ impl DawEngine {
             Arc::clone(&self.reference_gain_centi_db),
             Arc::clone(&self.session),
         );
-        // Only the live callback hears the test tone; an export's callback
-        // keeps the one nobody can start.
+        // Only the live callback hears the test tone and the check voice;
+        // an export's callback keeps the ones nobody can start.
         callback.test_tone = crate::test_tone::TestTone::new(self.test_tone.clone());
+        callback.check_voice = crate::check_voice::CheckVoice::new(self.check_voice.clone());
 
         self.audio_device
             .start(callback)
@@ -1794,6 +1799,12 @@ impl DawEngine {
     /// straight to the sound card (see `test_tone`).
     pub fn test_tone(&self) -> &crate::test_tone::TestToneRequest {
         &self.test_tone
+    }
+
+    /// The first run's Controller step turns this on, so the keys sound
+    /// in a song with no instrument (see `check_voice`).
+    pub fn check_voice(&self) -> &crate::check_voice::CheckVoiceSwitch {
+        &self.check_voice
     }
 
     /// The Audio settings panel's behaviour switches.
@@ -3106,6 +3117,8 @@ struct EngineCallback {
     /// The test tone, mixed in with the auditions. Built unwired; only the
     /// live callback is handed the request the window starts it with.
     test_tone: crate::test_tone::TestTone,
+    /// The first run's check voice, the same way.
+    check_voice: crate::check_voice::CheckVoice,
     /// The Audio settings panel's behaviour switches, shared with the engine
     /// so a change applies to the next block.
     audio_prefs: crate::audio_prefs::AudioPrefs,
@@ -3333,6 +3346,7 @@ impl EngineCallback {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
             test_tone: crate::test_tone::TestTone::unwired(),
+            check_voice: crate::check_voice::CheckVoice::unwired(),
             audio_prefs,
             record_pass,
             record_last_pos,
@@ -5210,16 +5224,17 @@ impl EngineCallback {
     }
 
     /// What is played straight to the sound card on top of the song: the
-    /// browser's auditions and the test tone. After the master, its tap and
-    /// the capture path, so none of it prints into a recording or a bounce,
-    /// and a muted master or a plug-in on it cannot hide it. On every block,
-    /// the stopped and the counting-in ones too: they are mostly listened to
-    /// with the song stopped.
+    /// browser's auditions, the test tone and the first run's check voice.
+    /// After the master, its tap and the capture path, so none of it prints
+    /// into a recording or a bounce, and a muted master or a plug-in on it
+    /// cannot hide it. On every block, the stopped and the counting-in ones
+    /// too: they are mostly listened to with the song stopped.
     fn render_auditions(&mut self, block: &mut [f32], num_frames: usize) {
         let rate = self.sample_rate as f64;
         self.preview
             .render(block, num_frames, &self.audio_pool, rate);
         self.test_tone.render(block, num_frames, rate);
+        self.check_voice.render(block, num_frames, rate);
         // The last thing before the sound card: nothing broken reaches the
         // speakers, whatever produced it (a plug-in, a script, a value from
         // a file or the network).
@@ -5421,6 +5436,10 @@ impl EngineCallback {
                 }
             }
         }
+        // The first run's check voice hears the keys too (it is silent
+        // unless its step is open).
+        self.check_voice
+            .take_events(&self.midi_event_scratch, self.sample_rate as f64);
 
         // Push drained events into the rolling capture ring. try_lock
         // keeps the audio thread non-blocking — if the UI is mid-dump
@@ -7322,11 +7341,40 @@ mod rt_safety_tests {
         assert!(out.iter().any(|s| s.abs() > 0.0));
     }
 
-    /// An export never has the test tone in it, even while the window has
-    /// it playing.
+    /// The first run's check voice plays a key with the song stopped and no
+    /// instrument in it, and only while its step is open.
+    #[test]
+    fn the_check_voice_plays_a_key_while_its_step_is_open() {
+        let midi = Arc::new(Mutex::new(MidiInputManager::new()));
+        let (mut cb, _cmd_tx) = make_callback(Arc::new(Mutex::new(Project::default())));
+        cb.midi_input = Arc::clone(&midi);
+        let switch = crate::check_voice::CheckVoiceSwitch::new();
+        cb.check_voice = crate::check_voice::CheckVoice::new(switch.clone());
+        let key = hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        };
+
+        midi.lock().inject(key);
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        assert!(out.iter().all(|s| *s == 0.0), "off: the key plays nothing");
+
+        switch.set(true);
+        midi.lock().inject(key);
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        assert!(out.iter().any(|s| s.abs() > 0.01), "on: the key is heard");
+    }
+
+    /// An export never has the test tone or the check voice in it, even
+    /// while the window has them playing.
     #[test]
     fn an_export_never_has_the_test_tone_in_it() {
         let engine = DawEngine::new();
+        engine.check_voice().set(true);
         engine.test_tone().play();
         let mut peak = 0.0f32;
         engine

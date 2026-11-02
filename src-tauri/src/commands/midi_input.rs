@@ -7,6 +7,15 @@ use tauri::State;
 pub struct MidiActivitySnapshot {
     pub open_ports: Vec<String>,
     pub ms_since_last_event: Option<u64>,
+    /// The last key played, for the first run's Controller step.
+    pub last_note: Option<LastNote>,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LastNote {
+    pub note: u8,
+    /// 1 to 127.
+    pub velocity: u8,
 }
 
 #[derive(Serialize)]
@@ -30,6 +39,14 @@ pub fn list_midi_inputs(_state: State<AppState>) -> Vec<String> {
 #[tauri::command]
 pub async fn list_midi_input_kinds() -> Vec<crate::midi_hotplug::InputSeen> {
     crate::midi_hotplug::kinds(&hardwave_midi::MidiInputManager::available_ports())
+}
+
+/// The plain sine voice the first run's Controller step plays the keys on,
+/// on while the step shows. A new song has no instrument, so without it the
+/// keys played nothing there.
+#[tauri::command]
+pub fn set_check_voice(state: State<AppState>, enabled: bool) {
+    state.engine.lock().check_voice().set(enabled);
 }
 
 #[tauri::command]
@@ -125,6 +142,9 @@ pub fn get_midi_activity(state: State<AppState>) -> MidiActivitySnapshot {
         .map(|manager| MidiActivitySnapshot {
             open_ports: manager.open_port_names(),
             ms_since_last_event: manager.ms_since_last_event(),
+            last_note: manager
+                .last_note_on()
+                .map(|(note, velocity)| LastNote { note, velocity }),
         });
     match reading {
         Some(reading) => {
