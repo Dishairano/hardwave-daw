@@ -16,7 +16,7 @@ import '../rework.css'
 import React from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import ReactDOM from 'react-dom/client'
-import { HwApp, HwTopbar, HwSecondRow, HwPlaylistTracks } from '../components/HwApp'
+import { HwApp, HwTopbar, HwSecondRow, HwPlaylistTracks, HwPlaylistTools } from '../components/HwApp'
 import { HistoryPanel } from '../components/HistoryPanel'
 import { LoudnessMeter } from '../components/LoudnessMeter'
 import { Oscilloscope } from '../components/Oscilloscope'
@@ -61,6 +61,8 @@ import { AudioSettings, focusSettingsTab, type SettingsTab } from '../components
 import { HwPluginWindow } from '../components/plugins/HwPluginWindow'
 import { SampleWindow } from '../components/sample-window/SampleWindow'
 import { useSampleWindowStore } from '../stores/sampleWindowStore'
+import { sampleAtTick } from '../utils/tempoTime'
+import { bpmToY, laneScale } from '../components/arrangement/tempoLane'
 
 /** Browser panel with a sample library added to Places and two folders open. */
 function BrowserShot() {
@@ -288,6 +290,17 @@ if (changeParam) {
       ramp: 'instant',
     })
   }
+}
+// panel=tempolane: the song the tempo lane mockup draws, 150 BPM ramping to
+// 160 through the build (bars 9 to 17) and back to 150 for the drop.
+if (params.get('panel') === 'tempolane') {
+  const bar = 960 * 4
+  entries.splice(0, entries.length,
+    { tick: 0, bpm: 150, timeSigNum: 4, timeSigDen: 4, ramp: 'instant' },
+    { tick: bar * 8, bpm: 150, timeSigNum: 4, timeSigDen: 4, ramp: 'linear' },
+    { tick: bar * 16 - 1, bpm: 160, timeSigNum: 4, timeSigDen: 4, ramp: 'instant' },
+    { tick: bar * 16, bpm: 150, timeSigNum: 4, timeSigDen: 4, ramp: 'instant' },
+  )
 }
 // The playlist re-reads the map at mount, so the mocked backend has to give
 // the same answer as this seed.
@@ -633,6 +646,75 @@ function Harness() {
             actions={<DetachButton panelId="settings" />} onClose={noop}>
             <AudioSettings onClose={noop} />
           </FloatingWindow>
+        </div>
+      )
+    }
+    case 'tempolane': {
+      // The playlist with the tempo lane, as the mockup has it: a kick and a
+      // screech in beats, a drum loop that follows the tempo and a vocal
+      // that keeps its speed, the playhead at the drop. &lane=menu opens
+      // the lane's menu at bar 4; &lane=drag drags the ramp's end.
+      const bar = 960 * 4
+      const audio = (name: string, src: string, at: number, bars: number, followBpm: number | null, secs: number): ClipInfo => ({
+        ...clip(name, src, at, bars, 'audio'),
+        sourceFrames: Math.round(secs * 48000), sourceRate: 48000, sourceStart: 0, timeFactor: 1,
+        treatment: { pan: 0, polarityInverted: false, swapStereo: false, normalize: false, removeDc: false, resample: false, followBpm },
+      })
+      const laneTracks: TrackWithClips[] = [
+        track('t-kick', 'Kick', '#e5243b', [clip('Kick', 'src-kick', 0, 24, 'midi')], 'Midi'),
+        track('t-screech', 'Screech', '#f59e0b', [clip('Screech', 'src-lead', 8, 16, 'midi')], 'Midi'),
+        track('t-loop', 'Drum loop', '#22c55e', [
+          audio('Loop 150 BPM', 'src-loop', 0, 16, 150, 16 * 1.6),
+          audio('Loop 150 BPM', 'src-loop', 16, 8, 150, 8 * 1.6),
+        ]),
+        // Eight bars at 150 as recorded: across the build it covers a
+        // little more than eight bars, as the engine makes it.
+        track('t-vox', 'Vocal', '#3b82f6', [{
+          ...audio('Vocal - Rise up', 'src-vox-1', 12, 8, null, 12.8),
+          length_ticks: Math.round(bar * 8.13),
+        }]),
+      ]
+      if (!(window as unknown as { __hwLaneSeeded?: boolean }).__hwLaneSeeded) {
+        ;(window as unknown as { __hwLaneSeeded?: boolean }).__hwLaneSeeded = true
+        useTrackStore.setState({ tracks: laneTracks, tracksById: Object.fromEntries(laneTracks.map((t) => [t.id, t])), selectedClipId: null, selectedClipIds: new Set() } as never)
+        ;(window as unknown as { __hwMockTracks?: unknown }).__hwMockTracks = laneTracks
+        useTransportStore.setState({ horizontalZoom: 0.31, bpm: 150, positionSamples: sampleAtTick(entries, bar * 16, 48000) })
+        const shot = params.get('lane')
+        setTimeout(() => {
+          const lane = document.querySelector('[data-testid="tempo-lane"]') as HTMLElement | null
+          if (!lane) return
+          const r = lane.getBoundingClientRect()
+          const pxPerTick = (100 * useTransportStore.getState().horizontalZoom) / (150 / 60) / 960
+          const scale = laneScale(entries)
+          const at = (tick: number, bpm: number) => ({ clientX: r.left + tick * pxPerTick, clientY: r.top + bpmToY(bpm, scale) })
+          if (shot === 'menu') {
+            lane.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, ...at(bar * 3, 150) }))
+          } else if (shot === 'drag') {
+            const from = at(bar * 16 - 1, 160)
+            lane.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ...from }))
+            setTimeout(() => {
+              window.dispatchEvent(new MouseEvent('mousemove', { ...from, clientY: from.clientY - 4 }))
+              window.dispatchEvent(new MouseEvent('mousemove', { ...from, clientY: from.clientY - 9 }))
+            }, 100)
+          }
+        }, 1600)
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Rawstyle anthem.hwp">
+            <HwSecondRow />
+          </HwTopbar>
+          <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <HwPlaylistTools />
+            <div className="fl-pl-body" style={{ ['--row-h' as never]: '56px' }}>
+              <HwPlaylistTracks />
+              <div className="fl-pl-grid">
+                <div className="fl-pl-canvas">
+                  <Arrangement onSetHint={noop} />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )
     }

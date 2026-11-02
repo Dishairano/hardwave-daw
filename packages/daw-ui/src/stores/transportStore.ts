@@ -4,6 +4,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useMetronomeStore } from './metronomeStore'
 import { useNotificationStore } from './notificationStore'
+import { tempoChanged, useTempoMapStore } from './tempoMapStore'
+import { layoutBpm, tickAtSample } from '../utils/tempoTime'
 
 export type SnapValue =
   | 'Off' | '1/1' | '1/2' | '1/4' | '1/8' | '1/16' | '1/32' | '1/64'
@@ -285,8 +287,9 @@ async function commitRecording(
   // with the punch window applied. A backend without positions falls back to
   // where record was pressed.
   const state = useTransportStore.getState()
-  const samplesPerTick = (state.sampleRate || 48000) * 60 / (Math.max(1, state.bpm) * PPQ_TICKS)
-  const fallbackTicks = samplesPerTick > 0 ? Math.max(0, Math.round(startSample / samplesPerTick)) : 0
+  const fallbackTicks = Math.max(0, Math.round(
+    tickAtSample(useTempoMapStore.getState().entries, startSample, state.sampleRate || 48000),
+  ))
 
   const [{ useRecordingPrefsStore }] = await Promise.all([import('./recordingPrefsStore')])
   const blend = useRecordingPrefsStore.getState().blendRecord
@@ -478,7 +481,9 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     if (get().playing) { get().stop() } else { get().play() }
   },
   setPosition: (pos) => invoke('set_position', { position: pos }),
-  setBpm: (bpm) => invoke('set_bpm', { bpm }),
+  // The song's clips that keep their speed change length with the tempo:
+  // read them again once the field settles.
+  setBpm: (bpm) => invoke('set_bpm', { bpm }).then(() => tempoChanged()),
   toggleLoop: () => {
     invoke('toggle_loop')
     set(s => ({ looping: !s.looping }))
@@ -571,7 +576,9 @@ export const useTransportStore = create<TransportState>((set, get) => ({
   // the width available, so the arrangement publishes its width and the song
   // length comes from the clips.
   zoomToFit: () => {
-    const { bpm, playlistViewportPx, songEndTicks: endTicks } = get()
+    const { playlistViewportPx, songEndTicks: endTicks } = get()
+    // The playlist is laid out at the song's opening tempo.
+    const bpm = layoutBpm(useTempoMapStore.getState().entries, get().bpm)
     const width = playlistViewportPx
     if (width <= 0 || bpm <= 0) return
     if (endTicks <= 0) {
@@ -585,7 +592,8 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     set({ horizontalZoom: Math.max(MIN_HORIZONTAL_ZOOM, Math.min(MAX_HORIZONTAL_ZOOM, target)) })
   },
   zoomToBars: (bars) => {
-    const { bpm, playlistViewportPx: width, timeSigNumerator, timeSigDenominator } = get()
+    const { playlistViewportPx: width, timeSigNumerator, timeSigDenominator } = get()
+    const bpm = layoutBpm(useTempoMapStore.getState().entries, get().bpm)
     if (width <= 0 || bpm <= 0 || bars <= 0) return
     // A bar in quarter notes: 4 in 4/4, 3.5 in 7/8.
     const quarters = timeSigNumerator * (4 / (timeSigDenominator || 4))
@@ -619,10 +627,12 @@ export const useTransportStore = create<TransportState>((set, get) => ({
     pushPunchToEngine()
   },
   setPunchRangeFromLoop: () => {
-    const { loopStart, loopEnd, sampleRate, bpm } = get()
-    if (!(loopEnd > loopStart) || sampleRate <= 0 || bpm <= 0) return
-    const inTicks = Math.max(0, Math.round((loopStart / sampleRate) * (bpm / 60) * PPQ_TICKS))
-    const outTicks = Math.max(inTicks + 1, Math.round((loopEnd / sampleRate) * (bpm / 60) * PPQ_TICKS))
+    const { loopStart, loopEnd, sampleRate } = get()
+    if (!(loopEnd > loopStart) || sampleRate <= 0) return
+    // The loop is in samples and the punch in ticks: through the tempo map.
+    const map = useTempoMapStore.getState().entries
+    const inTicks = Math.max(0, Math.round(tickAtSample(map, loopStart, sampleRate)))
+    const outTicks = Math.max(inTicks + 1, Math.round(tickAtSample(map, loopEnd, sampleRate)))
     set({ punchInTicks: inTicks, punchOutTicks: outTicks, punchEnabled: true })
     pushPunchToEngine()
   },
