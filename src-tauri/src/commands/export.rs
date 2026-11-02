@@ -1337,6 +1337,42 @@ fn isolate_for_stem(proj: &mut Project, target: &str) {
     }
 }
 
+/// Where the song's last clip ends, in ticks: how far a bounce or a freeze
+/// renders.
+fn song_end_ticks(project: &Project) -> u64 {
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| t.clips.iter())
+        .map(|c| c.position_ticks + c.length_ticks)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Give a rendered clip the length, in ticks, of the stretch of song it was
+/// rendered from. Importing the file works its length out from its duration
+/// at one tempo (the one under the playhead), so in a song with a tempo
+/// change a frozen or bounced part came out short and went silent before
+/// the end of the song, or ran on past it.
+fn fit_render_clip(
+    project: &mut Project,
+    track_id: &str,
+    clip_id: &str,
+    start_ticks: u64,
+    end_ticks: u64,
+) {
+    use hardwave_project::clip::ClipContent;
+    let Some(track) = project.track_mut(track_id) else {
+        return;
+    };
+    for placement in track.clips.iter_mut() {
+        if matches!(&placement.content, ClipContent::Audio(ac) if ac.id == clip_id) {
+            placement.position_ticks = start_ticks;
+            placement.length_ticks = end_ticks.saturating_sub(start_ticks);
+        }
+    }
+}
+
 /// Glue a track's clips between two points into one audio clip.
 ///
 /// Several takes, chopped and rearranged, are fine to work with and awkward
@@ -1466,12 +1502,23 @@ pub async fn consolidate_track_range(
             });
         }
     }
-    crate::commands::audio::import_audio_file_blocking(
+    let clip = crate::commands::audio::import_audio_file_blocking(
         state.clone(),
         source_track_id.clone(),
         path.clone(),
         Some(start_ticks),
     )?;
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        fit_render_clip(
+            &mut project,
+            &source_track_id,
+            &clip.clip_id,
+            start_ticks,
+            end_ticks,
+        );
+    }
     state.engine.lock().rebuild_graph();
     Ok(path)
 }
@@ -1496,6 +1543,8 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
+    // How far the render goes, in ticks, for the clip that plays it.
+    let end_ticks = song_end_ticks(&engine.lock().project.lock());
 
     let rendered =
         tauri::async_runtime::spawn_blocking(move || -> Result<(String, String), String> {
@@ -1591,7 +1640,7 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
         }
         id
     };
-    crate::commands::audio::import_audio_file_blocking(
+    let clip = crate::commands::audio::import_audio_file_blocking(
         state.clone(),
         new_track_id.clone(),
         path.clone(),
@@ -1600,6 +1649,7 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
     {
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
+        fit_render_clip(&mut project, &new_track_id, &clip.clip_id, 0, end_ticks);
         if let Some(t) = project.track_mut(&source_track_id) {
             t.muted = true;
         }
@@ -1850,6 +1900,8 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
+    // How far the render goes, in ticks, for the clip that plays it.
+    let end_ticks = song_end_ticks(&engine.lock().project.lock());
 
     let rendered = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let engine_guard = engine.lock();
@@ -1940,6 +1992,7 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
     {
         let engine = state.engine.lock();
         let mut project = engine.project.lock();
+        fit_render_clip(&mut project, &source_track_id, &clip.clip_id, 0, end_ticks);
         if let Some(track) = project.track_mut(&source_track_id) {
             place_freeze_render(track, &clip.clip_id);
         }
@@ -2471,6 +2524,42 @@ mod stem_and_freeze_tests {
             panic!("the audio clip second");
         };
         assert_eq!(a.fade_out_ticks, 0, "no fade-out moved into the range");
+    }
+
+    /// A rendered clip covers the stretch of song it was rendered from, in
+    /// a song whose tempo changes. Its length came from the file's duration
+    /// at one tempo, so it ended before the render did.
+    #[test]
+    fn a_render_s_clip_covers_its_render_when_the_tempo_changes() {
+        let mut p = Project::default();
+        let bar = 4 * hardwave_midi::PPQ;
+        let mut faster = p.tempo_map.entries[0].clone();
+        faster.tick = 4 * bar;
+        faster.bpm = 175.0;
+        p.tempo_map.entries.push(faster);
+        let id = p.add_audio_track("Lead".into());
+        let mut part = audio("part", "part", 100, &id);
+        part.length_ticks = 8 * bar;
+        p.track_mut(&id).unwrap().clips.push(part);
+        let end = super::song_end_ticks(&p);
+        assert_eq!(end, 8 * bar);
+        let rendered = p.tempo_map.tick_to_samples(end, SR as f64);
+
+        // What importing the render gives it: its duration at 140 BPM.
+        let secs = rendered as f64 / SR as f64;
+        let imported = (secs * 140.0 / 60.0 * hardwave_midi::PPQ as f64).round() as u64;
+        let mut render = audio("render", "render", rendered, &id);
+        render.length_ticks = imported;
+        p.track_mut(&id).unwrap().clips.push(render);
+
+        super::fit_render_clip(&mut p, &id, "render", 0, end);
+
+        let placed = p.track(&id).unwrap().clips.last().unwrap();
+        let plays_to = p
+            .tempo_map
+            .tick_to_samples(placed.position_ticks + placed.length_ticks, SR as f64);
+        assert!(imported < end, "the import alone falls short");
+        assert_eq!(plays_to, rendered, "the clip plays the whole render");
     }
 
     /// A muted track, or one silenced by a solo elsewhere, renders as it
