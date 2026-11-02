@@ -39,6 +39,8 @@ interface ProjectState {
 
   newProject: () => Promise<void>
   saveProject: (path?: string) => Promise<void>
+  /** Save the open song under a new name or folder, always asking where. */
+  saveProjectAs: () => Promise<void>
   loadProject: (path: string) => Promise<void>
   /** Open an FL Studio project as a new, unsaved song. */
   importFlProject: (path: string) => Promise<FlImportReport>
@@ -64,6 +66,20 @@ export interface FlImportReport {
   leftBehind: string[]
 }
 
+/** The save dialog for a song, starting at `defaultPath`. Null when cancelled. */
+async function askWhereToSave(defaultPath: string): Promise<string | null> {
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  return await save({
+    filters: [{ name: 'Hardwave Project', extensions: ['hwp'] }],
+    defaultPath,
+  })
+}
+
+/** A song's name: its file name without the .hwp. */
+function songName(path: string): string {
+  return path.split(/[\\/]/).pop()?.replace(/\.hwp$/i, '') || 'Untitled'
+}
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   opening: null,
   filePath: null,
@@ -84,22 +100,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   saveProject: async (path?: string) => {
     await invoke('set_channel_rack_state', { payload: usePatternStore.getState().serialize() })
     await invoke('set_timeline_state', { payload: serializeTimelineState() })
-    const savePath = path || get().filePath
-    if (!savePath) {
-      const { save } = await import('@tauri-apps/plugin-dialog')
-      const selected = await save({
-        filters: [{ name: 'Hardwave Project', extensions: ['hwp'] }],
-        defaultPath: `${get().projectName}.hwp`,
-      })
-      if (!selected) return
-      await invokeOrToast('save_project', { path: selected }, { message: 'Could not save the project' })
-      set({ filePath: selected, dirty: false })
-      get().pushRecent(selected)
-    } else {
-      await invokeOrToast('save_project', { path: savePath }, { message: 'Could not save the project' })
-      set({ dirty: false })
-      get().pushRecent(savePath)
-    }
+    const savePath = path || get().filePath || await askWhereToSave(`${get().projectName}.hwp`)
+    if (!savePath) return
+    await invokeOrToast('save_project', { path: savePath }, { message: 'Could not save the project' })
+    // The song now lives where it was written. A save to a new path used to
+    // leave the old path in place, so the next Ctrl+S went back to the old
+    // file and wrote over the version the producer had meant to keep.
+    set({ filePath: savePath, projectName: songName(savePath), dirty: false })
+    get().pushRecent(savePath)
+  },
+
+  saveProjectAs: async () => {
+    // Always asks, starting from the song's own file. Save As used to fall
+    // back to the path the song already had, so once a song was saved it
+    // wrote over the open file without a dialog, and the copy the producer
+    // asked for was never made.
+    const target = await askWhereToSave(get().filePath ?? `${get().projectName}.hwp`)
+    if (!target) return
+    await get().saveProject(target)
   },
 
   loadProject: async (path: string) => {
