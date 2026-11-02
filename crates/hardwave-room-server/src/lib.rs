@@ -28,7 +28,7 @@ use axum::Router;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use hardwave_project::multiplayer::{to_wire_json, SyncKind, SyncMessage, WIRE_VERSION};
-use hardwave_room::{JoinRefusal, Knock, LiveRoom};
+use hardwave_room::{message_cost, JoinRefusal, Knock, LiveRoom, TokenBucket};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot, Notify, OwnedSemaphorePermit, Semaphore};
@@ -63,8 +63,8 @@ impl Default for Limits {
             max_message: hardwave_room::MAX_PROJECT_BYTES + 64 * 1024,
             idle: Duration::from_secs(90),
             admit_wait: Duration::from_secs(120),
-            per_second: 40.0,
-            burst: 200.0,
+            per_second: hardwave_room::SEND_RATE,
+            burst: hardwave_room::SEND_BURST,
         }
     }
 }
@@ -316,8 +316,7 @@ async fn handle(
     let room_for_messages = Arc::clone(&session);
     let limits = Arc::clone(&rooms.limits);
     let mut from_peer = tokio::spawn(async move {
-        let mut tokens = limits.burst;
-        let mut refilled = Instant::now();
+        let mut allowance = TokenBucket::new(limits.per_second, limits.burst);
         loop {
             let next = tokio::time::timeout(limits.idle, receiver.next()).await;
             let Ok(Some(Ok(message))) = next else {
@@ -330,21 +329,11 @@ async fn handle(
                 continue;
             };
             // A token bucket: a burst is fine, a flood is not. A song
-            // costs more than an edit.
-            tokens =
-                (tokens + refilled.elapsed().as_secs_f64() * limits.per_second).min(limits.burst);
-            refilled = Instant::now();
-            // A whole track costs by its size: a few for one with plug-in
-            // state, one for an empty one.
-            let cost = match &parsed.kind {
-                SyncKind::ProjectOffer { .. } => 100.0,
-                SyncKind::TrackState { blob, .. } => 1.0 + (blob.len() / (256 * 1024)) as f64,
-                _ => 1.0,
-            };
-            if tokens < cost {
+            // costs more than an edit, a track or a part of the song by its
+            // size (see message_cost).
+            if !allowance.try_take(message_cost(&parsed.kind), Instant::now()) {
                 continue;
             }
-            tokens -= cost;
             // The sender is who the socket says they are, not who the
             // message claims to be.
             parsed.sender_user_id = mine.clone();
