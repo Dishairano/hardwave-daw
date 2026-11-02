@@ -726,6 +726,8 @@ pub struct DawEngine {
     history_group_open: Arc<std::sync::atomic::AtomicBool>,
     /// True once the open group has taken its snapshot.
     history_group_taken: Arc<std::sync::atomic::AtomicBool>,
+    /// A rebuild inside the open group wanted bakes, which wait for its end.
+    bake_after_group: Arc<std::sync::atomic::AtomicBool>,
 
     /// Circular buffer of recent master-bus output samples. Used by the UI
     /// for oscilloscope / spectrum / correlation visualizations.
@@ -808,6 +810,7 @@ impl DawEngine {
             record_last_pos: Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
             history_group_open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_group_taken: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            bake_after_group: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             worker_pool: Arc::new(Mutex::new(None)),
@@ -938,11 +941,15 @@ impl DawEngine {
         self.history_group_taken.store(false, Relaxed);
     }
 
-    /// End the group, so the next mutation snapshots again.
+    /// End the group, so the next mutation snapshots again, and start the
+    /// bakes its rebuilds held back.
     pub fn end_history_group(&self) {
         use std::sync::atomic::Ordering::Relaxed;
         self.history_group_open.store(false, Relaxed);
         self.history_group_taken.store(false, Relaxed);
+        if self.bake_after_group.swap(false, Relaxed) {
+            self.prebake_stretch_sources_async();
+        }
     }
 
     pub fn history_group_open(&self) -> bool {
@@ -1490,7 +1497,16 @@ impl DawEngine {
         // Baking a long stem takes seconds (~16 s for 30 s of stereo), so
         // doing it inline would freeze the caller; until it lands the clip
         // simply plays varispeed, and the bake triggers its own rebuild.
-        self.prebake_stretch_sources_async();
+        //
+        // In the middle of a gesture (a tempo point being dragged) every step
+        // asked for bakes of a stretch gone a moment later, each on a thread
+        // of its own: they wait for the gesture to end.
+        if self.history_group_open() {
+            self.bake_after_group
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.prebake_stretch_sources_async();
+        }
         let _ = self.command_tx.try_send(EngineCommand::RebuildGraph);
     }
 
@@ -1614,7 +1630,18 @@ impl DawEngine {
         for track in &project.tracks {
             for clip in &track.clips {
                 if let ClipContent::Audio(audio_clip) = &clip.content {
-                    if let Some((stretch, semis)) = bake_params(audio_clip) {
+                    // A clip that follows the tempo, as it plays at this map.
+                    let file_rate = self
+                        .audio_pool
+                        .get(&audio_clip.source_path)
+                        .map(|b| b.sample_rate as f64);
+                    let followed = crate::tempo_follow::tempo_followed(
+                        clip,
+                        audio_clip,
+                        &project.tempo_map,
+                        file_rate,
+                    );
+                    if let Some((stretch, semis)) = bake_params(&followed) {
                         let entry = (playing_source(audio_clip), stretch, semis);
                         if !acc.contains(&entry) {
                             acc.push(entry);
@@ -1676,9 +1703,6 @@ impl DawEngine {
                 let ClipContent::Audio(audio_clip) = &clip.content else {
                     continue;
                 };
-                if audio_clip.warp_markers.is_empty() || audio_clip.treatment.resample {
-                    continue;
-                }
                 let Some(buffer_rate) = self
                     .audio_pool
                     .get(&audio_clip.source_path)
@@ -1686,6 +1710,18 @@ impl DawEngine {
                 else {
                     continue;
                 };
+                // A clip that follows the tempo across a change is played as
+                // warp markers, rendered here like any warped clip.
+                let followed = crate::tempo_follow::tempo_followed(
+                    clip,
+                    audio_clip,
+                    &project.tempo_map,
+                    Some(buffer_rate),
+                );
+                let audio_clip: &hardwave_project::clip::AudioClip = &followed;
+                if audio_clip.warp_markers.is_empty() || audio_clip.treatment.resample {
+                    continue;
+                }
                 let unity = if buffer_rate > 0.0 {
                     buffer_rate / sample_rate
                 } else {
@@ -4114,6 +4150,16 @@ impl EngineCallback {
         let mut regions: Vec<ClipRegion> = clips_to_play
             .filter_map(|clip| match &clip.content {
                 hardwave_project::clip::ClipContent::Audio(audio_clip) => {
+                    // A clip that follows the tempo is played as a stretch or
+                    // as warp markers at this tempo map (`tempo_follow`), the
+                    // same clip the bakes were planned from.
+                    let file_rate = self
+                        .audio_pool
+                        .get(&audio_clip.source_path)
+                        .map(|b| b.sample_rate as f64);
+                    let followed =
+                        crate::tempo_follow::tempo_followed(clip, audio_clip, tempo_map, file_rate);
+                    let audio_clip: &hardwave_project::clip::AudioClip = &followed;
                     let timeline_start =
                         tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
                     let timeline_end = tempo_map
@@ -9278,6 +9324,264 @@ mod track_render_tests {
             "the frozen track plays as it did: worst difference {diff}, peaks {} and {}",
             peak(&heard),
             peak(&played)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tempo_follow_tests {
+    //! A song whose tempo changes, played back and exported: audio that
+    //! follows the tempo lands on the beats the tempo map puts it on, audio
+    //! that keeps its speed plays as recorded, and the two renders agree.
+    use super::*;
+    use hardwave_midi::PPQ;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, SampleTreatment};
+    use hardwave_project::tempo::{TempoEntry, TempoMap, TempoRamp};
+    use std::sync::atomic::Ordering::Relaxed;
+
+    const RATE: u32 = 48_000;
+    /// A beat of the loop: it is in 150 BPM.
+    const LOOP_BEAT: usize = 19_200;
+    const BEATS: usize = 16;
+
+    fn entry(tick: u64, bpm: f64, ramp: TempoRamp) -> TempoEntry {
+        TempoEntry {
+            tick,
+            bpm,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            ramp,
+        }
+    }
+
+    /// 150 for two bars, then a ramp up to 175 over the next bar, held.
+    fn ramp_up() -> TempoMap {
+        TempoMap {
+            entries: vec![
+                entry(0, 150.0, TempoRamp::Instant),
+                entry(PPQ * 8, 150.0, TempoRamp::Linear),
+                entry(PPQ * 12, 175.0, TempoRamp::Instant),
+            ],
+        }
+    }
+
+    /// A click on every beat of a 150 BPM loop, sixteen beats long.
+    fn click_loop() -> AudioBuffer {
+        let mut ch = vec![0.0f32; LOOP_BEAT * BEATS];
+        for beat in 0..BEATS {
+            ch[beat * LOOP_BEAT] = 1.0;
+        }
+        AudioBuffer {
+            channels: vec![ch.clone(), ch],
+            sample_rate: RATE,
+            num_frames: LOOP_BEAT * BEATS,
+        }
+    }
+
+    /// The song: the click loop at the start of an audio track, following
+    /// the tempo or keeping its speed. Played like a tape, so the test
+    /// hears where each click lands without a phase vocoder's smear.
+    fn song(map: TempoMap, follow: bool) -> Project {
+        let mut project = Project {
+            tempo_map: map,
+            ..Default::default()
+        };
+        let id = project.add_audio_track("Loop".into());
+        let track = project.track_mut(&id).unwrap();
+        track.clips.push(ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: "loop".into(),
+                name: "Loop 150 BPM".into(),
+                source_path: "loop".into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: (LOOP_BEAT * BEATS) as u64,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: String::new(),
+                treatment: SampleTreatment {
+                    resample: true,
+                    follow_bpm: follow.then_some(150.0),
+                    ..Default::default()
+                },
+                tuned_notes: Vec::new(),
+            }),
+            track_id: id.clone(),
+            position_ticks: 0,
+            length_ticks: PPQ * 20,
+            lane: 0,
+            color: None,
+        });
+        project
+    }
+
+    fn exported(project: Project, frames: u64) -> Vec<f32> {
+        let engine = DawEngine::new();
+        engine.audio_pool.insert("loop".to_string(), click_loop());
+        *engine.project.lock() = project;
+        let mut out = Vec::new();
+        engine
+            .render_offline_with(
+                RATE,
+                frames,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend(b.iter().step_by(2));
+                    true
+                },
+            )
+            .expect("it renders");
+        out
+    }
+
+    /// The same song through the callback the sound card drives, a small
+    /// block at a time.
+    fn played(project: Project, frames: usize) -> Vec<f32> {
+        let transport = TransportState::default();
+        transport.sample_rate.store(RATE as u64, Relaxed);
+        transport
+            .bpm
+            .store(project.tempo_map.entries[0].bpm, Relaxed);
+        transport.playing.store(true, Relaxed);
+        let pool = AudioPool::new();
+        pool.insert("loop".to_string(), click_loop());
+        let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
+        let (_command_tx, command_rx) = bounded::<EngineCommand>(4);
+        let (_cmd_tx, cmd_rx) = crate::insert_chain::command_channel(8);
+        let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
+        let mut cb = EngineCallback::new(
+            transport,
+            Arc::new(Mutex::new(project)),
+            meter_producer,
+            command_rx,
+            pool,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(None)),
+            crate::input_node::capture_set(),
+            master_tap::new_shared(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cmd_rx,
+            grave_tx,
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(MidiInputManager::new())),
+            Arc::new(Mutex::new(MidiCaptureRing::new(64))),
+            RATE,
+            256,
+            LoadCounters::new(),
+            crate::metronome::MetronomeSettings::silent(),
+            crate::preview_player::PreviewRequest::new(),
+            crate::audio_prefs::AudioPrefs::new(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            Arc::new(crate::session::SessionState::new()),
+        );
+        let mut out = Vec::with_capacity(frames);
+        let mut block = vec![0.0f32; 512];
+        while out.len() < frames {
+            block.fill(0.0);
+            cb.process(&mut block, 256, 2);
+            out.extend(block.iter().step_by(2));
+        }
+        out.truncate(frames);
+        out
+    }
+
+    /// Where each click is heard: the loudest sample near where it should be.
+    fn clicks_near(out: &[f32], expected: &[u64]) -> Vec<u64> {
+        expected
+            .iter()
+            .map(|&at| {
+                let from = (at as usize).saturating_sub(400);
+                let to = (at as usize + 400).min(out.len());
+                let (i, _) = out[from..to]
+                    .iter()
+                    .enumerate()
+                    .fold((0, 0.0f32), |best, (i, v)| {
+                        if v.abs() > best.1 {
+                            (i, v.abs())
+                        } else {
+                            best
+                        }
+                    });
+                (from + i) as u64
+            })
+            .collect()
+    }
+
+    fn beats_of(map: &TempoMap) -> Vec<u64> {
+        (0..BEATS as u64)
+            .map(|b| map.tick_to_samples(b * PPQ, RATE as f64))
+            .collect()
+    }
+
+    /// The loop follows the tempo: through the steady start, up the ramp
+    /// and on at 175, every click is on the beat the tempo map has there.
+    /// It used to play on at 150, so by the end it was a beat and a half
+    /// behind the grid it was drawn on.
+    #[test]
+    fn a_loop_that_follows_the_tempo_stays_on_the_beat() {
+        let map = ramp_up();
+        let beats = beats_of(&map);
+        let out = exported(song(map, true), beats[BEATS - 1] + 4_800);
+        for (k, (heard, want)) in clicks_near(&out, &beats)
+            .into_iter()
+            .zip(&beats)
+            .enumerate()
+        {
+            assert!(
+                heard.abs_diff(*want) <= 3,
+                "beat {k}: the click is at {heard}, the beat at {want}"
+            );
+        }
+    }
+
+    /// A loop that keeps its speed plays as recorded: its clicks keep the
+    /// loop's own spacing whatever the tempo does around them.
+    #[test]
+    fn a_clip_that_keeps_its_speed_plays_as_recorded() {
+        let map = ramp_up();
+        let recorded: Vec<u64> = (0..BEATS as u64).map(|b| b * LOOP_BEAT as u64).collect();
+        let out = exported(song(map.clone(), false), recorded[BEATS - 1] + 4_800);
+        for (heard, want) in clicks_near(&out, &recorded).into_iter().zip(&recorded) {
+            assert!(heard.abs_diff(*want) <= 1, "{heard} against {want}");
+        }
+        // And that is off the song's beats once the ramp has begun.
+        let beats = beats_of(&map);
+        assert!(recorded[15].abs_diff(beats[15]) > 4_800);
+    }
+
+    /// Playback and the export are one song: the clicks land on the same
+    /// samples whether the song is played a block at a time or bounced.
+    #[test]
+    fn playback_and_the_export_agree() {
+        let map = ramp_up();
+        let beats = beats_of(&map);
+        let frames = beats[BEATS - 1] + 4_800;
+        let live = played(song(map.clone(), true), frames as usize);
+        let bounced = exported(song(map, true), frames);
+        let heard_live = clicks_near(&live, &beats);
+        let heard_bounced = clicks_near(&bounced, &beats);
+        assert_eq!(heard_live, heard_bounced);
+        let peak_live = live.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let peak_bounced = bounced.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak_live > 0.1, "the live render is heard");
+        assert!(
+            (peak_live - peak_bounced).abs() < 1e-3,
+            "{peak_live} against {peak_bounced}"
         );
     }
 }

@@ -161,10 +161,18 @@ pub fn split_clip(
             // Reversed, a clip plays its window from the end back, counted
             // from its own right edge: the left part has to start its
             // window where the right part's sound ends.
-            let step = source_frames_per_sample(a, track_pitch_factor);
-            let span = tempo_map.tick_to_samples(end, sample_rate)
-                - tempo_map.tick_to_samples(at_ticks, sample_rate);
-            a.source_start += (span as f64 * step).round() as u64;
+            let frames = match a.file_frames_per_tick(sample_rate) {
+                // Following the tempo, a tick is the same stretch of the
+                // file wherever it is.
+                Some(per_tick) => (end - at_ticks) as f64 * per_tick,
+                None => {
+                    let step = source_frames_per_sample(a, track_pitch_factor);
+                    let span = tempo_map.tick_to_samples(end, sample_rate)
+                        - tempo_map.tick_to_samples(at_ticks, sample_rate);
+                    span as f64 * step
+                }
+            };
+            a.source_start += frames.round() as u64;
         }
     }
     // A MIDI clip shorter than its content lets go of everything past its
@@ -198,6 +206,15 @@ fn trim_audio(
     // not move.
     if audio.reversed {
         return new_pos;
+    }
+    // A clip that follows the tempo plays the same stretch of its file per
+    // tick whatever the tempo is there, so its edge moves through the file
+    // by ticks. Counted at the clip's stretch instead, the audio after the
+    // edge jumped as soon as the song's tempo was not the loop's own.
+    if audio.warp_markers.is_empty() {
+        if let Some(per_tick) = audio.file_frames_per_tick(sample_rate) {
+            return trim_followed(audio, old_pos, new_pos, per_tick);
+        }
     }
     let step = source_frames_per_sample(audio, track_pitch_factor);
     let old_s = tempo_map.tick_to_samples(old_pos, sample_rate);
@@ -233,6 +250,28 @@ fn trim_audio(
             let reach = (audio.source_start as f64 / step.max(f64::EPSILON)) as u64;
             audio.source_start = 0;
             tempo_map.samples_to_tick(old_s.saturating_sub(reach), sample_rate)
+        }
+    }
+}
+
+/// `trim_audio` for a clip that follows the tempo: `per_tick` frames of
+/// its file go by per tick.
+fn trim_followed(audio: &mut AudioClip, old_pos: u64, new_pos: u64, per_tick: f64) -> u64 {
+    if new_pos >= old_pos {
+        let advance = ((new_pos - old_pos) as f64 * per_tick).round() as u64;
+        let limit = audio.source_end.max(audio.source_start);
+        audio.source_start = (audio.source_start + advance).min(limit);
+        new_pos
+    } else {
+        let wanted = ((old_pos - new_pos) as f64 * per_tick).round() as u64;
+        if wanted <= audio.source_start {
+            audio.source_start -= wanted;
+            new_pos
+        } else {
+            // The file starts here: the edge stops where it does.
+            let reach = (audio.source_start as f64 / per_tick.max(f64::EPSILON)) as u64;
+            audio.source_start = 0;
+            old_pos.saturating_sub(reach)
         }
     }
 }
@@ -669,5 +708,33 @@ mod tests {
     fn the_edge_cannot_pass_the_end() {
         let mut c = placed(ClipContent::Audio(audio(0, 100)), 0, BEAT);
         assert!(trim_clip_start(&mut c, BEAT, &TempoMap::default(), RATE, 1.0).is_err());
+    }
+
+    /// A 128 BPM loop that follows the tempo, in a 140 song: a beat of the
+    /// song is a beat of the loop, 22 500 frames of it, so cutting a beat off
+    /// the front moves its start that far into the file. Counted at the
+    /// song's speed it moved 20 571, and everything after the edge played
+    /// early.
+    #[test]
+    fn trimming_a_clip_that_follows_the_tempo_moves_it_by_its_own_beats() {
+        let mut a = audio(0, 48_000 * 8);
+        a.treatment.follow_bpm = Some(128.0);
+        let mut c = placed(ClipContent::Audio(a), 0, 8 * BEAT);
+        assert_eq!(trim(&mut c, BEAT), BEAT);
+        assert_eq!(source_start(&c), 22_500);
+        // And back: the edge brings the beat back.
+        assert_eq!(trim(&mut c, 0), 0);
+        assert_eq!(source_start(&c), 0);
+
+        let mut a = audio(0, 48_000 * 8);
+        a.treatment.follow_bpm = Some(128.0);
+        a.reversed = true;
+        let mut c = placed(ClipContent::Audio(a), 0, 4 * BEAT);
+        split_clip(&mut c, BEAT, "r", &TempoMap::default(), RATE, 1.0).unwrap();
+        assert_eq!(
+            source_start(&c),
+            3 * 22_500,
+            "left half: the loop's last three beats"
+        );
     }
 }
