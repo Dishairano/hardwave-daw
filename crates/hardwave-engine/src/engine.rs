@@ -7773,6 +7773,13 @@ mod wait_for_input_tests {
     fn make_callback(
         midi: Arc<Mutex<MidiInputManager>>,
     ) -> (EngineCallback, crossbeam_channel::Sender<EngineCommand>) {
+        make_callback_with(midi, Project::default())
+    }
+
+    fn make_callback_with(
+        midi: Arc<Mutex<MidiInputManager>>,
+        project: Project,
+    ) -> (EngineCallback, crossbeam_channel::Sender<EngineCommand>) {
         let transport = TransportState::default();
         transport.sample_rate.store(48_000, Relaxed);
         let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
@@ -7783,7 +7790,7 @@ mod wait_for_input_tests {
         let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
         let cb = EngineCallback::new(
             transport,
-            Arc::new(Mutex::new(Project::default())),
+            Arc::new(Mutex::new(project)),
             meter_producer,
             command_rx,
             AudioPool::new(),
@@ -7903,6 +7910,58 @@ mod wait_for_input_tests {
             apart.abs_diff(5 * 256) <= 48,
             "the clock says how far apart they were played: {apart}"
         );
+    }
+
+    /// A synth played on the keyboard with the song stopped, sent pre-fader
+    /// to a bus, with its own fader all the way down: the bus carries it,
+    /// stopped and playing. A bus ran only while the song played, so a
+    /// keyboard reached no bus or reverb return until Play.
+    #[test]
+    fn a_bus_carries_a_synth_played_live_with_the_song_stopped() {
+        let mut song = Project::default();
+        let mut synth = hardwave_project::Track::new_audio("synth".into(), "Synth".into());
+        synth.kind = hardwave_project::TrackKind::Midi;
+        synth.volume_db = -200.0;
+        synth.sends.push(hardwave_project::mixer::Send {
+            target: "bus".into(),
+            gain_db: 0.0,
+            pre_fader: true,
+            enabled: true,
+        });
+        song.tracks.push(synth);
+        song.tracks.push(hardwave_project::Track::new_audio(
+            "bus".into(),
+            "Bus".into(),
+        ));
+        song.keyboard_track = Some("synth".into());
+        let midi = Arc::new(Mutex::new(MidiInputManager::new()));
+        let (mut cb, tx) = make_callback_with(Arc::clone(&midi), song);
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        midi.lock().inject(hardwave_midi::MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.9,
+        });
+        let mut loudest = |cb: &mut EngineCallback| {
+            let mut peak = 0.0_f32;
+            for _ in 0..8 {
+                cb.process(&mut out, 256, 2);
+                peak = out.iter().fold(peak, |m, s| m.max(s.abs()));
+            }
+            peak
+        };
+        assert!(!cb.transport.is_playing());
+        let stopped = loudest(&mut cb);
+        assert!(
+            stopped > 0.05,
+            "stopped, the bus carries the synth: {stopped}"
+        );
+        tx.send(EngineCommand::Transport(TransportCommand::Play))
+            .unwrap();
+        let playing = loudest(&mut cb);
+        assert!(playing > 0.05, "playing, the bus carries it too: {playing}");
     }
 
     /// A key held longer than the hold with the song stopped keeps the
