@@ -75,7 +75,7 @@ impl Project {
                 id: id.clone(),
                 name: "Arrangement 1".into(),
                 timelines,
-                rows: Vec::new(),
+                rows: self.rows.clone(),
             });
             self.active_arrangement = id;
         } else if self.active_arrangement.is_empty()
@@ -97,6 +97,7 @@ impl Project {
         let active = self.active_arrangement.clone();
         if let Some(arr) = self.arrangements.iter_mut().find(|a| a.id == active) {
             arr.timelines = snapshot;
+            arr.rows = self.rows.clone();
         }
     }
 
@@ -104,13 +105,17 @@ impl Project {
     /// the snapshot are cleared. Sets it active. No-op if `id` is unknown.
     pub fn apply_arrangement(&mut self, id: &str) -> Result<(), String> {
         self.ensure_arrangements();
-        let timelines = self
+        let arrangement = self
             .arrangements
             .iter()
             .find(|a| a.id == id)
-            .ok_or_else(|| format!("Arrangement not found: {id}"))?
-            .timelines
-            .clone();
+            .ok_or_else(|| format!("Arrangement not found: {id}"))?;
+        let timelines = arrangement.timelines.clone();
+        // Its own playlist rows. An arrangement saved before rows were kept
+        // has none and keeps the ones on screen.
+        if !arrangement.rows.is_empty() {
+            self.rows = arrangement.rows.clone();
+        }
         for t in &mut self.tracks {
             match timelines.get(&t.id) {
                 Some(tl) => {
@@ -138,11 +143,21 @@ impl Project {
         } else {
             BTreeMap::new()
         };
+        // The rows come along either way, as the playlist kept showing
+        // every track's row in a new, empty arrangement; an empty one
+        // starts with every row switched on.
+        let mut rows = self.rows.clone();
+        if !copy_current {
+            for row in &mut rows {
+                row.muted = false;
+                row.soloed = false;
+            }
+        }
         self.arrangements.push(Arrangement {
             id: id.clone(),
             name: name.to_string(),
             timelines,
-            rows: Vec::new(),
+            rows,
         });
         // Switch onto it (clears the live timeline when starting empty).
         let _ = self.apply_arrangement(&id);
@@ -241,6 +256,35 @@ mod tests {
         p.capture_active_arrangement();
         p.apply_arrangement(&arr2).unwrap();
         assert_eq!(p.tracks[1].clips.len(), 1);
+    }
+
+    /// Each arrangement keeps its own playlist rows: renamed or switched
+    /// off in one, they are as they were in the other.
+    #[test]
+    fn each_arrangement_keeps_its_own_rows() {
+        let mut p = Project::default();
+        p.ensure_arrangements();
+        let first = p.active_arrangement.clone();
+        p.rows[0].name = "Drums".into();
+        p.rows[0].muted = true;
+        let second = p.create_arrangement("Two", false);
+        assert_eq!(
+            p.rows[0].name, "Drums",
+            "a new arrangement shows the same rows"
+        );
+        assert!(!p.rows[0].muted, "with every row switched on");
+        p.rows[0].name = "Vocals".into();
+        p.capture_active_arrangement();
+        p.apply_arrangement(&first).unwrap();
+        assert_eq!(p.rows[0].name, "Drums");
+        assert!(p.rows[0].muted);
+        p.capture_active_arrangement();
+        p.apply_arrangement(&second).unwrap();
+        assert_eq!(p.rows[0].name, "Vocals");
+        // A copy takes the switches too.
+        p.rows[1].soloed = true;
+        p.create_arrangement("Three", true);
+        assert!(p.rows[1].soloed);
     }
 
     #[test]
