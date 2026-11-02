@@ -1,83 +1,8 @@
-### New features
-- feat: Sign in to your Hardwave account inside the DAW. Signing in here signs your Hardwave plug-ins in too, and the DAW shows your name and whether you have Pro
-- feat: The top right of the DAW shows Sign in, or your name with PRO or FREE. Click it for your plan, a link to your account and Sign out. It checks again when you come back to the DAW
-
 ### Bug fixes
-- fix: a sixteenth MPE note at once steals a channel instead of sharing it
-- fix: when the sound card will not open at launch, Retry audio now really retries, and picking another sound card starts the sound instead of leaving the DAW silent until a restart
-- fix: the Mixing template now really sends its eight tracks to Bus A and Bus B (sends start silent)
-- fix: adding an instrument while the piano roll is open gives the roll a clip to draw in, instead of "No clip selected"
-- fix: Hardwave plug-ins the Suite installed in your user folder now show up, and a plug-in in two folders is listed once
-- fix: the All / Audio / MIDI buttons in the channel rack now filter the channels
-- fix: in the setup wizard, Continue on the audio step uses the device you picked
-- fix: the Vocal Session and Mixing templates put their tracks on the first playlist rows instead of 500 rows down
-- fix: MIDI controllers the setup wizard shows as on are actually open, and stay on after a restart
-- fix: "Configure audio device" on the start screen now shows something
-- fix: the Plug-ins tab now tells you the Hardwave plug-ins are free here and links to the Suite, until they are installed
-- fix: plug-ins installed by the Suite appear under Hardwave in the plug-in picker, with the H badge
-- fix: Rooms, stem separation and Save to Workspace now point you to Sign in at the top right of the DAW instead of telling you to open a plug-in to sign in
-- fix: a plug-in on the master is no longer loaded twice after the audio engine restarts
-- fix: a muted track, or one silenced by another track's solo, now shows silence on its meter instead of freezing at its last level
-- fix: a send, output or sidechain that loops back can no longer silence the whole song
-- fix: a new automation clip, or an empty send automation lane, no longer drops the track or send to -27 dB
-- fix: a volume automation lane drawn all the way down is now silent (it played -60 dB)
-- fix: a VCA now also moves member tracks that have volume automation
-- fix: dragging a VCA fader no longer rebuilds the whole mix at every step (clicks, filters and delays reset)
-- fix: soloing a reverb or delay return now lets you hear the tracks that send to it
-- fix: ctrl-click on Solo with several tracks soloed keeps only the clicked one
-- fix: moving a fader with the song stopped while Touch, Latch or Write is on no longer writes automation that locks the fader
-- fix: muting, soloing or changing routing during playback no longer cuts a short gap into tracks delayed to line up with a plug-in's latency
-- fix: Save As always asks where to save; before, once a song had a file it silently wrote over that file
-- fix: a song recovered after a crash, or with Revert to last backup, opens as an unsaved "Recovered song" instead of being deleted by its own save
-- fix: Escape on the crash recovery dialog closes it and keeps the backup (it used to delete every auto-save)
-- fix: a song template made from a song with collected samples keeps its samples
-- fix: auto-saves now hold every plug-in's settings and MIDI Learn as they are, and a recovered collected song finds its samples
-- fix: Save new version picks a number not already in the folder and carries on in the new file
-- fix: DAWproject export of a song with collected samples includes those samples
-- fix: every edit marks the song as changed (tempo, plug-ins, automation, VCAs, sends), so closing asks to save and auto-save runs
-- fix: Save As into another folder keeps a song's collected samples
-- fix: a plug-in that fails to hand over its state at save time keeps the settings it had
+- fix: 24-bit WAV samples, the depth most sample packs use, came in silent in any song (drag-in, sampler, FL import); they now play, as do 8-bit and 64-bit float WAVs
+- fix: FL samples fitted to the tempo with FL's TIME knob play at the length FL gives them and start where FL starts them (they played at about half speed, and trimmed loops started in the wrong place)
+- fix: Import FL Studio project now also opens FL's zipped loop package (.zip): it unpacks into a folder next to the zip, refuses unsafe archives, and the song plays the samples in that folder
 
 ### Improvements
-- fix(security): accept zip's extract advisory for the updater, with the reason
-- chore(permissions): the app's generated schemas list the new account and project commands
-- fix(project): a plug-in that cannot hand over its settings keeps the ones it saved
-- fix(project): Save As into another folder keeps the collected samples
-- fix(project): every edit marks the song as changed, so closing asks to save
-- fix(dawproject): exporting a collected song includes its samples
-- fix(project): Save new version never writes over an older version
-- fix(autosave): a recovered song has its plug-in settings and finds its collected samples
-- fix(templates): a song template made from a collected song keeps its samples
-- fix(project): Escape on the crash recovery dialog no longer deletes the auto-save
-- fix(project): a recovered auto-save is never deleted by saving it
-- fix(project): Save As always asks where, and the song moves to the new file
-- fix(pdc): muting, soloing or routing while playing no longer cuts a gap in compensated tracks
-- fix(automation): moving a fader with the song stopped writes no automation
-- fix(mixer): ctrl-click on Solo keeps only that track soloed
-- fix(mixer): soloing a reverb return lets you hear what is sent to it
-- fix(mixer): moving a VCA fader no longer rebuilds the mix at every step
-- fix(mixer): a VCA rides a track whose volume is automated
-- fix(automation): a volume lane drawn to the bottom is silent
-- fix(automation): a new automation clip or send lane leaves its control alone
-- fix(routing): a send or sidechain that loops back no longer silences the song
-- fix(meters): a muted or solo-silenced track's meter drops to silence
-- fix(mixer): pre-fader sends from instrument tracks carry the sound
-- fix(mixer): a plug-in on the master loaded twice is one slot, not two in a row
-- feat(account): your Hardwave account at the top right of the DAW
-- fix(account): rooms, stems and Workspace point to the DAW's own Sign in
-- feat(account): the DAW signs in to Hardwave with the sign-in every Hardwave program shares
-- fix(audio): after the sound card would not open, Retry and a new device start the sound
-- fix(templates): the Mixing template's tracks send to Bus A and Bus B, as it says
-- fix(piano-roll): an instrument picked while the piano roll is open gets a clip to draw in
-- fix(plugins): the DAW finds Hardwave plug-ins the Suite put in the per-user folder
-- fix(channel-rack): the All, Audio and MIDI buttons over the rack filter the channels
-- fix(setup): Continue on the wizard's audio step uses the device you picked
-- fix(templates): Vocal Session and Mixing put their tracks on the first playlist rows
-- fix(midi): a controller switched on in the setup wizard plays, and still plays after a restart
-- fix(welcome): "Configure audio device" on the start screen opens something you can see
-- fix(browser): the note about the free Hardwave plug-ins shows until they are installed
-- fix(plugins): the Hardwave plug-ins from the Suite are in the picker's Hardwave list
-- fix(fl import): a clip trimmed into a stretched loop starts where FL starts it
-- fix(fl import): stretched samples in FL 20 projects keep their length
-- fix(fl import): stretched samples last as long as FL makes them, not twice as long
-- fix(mpe): a sixteenth note at once steals a channel instead of sharing it
+- fix(audio): 24-bit WAV samples play instead of coming in silent
+- fix(fl import): a project shared as FL's zipped loop package opens with its samples
