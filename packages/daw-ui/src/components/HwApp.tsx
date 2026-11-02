@@ -51,6 +51,7 @@ import type { ActionId } from '../stores/shortcutsStore'
 import { invoke } from '@tauri-apps/api/core'
 import type { MobilePanel } from './MobileTabBar'
 import { PriorityRow, PriorityGroup, PriorityOverflowSlot } from './ui/PriorityRow'
+import { AccountMenu } from './account/AccountMenu'
 
 interface HwAppProps {
   showBrowser: boolean
@@ -345,6 +346,11 @@ export function HwTopbar({
       </div>
       </PriorityGroup>
       <PriorityOverflowSlot />
+      {/* The Hardwave account: Sign in, or the name with PRO or FREE.
+          Always shown; it is how a free user becomes a customer. */}
+      <PriorityGroup id="account" priority={Infinity}>
+        <AccountMenu />
+      </PriorityGroup>
       <PriorityGroup id="window" priority={Infinity}>
       <div className="fl-win-ctl">
         <i onClick={onWindowMin} title="Minimize">
