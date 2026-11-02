@@ -65,6 +65,20 @@ pub(crate) fn import_audio_file_blocking(
         state.engine.lock().trust_network_location(&file_path);
         crate::commands::engine::persist_audio_prefs_public(&state);
     }
+    let engine = state.engine.lock();
+    place_audio_file(&engine, track_id, file_path, position_ticks)
+}
+
+/// Load an audio file and put it on a track as a clip, without an undo
+/// step of its own: for a command that takes one step for all it does
+/// (a bounce, a freeze, a consolidate), where the import's own step made
+/// it two, and the first undo took away only the new clip.
+pub(crate) fn place_audio_file(
+    engine: &hardwave_engine::DawEngine,
+    track_id: String,
+    file_path: String,
+    position_ticks: Option<u64>,
+) -> Result<ImportedClip, String> {
     let path = PathBuf::from(&file_path);
     let file_name = path
         .file_stem()
@@ -73,7 +87,6 @@ pub(crate) fn import_audio_file_blocking(
         .to_string();
 
     // Load audio into pool
-    let engine = state.engine.lock();
     let (source_id, info) = engine.load_audio_file(&path)?;
 
     // Calculate clip length in ticks based on duration and current BPM
