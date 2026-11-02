@@ -193,26 +193,13 @@ pub fn save_song_template(state: State<AppState>, name: String) -> Result<(), St
     for ((_, slot_id), bytes) in live {
         copy.set_plugin_state(slot_id, "unknown", bytes);
     }
+    // A sample collected into the song's own folder is named relative to
+    // it; from the templates folder that would point nowhere.
     if let Some(dir) = project_dir {
-        absolute_sources(&mut copy, &dir);
+        copy.anchor_sample_files(&dir);
     }
     copy.save(&path)
         .map_err(|e| format!("Could not write the template: {e}"))
-}
-
-/// A sample collected into the song's own folder is named relative to it;
-/// from the templates folder that would point nowhere.
-fn absolute_sources(project: &mut Project, dir: &Path) {
-    use hardwave_project::clip::ClipContent;
-    for track in project.tracks.iter_mut() {
-        for clip in track.clips.iter_mut() {
-            if let ClipContent::Audio(a) = &mut clip.content {
-                if !a.source_path.is_empty() && Path::new(&a.source_path).is_relative() {
-                    a.source_path = dir.join(&a.source_path).to_string_lossy().to_string();
-                }
-            }
-        }
-    }
 }
 
 #[tauri::command]
