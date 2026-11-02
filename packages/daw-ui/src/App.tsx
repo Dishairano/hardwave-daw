@@ -2222,7 +2222,9 @@ export function App() {
                 const { open } = await import('@tauri-apps/plugin-dialog')
                 const picked = await open({
                   multiple: false,
-                  filters: [{ name: 'FL Studio project', extensions: ['flp'] }],
+                  // A .zip is FL's zipped loop package (File > Export >
+                  // Project data files): the .flp with its samples.
+                  filters: [{ name: 'FL Studio project or zipped loop package', extensions: ['flp', 'zip'] }],
                 })
                 if (typeof picked !== 'string') return
                 // It opens as a song of its own, like any other.
@@ -2231,7 +2233,10 @@ export function App() {
                 await useTrackStore.getState().fetchTracks()
                 push('info',
                   `${report.tracks} tracks, ${report.clips} clips, ${report.notes} notes at ${report.bpm} BPM`, {
-                    detail: report.leftBehind.length ? `Not carried over: ${report.leftBehind.join('. ')}.` : undefined,
+                    detail: [
+                      report.packageFolder ? `Unpacked into ${report.packageFolder}; its samples stay there.` : '',
+                      report.leftBehind.length ? `Not carried over: ${report.leftBehind.join('. ')}.` : '',
+                    ].filter(Boolean).join(' ') || undefined,
                   })
               } catch (e) {
                 push('warning', 'Could not open that project', { detail: String(e) })

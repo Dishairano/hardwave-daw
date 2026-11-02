@@ -205,10 +205,10 @@ impl Drop for OpeningDone {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct LoadProgress {
-    stage: &'static str,
-    done: usize,
-    total: usize,
+pub(crate) struct LoadProgress {
+    pub(crate) stage: &'static str,
+    pub(crate) done: usize,
+    pub(crate) total: usize,
 }
 
 fn load_project_blocking(app: &AppHandle, path: String) -> Result<(), String> {

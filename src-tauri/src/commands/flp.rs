@@ -18,6 +18,9 @@
 //! effects hold, a VST2's or CLAP's settings, and automation of knobs with
 //! no counterpart here. The report says what was left behind rather than
 //! letting it be found later.
+//!
+//! FL's zipped loop package, the .zip it makes to hand a project to
+//! someone else, opens the same way once it is unpacked (flp_package.rs).
 
 use hardwave_project::clip::ClipContent;
 use serde::Serialize;
@@ -36,9 +39,14 @@ pub struct FlpImportReport {
     pub samples: Vec<String>,
     /// What could not be carried, in plain words.
     pub left_behind: Vec<String>,
+    /// The song's name: the .flp's, also when it came in a zip.
+    pub name: String,
+    /// Where a zipped package was unpacked; its samples stay there.
+    pub package_folder: Option<String>,
 }
 
-/// Open a `.flp` as a new song.
+/// Open a `.flp`, or FL's zipped loop package (a .zip holding the .flp
+/// and its samples), as a new song.
 #[tauri::command]
 pub async fn import_flp(app: AppHandle, path: String) -> Result<FlpImportReport, String> {
     tauri::async_runtime::spawn_blocking(move || import_flp_blocking(&app, &path))
@@ -47,7 +55,70 @@ pub async fn import_flp(app: AppHandle, path: String) -> Result<FlpImportReport,
 }
 
 fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("could not read that file: {e}"))?;
+    let path = Path::new(path);
+    if !super::flp_package::is_zip(path) {
+        let (name, built) = build_from_flp(path, &SampleFinder::new(path.parent()))?;
+        return open_built(app, name, built);
+    }
+    use tauri::Emitter;
+    let package =
+        super::flp_package::unpack(path, super::flp_package::LIMITS, &mut |done, total| {
+            let _ = app.emit(
+                "project-load-progress",
+                super::project::LoadProgress {
+                    stage: "unpack",
+                    done,
+                    total,
+                },
+            );
+        })?;
+    let finder = SampleFinder::in_package(&package.samples);
+    let (name, built) = match build_from_flp(&package.projects[0], &finder) {
+        Ok(built) => built,
+        Err(e) => {
+            // No song plays what was unpacked, so it does not stay.
+            let _ = std::fs::remove_dir_all(&package.folder);
+            return Err(e);
+        }
+    };
+    let mut report = open_built(app, name, built)?;
+    report.package_folder = Some(package.folder.to_string_lossy().into_owned());
+    let file_name = |p: &PathBuf| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    if package.projects.len() > 1 {
+        let others: Vec<String> = package.projects[1..].iter().map(file_name).collect();
+        report.left_behind.push(format!(
+            "the zip's other FL project{} ({}), unpacked beside this one; import {} on {} own",
+            if others.len() == 1 { "" } else { "s" },
+            list_of(&others),
+            if others.len() == 1 { "it" } else { "each" },
+            if others.len() == 1 { "its" } else { "their" },
+        ));
+    }
+    if !package.skipped.is_empty() {
+        let names: Vec<String> = package
+            .skipped
+            .iter()
+            .map(|n| n.rsplit(['/', '\\']).next().unwrap_or(n).to_string())
+            .collect();
+        report.left_behind.push(format!(
+            "the zip's other files, which are neither the project nor a sample, left in the zip: {}",
+            list_of(&names)
+        ));
+    }
+    Ok(report)
+}
+
+/// Read an FL project and make the song it holds, with its samples found
+/// by `finder`. Nothing is opened yet.
+fn build_from_flp(
+    file: &Path,
+    finder: &SampleFinder,
+) -> Result<(String, hardwave_project::fl_build::FlBuild), String> {
+    let bytes = std::fs::read(file).map_err(|e| format!("could not read that file: {e}"))?;
     let fl = hardwave_project::flp_parser::parse(&bytes).map_err(|e| e.to_string())?;
 
     // A playlist copies a pattern's notes into every placement, so a
@@ -75,13 +146,20 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
         );
     }
 
-    let file = Path::new(path);
     let name = file
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "FL project".into());
-    let finder = SampleFinder::new(file.parent());
     let built = hardwave_project::fl_build::build_project(&fl, &name, &|p: &str| finder.find(p));
+    Ok((name, built))
+}
+
+/// Open the song made from an FL project.
+fn open_built(
+    app: &AppHandle,
+    name: String,
+    built: hardwave_project::fl_build::FlBuild,
+) -> Result<FlpImportReport, String> {
     let mut project = built.project;
 
     // Sampler channels play their sample in the built-in sampler, which
@@ -283,6 +361,8 @@ fn import_flp_blocking(app: &AppHandle, path: &str) -> Result<FlpImportReport, S
         notes: r.notes,
         samples: r.missing_samples,
         left_behind,
+        name,
+        package_folder: None,
     })
 }
 
@@ -391,6 +471,9 @@ fn apply_fixups(
 /// a file of the same name in the project's folder counts too.
 struct SampleFinder {
     by_name: HashMap<String, PathBuf>,
+    /// The files by name come first: a zipped package carries the very
+    /// samples the song was saved with.
+    package_first: bool,
 }
 
 impl SampleFinder {
@@ -407,7 +490,10 @@ impl SampleFinder {
                 for entry in entries.flatten() {
                     seen += 1;
                     if seen > 20_000 {
-                        return Self { by_name };
+                        return Self {
+                            by_name,
+                            package_first: false,
+                        };
                     }
                     let path = entry.path();
                     if path.is_dir() {
@@ -424,19 +510,51 @@ impl SampleFinder {
                 }
             }
         }
-        Self { by_name }
+        Self {
+            by_name,
+            package_first: false,
+        }
+    }
+
+    /// The samples unpacked from a zipped package, found by their names
+    /// before anywhere else: FL's package keeps each one under its own
+    /// name, side by side, while the project still names the folders they
+    /// came from on the computer that made it, often FL's own temp folder.
+    /// On that computer those can still be there for a while, and a song
+    /// pointing at them would lose its samples when Windows clears it.
+    fn in_package(samples: &[PathBuf]) -> Self {
+        let mut by_name = HashMap::new();
+        for path in samples {
+            if let Some(n) = path.file_name() {
+                by_name
+                    .entry(n.to_string_lossy().to_lowercase())
+                    .or_insert_with(|| path.clone());
+            }
+        }
+        Self {
+            by_name,
+            package_first: true,
+        }
     }
 
     fn find(&self, fl_path: &str) -> Option<String> {
+        let by_name = || {
+            let name = fl_path.rsplit(['\\', '/']).next()?.to_lowercase();
+            self.by_name
+                .get(&name)
+                .map(|p| p.to_string_lossy().into_owned())
+        };
+        if self.package_first {
+            if let Some(found) = by_name() {
+                return Some(found);
+            }
+        }
         for candidate in expand_fl_path(fl_path) {
             if candidate.is_file() {
                 return Some(candidate.to_string_lossy().into_owned());
             }
         }
-        let name = fl_path.rsplit(['\\', '/']).next()?.to_lowercase();
-        self.by_name
-            .get(&name)
-            .map(|p| p.to_string_lossy().into_owned())
+        by_name()
     }
 }
 
@@ -535,6 +653,134 @@ fn expand_env(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tiny .flp written the way FL writes one: an audio clip channel
+    /// playing `sample` (named as FL names it), placed once on the
+    /// playlist's first track.
+    fn flp_playing(sample: &str) -> Vec<u8> {
+        fn event(body: &mut Vec<u8>, id: u8, data: &[u8]) {
+            body.push(id);
+            // Events from 192 on carry their length first.
+            if id >= 192 {
+                let mut len = data.len();
+                loop {
+                    let byte = (len & 0x7F) as u8;
+                    len >>= 7;
+                    body.push(if len > 0 { byte | 0x80 } else { byte });
+                    if len == 0 {
+                        break;
+                    }
+                }
+            }
+            body.extend_from_slice(data);
+        }
+        let mut body = Vec::new();
+        event(&mut body, 64, &0u16.to_le_bytes()); // a new channel, 0
+        event(&mut body, 21, &[4]); // that plays an audio clip
+        let mut text: Vec<u8> = sample
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
+        text.extend_from_slice(&[0, 0]);
+        event(&mut body, 196, &text); // its sample
+        let mut item = Vec::new();
+        item.extend_from_slice(&0u32.to_le_bytes()); // at the start
+        item.extend_from_slice(&20480u16.to_le_bytes());
+        item.extend_from_slice(&0u16.to_le_bytes()); // channel 0
+        item.extend_from_slice(&384u32.to_le_bytes()); // a bar long
+        item.extend_from_slice(&499u16.to_le_bytes()); // playlist track 1
+        item.resize(24, 0);
+        item.extend_from_slice(&(-1.0f32).to_le_bytes());
+        item.extend_from_slice(&(-1.0f32).to_le_bytes());
+        item.resize(32, 0);
+        event(&mut body, 233, &item); // the playlist
+        let mut out = b"FLhd".to_vec();
+        out.extend_from_slice(&6u32.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // format
+        out.extend_from_slice(&1u16.to_le_bytes()); // channels
+        out.extend_from_slice(&96u16.to_le_bytes()); // ticks per beat
+        out.extend_from_slice(b"FLdt");
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn tiny_wav() -> Vec<u8> {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        let mut w = hound::WavWriter::new(&mut bytes, spec).unwrap();
+        for i in 0..441 {
+            w.write_sample(((i % 50) * 400) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+        bytes.into_inner()
+    }
+
+    /// FL's zipped loop package: the .flp and its samples side by side,
+    /// while the .flp still names where the samples were on the computer
+    /// that made it. The song comes out playing the unpacked copy.
+    #[test]
+    fn a_zipped_package_imports_with_its_sample_found_in_it() {
+        use super::super::flp_package::{self, tests::make_zip, tests::temp, LIMITS};
+        let dir = temp("import");
+        let zip = dir.join("project.zip");
+        let flp = flp_playing("C:\\Users\\producer\\Documents\\Packs\\Drums\\Kick 01.wav");
+        let wav = tiny_wav();
+        make_zip(&zip, &[("Shared Song.flp", &flp), ("Kick 01.wav", &wav)]);
+
+        let package = flp_package::unpack(&zip, LIMITS, &mut |_, _| {}).unwrap();
+        let finder = SampleFinder::in_package(&package.samples);
+        let (name, built) = build_from_flp(&package.projects[0], &finder).unwrap();
+        assert_eq!(name, "Shared Song");
+        assert_eq!(built.report.audio_clips, 1);
+        assert!(
+            built.report.missing_samples.is_empty(),
+            "missing: {:?}",
+            built.report.missing_samples
+        );
+        let played: Vec<PathBuf> = built
+            .project
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter_map(|c| match &c.content {
+                ClipContent::Audio(a) => Some(PathBuf::from(&a.source_path)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(played, vec![package.folder.join("Kick 01.wav")]);
+        assert!(played[0].is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A package's own copy wins over a file at the path the project
+    /// names: the package holds what the song was saved with.
+    #[test]
+    fn a_package_s_own_sample_comes_before_the_path_the_project_names() {
+        let dir = std::env::temp_dir().join(format!("hw-flp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        std::fs::create_dir_all(dir.join("package")).unwrap();
+        let named = dir.join("elsewhere").join("Kick.wav");
+        let packed = dir.join("package").join("kick.WAV");
+        std::fs::write(&named, b"RIFF").unwrap();
+        std::fs::write(&packed, b"RIFF").unwrap();
+        let fl_path = named.to_string_lossy().into_owned();
+
+        let in_package = SampleFinder::in_package(std::slice::from_ref(&packed));
+        assert_eq!(
+            in_package.find(&fl_path).map(PathBuf::from),
+            Some(packed.clone())
+        );
+        // A bare .flp still goes by the path first.
+        let beside = SampleFinder::new(Some(&dir.join("package")));
+        assert_eq!(beside.find(&fl_path).map(PathBuf::from), Some(named));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_sample_beside_the_project_is_found_by_its_name() {

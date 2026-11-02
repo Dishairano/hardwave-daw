@@ -16,6 +16,7 @@ pub mod dev;
 pub mod engine;
 pub mod export;
 pub mod flp;
+pub mod flp_package;
 pub mod history;
 pub mod library;
 pub mod load_test;

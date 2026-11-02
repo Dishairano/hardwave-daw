@@ -301,7 +301,10 @@ const mock: TauriInternals = {
       case 'clear_video':
         return null
       case 'import_flp':
-        return { bpm: 174, tracks: 9, clips: 46, notes: 612, samples: [], leftBehind: [] }
+        return {
+          bpm: 174, tracks: 9, clips: 46, notes: 612, samples: [], leftBehind: [],
+          name: 'Mock song', packageFolder: null,
+        }
       case 'get_session_grid':
         return {
           scenes: ['Intro', 'Drop', 'Break', 'Outro'],

@@ -69,6 +69,10 @@ export interface FlImportReport {
   /** Samples it points at that are not on this computer. */
   samples: string[]
   leftBehind: string[]
+  /** The song's name: the .flp's, also when it came in a zip. */
+  name?: string
+  /** Where a zipped package was unpacked; its samples stay there. */
+  packageFolder?: string | null
 }
 
 /** The save dialog for a song, starting at `defaultPath`. Null when cancelled. */
@@ -166,7 +170,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   importFlProject: async (path: string) => {
-    const name = path.split(/[\\/]/).pop()?.replace(/\.flp$/i, '') || 'FL project'
+    const name = path.split(/[\\/]/).pop()?.replace(/\.(flp|zip)$/i, '') || 'FL project'
     set({ opening: { name, stage: 'file', done: 0, total: 0 } })
     let stopListening: (() => void) | undefined
     try {
@@ -189,7 +193,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await invoke('set_channel_rack_state', { payload: null })
     resetTimelineState()
     await useTempoMapStore.getState().refresh()
-    set({ filePath: null, projectName: name, dirty: true })
+    // From a zip, the song is named after the .flp inside it.
+    set({ filePath: null, projectName: report.name || name, dirty: true })
     return report
   },
 
