@@ -22,6 +22,9 @@ const {
   resetTimelineState,
 } = await import('../timelineState')
 
+const { startTimelineSync } = await import('../timelineState')
+const { useProjectStore } = await import('../projectStore')
+
 const marker = (id: string, tick: number) => ({
   id, tick, label: id, color: '#fff', kind: 'generic' as const,
 })
@@ -138,5 +141,18 @@ describe('serializeTimelineState', () => {
     resetTimelineState()
     expect(useMarkerStore.getState().markers).toEqual([])
     expect(useTransportStore.getState().punchOutTicks).toBeNull()
+  })
+})
+
+describe('startTimelineSync', () => {
+  it('a marker placed by hand is a change to save, a song opening with markers is not', async () => {
+    startTimelineSync()
+    useProjectStore.setState({ dirty: false })
+    hydrateTimelineState(JSON.stringify({ markers: [marker('drop', 960)] }))
+    await new Promise(r => setTimeout(r, 0))
+    expect(useProjectStore.getState().dirty).toBe(false)
+
+    useMarkerStore.getState().addMarker(1920, 'Break')
+    await vi.waitFor(() => expect(useProjectStore.getState().dirty).toBe(true))
   })
 })

@@ -404,6 +404,7 @@ export function App() {
       await invoke('add_section', {
         name, startTicks: range.at, endTicks: range.at + range.length,
       })
+      useProjectStore.getState().markDirty()
       useNotificationStore.getState().push('info', `Marked "${name}"`)
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
     } catch (e) {
@@ -428,6 +429,7 @@ export function App() {
     if (!chosen) return
     try {
       const copied = await invoke<number>('duplicate_section', { id: chosen.id })
+      useProjectStore.getState().markDirty()
       await useTrackStore.getState().fetchTracks()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
       useNotificationStore.getState().push('info', `Repeated "${chosen.name}"`, {
@@ -453,6 +455,7 @@ export function App() {
     if (!chosen) return
     try {
       await invoke('delete_section', { id: chosen.id })
+      useProjectStore.getState().markDirty()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
       useNotificationStore.getState().push('info', `Removed "${chosen.name}"`, {
         detail: 'The music itself is untouched. Only the name went.',
@@ -487,6 +490,7 @@ export function App() {
     if (!next || next === chosen.name) return
     try {
       await invoke('rename_section', { id: chosen.id, name: next })
+      useProjectStore.getState().markDirty()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
     } catch (e) {
       useNotificationStore.getState().push('warning', 'Could not rename that section', { detail: String(e) })
@@ -512,6 +516,7 @@ export function App() {
     if (answer.trim() !== '' && !before) return
     try {
       await invoke('move_section', { id: chosen.id, before: before ? before.id : null })
+      useProjectStore.getState().markDirty()
       await useTrackStore.getState().fetchTracks()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
       useNotificationStore.getState().push('info', `Moved "${chosen.name}"`, {
@@ -532,6 +537,7 @@ export function App() {
     }
     try {
       await invoke('insert_time', { atTicks: range.at, lengthTicks: range.length })
+      useProjectStore.getState().markDirty()
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info', 'Made room for the loop range')
     } catch (e) {
@@ -549,6 +555,7 @@ export function App() {
     }
     try {
       await invoke('delete_time', { atTicks: range.at, lengthTicks: range.length })
+      useProjectStore.getState().markDirty()
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info', 'Removed the loop range', {
         detail: 'Clips that only overlapped the edge were moved, not cut.',

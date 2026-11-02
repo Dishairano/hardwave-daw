@@ -5,6 +5,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invokeM
 vi.mock('@tauri-apps/api/event', () => ({ listen: () => Promise.resolve(() => {}) }))
 
 const { useTrackStore } = await import('../trackStore')
+const { useProjectStore } = await import('../projectStore')
 
 /** The commands sent, in order, without the reads that follow an edit. */
 function sent(): string[] {
@@ -102,5 +103,14 @@ describe('clip edits and undo', () => {
       'label_undo_step',
     ])
     expect(labelsSent()).toEqual(['Move clip to track'])
+  })
+
+  it('a moved clip is a change to save, a click on one is not', async () => {
+    useProjectStore.setState({ dirty: false })
+    const store = useTrackStore.getState()
+    await store.commitClipDrag([{ trackId: 'a', clipId: 'c1', fromPositionTicks: 0, positionTicks: 0 }], 'Move clip')
+    expect(useProjectStore.getState().dirty).toBe(false)
+    await store.commitClipDrag([{ trackId: 'a', clipId: 'c1', fromPositionTicks: 0, positionTicks: 960 }], 'Move clip')
+    expect(useProjectStore.getState().dirty).toBe(true)
   })
 })

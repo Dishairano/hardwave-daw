@@ -32,6 +32,7 @@ import { hw } from '../../theme'
 import { paintSlotOccupied, paintSlotTick } from './paint'
 import { zoomStep } from './zoom'
 import { useTempoMapStore } from '../../stores/tempoMapStore'
+import { useProjectStore } from '../../stores/projectStore'
 import { bpmAt, flagEntry, tempoFlags } from './tempoFlags'
 import { gridLines } from '../../utils/meter'
 import { mixHex, hexLuma } from '../../lib/color'
@@ -139,6 +140,13 @@ function openDragStep(drag: DragState) {
 function closeDragStep(drag: DragState, label: string, after: Promise<unknown>) {
   if (!drag.historyGroupOpen) return
   void after.finally(() => useTrackStore.getState().endHistoryGroup(label))
+}
+
+/** The song changed: closing it asks to save, and autosave picks it up.
+ *  For playlist edits sent straight to the engine, which the track store's
+ *  own commands do for themselves. */
+function markEdited() {
+  useProjectStore.getState().markDirty()
 }
 
 interface ContextMenuState {
@@ -299,6 +307,7 @@ async function commitRippleMove(drag: DragState, delta: number) {
       }
     }
   } finally {
+    markEdited()
     await store.endHistoryGroup(members.length === 1 ? 'Move clip, and the clips after it' : `Move ${members.length} clips, and the clips after them`)
   }
   await useTrackStore.getState().fetchTracks()
@@ -2353,6 +2362,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     setMarkerCtx(null)
     try {
       await invoke(command, args)
+      markEdited()
       if (movesMusic) await useTrackStore.getState().fetchTracks()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
     } catch (e) {
@@ -2844,6 +2854,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               const result = await invoke<{
                 trackId: string; clipId: string; noteCount: number; lowest: number; highest: number
               }>('audio_clip_to_midi', { trackId, clipId })
+              markEdited()
               await useTrackStore.getState().fetchTracks()
               useNotificationStore.getState().push('info',
                 result.noteCount === 1 ? t('1 note written') : tf('{n} notes written', { n: result.noteCount }), {
@@ -2864,6 +2875,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
               const count = await invoke<number>('warp_clip_to_grid', {
                 trackId, clipId, gridTicks: grid,
               })
+              markEdited()
               await useTrackStore.getState().fetchTracks()
               useNotificationStore.getState().push('info', tf('Warped {n} beats to the grid', { n: count }))
             } catch (e) {
@@ -2877,6 +2889,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             try {
               const since = Date.now()
               const slot = await invoke<number>('send_clip_to_launcher', { trackId, clipId })
+              markEdited()
               useHistoryStore.getState().push('Send clip to launcher', since)
               push('info', tf('In the clip launcher, scene {n}', { n: slot + 1 }))
             } catch (e) {
@@ -2902,6 +2915,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             try {
               const since = Date.now()
               await invoke('consolidate_track_range', { trackId, startTicks: from, endTicks: to })
+              markEdited()
               // The engine took its undo snapshot; the history names the step.
               useHistoryStore.getState().push('Consolidate clips', since)
               await useTrackStore.getState().fetchTracks()
@@ -2915,6 +2929,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             setContextMenu(null)
             try {
               await invoke('set_clip_warp_markers', { trackId, clipId, markers: [] })
+              markEdited()
               await useTrackStore.getState().fetchTracks()
             } catch (e) {
               useNotificationStore.getState().push('warning', t('Could not remove the warping'), { detail: String(e) })

@@ -1078,11 +1078,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (moves.length === 0 && resizes.length === 0) return
     await get().beginHistoryGroup()
     try {
+      // Through mut, so the song counts as changed: sent with a bare invoke,
+      // a rearranged playlist could be closed without being asked to save.
       for (const e of moves) {
-        await invoke('move_clip', { trackId: e.trackId, clipId: e.clipId, newPositionTicks: e.positionTicks })
+        await mut('move_clip', { trackId: e.trackId, clipId: e.clipId, newPositionTicks: e.positionTicks })
       }
       for (const e of resizes) {
-        await invoke('resize_clip', { trackId: e.trackId, clipId: e.clipId, newLengthTicks: e.lengthTicks })
+        await mut('resize_clip', { trackId: e.trackId, clipId: e.clipId, newLengthTicks: e.lengthTicks })
       }
     } finally {
       await get().endHistoryGroup(label)
