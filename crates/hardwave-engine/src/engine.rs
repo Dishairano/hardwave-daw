@@ -4094,6 +4094,7 @@ impl EngineCallback {
         tempo_map: &hardwave_project::TempoMap,
         sample_rate: f64,
         track_pitch_factor: f64,
+        silent_rows: &hardwave_project::layout::SilentRows,
     ) -> Vec<ClipRegion> {
         // Convert clip placements to sample-based ClipRegions.
         // Clips are visited in their project-defined order, then any overlap between
@@ -4103,13 +4104,12 @@ impl EngineCallback {
         // auto-computed value.
         // Frozen: the render, and nothing else. Live: everything but
         // the render, which is parked on its own lane.
+        // A clip on a playlist row that is switched off (or not soloed
+        // while another is) is left out, as FL's track switch does.
         let clips_to_play = track.clips.iter().filter(|clip| {
             let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
-            if track.frozen {
-                is_freeze
-            } else {
-                !is_freeze
-            }
+            let on_track = if track.frozen { is_freeze } else { !is_freeze };
+            on_track && !silent_rows.has(clip.row)
         });
         let mut regions: Vec<ClipRegion> = clips_to_play
             .filter_map(|clip| match &clip.content {
@@ -4452,6 +4452,26 @@ impl EngineCallback {
                 .as_ref()
                 .is_some_and(|heard| !heard.contains(&track.id) && !track.solo_safe)
         };
+        // Playlist rows switched off, or not soloed while one is: what sits
+        // on them (clips, notes, automation) is left out below. Rows never
+        // route sound, so the channels and their effects keep running.
+        let silent_rows = hardwave_project::layout::SilentRows::of(&project.rows);
+        let audible_lanes = |track: &hardwave_project::track::Track| {
+            track
+                .automation_lanes
+                .iter()
+                .filter(|lane| !silent_rows.has(lane.row))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let audible_automation_clips = |track: &hardwave_project::track::Track| {
+            track
+                .automation_clips
+                .iter()
+                .filter(|clip| !silent_rows.has(clip.row))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
 
         // Reconcile the per-track meter map with the current tracks: reuse existing
         // Arcs where possible, create new ones, drop meters for removed tracks.
@@ -4541,8 +4561,8 @@ impl EngineCallback {
                     hardwave_project::vca::offset_for(&project.vcas, &track.id);
                 midi_node.set_volume_db(track.volume_db + vca_gain_db);
                 midi_node.set_pan(track.pan);
-                midi_node.set_automation_lanes(track.automation_lanes.clone());
-                midi_node.set_automation_clips(track.automation_clips.clone());
+                midi_node.set_automation_lanes(audible_lanes(track));
+                midi_node.set_automation_clips(audible_automation_clips(track));
                 midi_node.set_stereo_separation(track.stereo_separation);
                 // The mixer strip's polarity, swap and delay and the rack's
                 // filter, as an audio track has them.
@@ -4668,8 +4688,8 @@ impl EngineCallback {
                         continue;
                     };
                     // A muted clip contributes nothing, the same way a muted
-                    // audio clip is skipped.
-                    if midi_ref.clip.muted {
+                    // audio clip is skipped; nor does one on a silent row.
+                    if midi_ref.clip.muted || silent_rows.has(clip.row) {
                         continue;
                     }
                     // MIDI effects sit between the clip and the
@@ -4751,7 +4771,13 @@ impl EngineCallback {
                 let midi_pitch_factor = 2.0_f64.powf(
                     (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0,
                 );
-                let audio = self.audio_regions(track, tempo_map, sample_rate, midi_pitch_factor);
+                let audio = self.audio_regions(
+                    track,
+                    tempo_map,
+                    sample_rate,
+                    midi_pitch_factor,
+                    &silent_rows,
+                );
                 if !audio.is_empty() {
                     midi_node.set_audio_clips(self.audio_pool.clone(), audio);
                 }
@@ -4842,8 +4868,8 @@ impl EngineCallback {
             // so process() never has to walk the project tree under a
             // lock. Empty list is the no-automation steady state.
             node.set_prefs(self.audio_prefs.clone());
-            node.set_automation_lanes(track.automation_lanes.clone());
-            node.set_automation_clips(track.automation_clips.clone());
+            node.set_automation_lanes(audible_lanes(track));
+            node.set_automation_clips(audible_automation_clips(track));
             // Reattach the plug-in chain stashed at the top of this
             // rebuild. Tracks that didn't exist before fall through to
             // the default-empty chain that TrackNode::new gave them.
@@ -4906,7 +4932,13 @@ impl EngineCallback {
                 2.0_f64.powf(track_pitch_offset)
             };
 
-            let regions = self.audio_regions(track, tempo_map, sample_rate, track_pitch_factor);
+            let regions = self.audio_regions(
+                track,
+                tempo_map,
+                sample_rate,
+                track_pitch_factor,
+                &silent_rows,
+            );
             node.set_clips(regions);
 
             // This track's row of the launcher grid. Lengths are in
@@ -6184,8 +6216,7 @@ fn is_placeholder(
     track: &hardwave_project::Track,
     reached: &std::collections::HashSet<&str>,
 ) -> bool {
-    matches!(track.kind, hardwave_project::TrackKind::Audio)
-        && track.clips.is_empty()
+    matches!(track.kind, hardwave_project::TrackKind::Audio) && track.clips.is_empty()
         && track.inserts.is_empty()
         && track.automation_lanes.is_empty()
         && track.automation_clips.is_empty()
