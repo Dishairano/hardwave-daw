@@ -39,13 +39,15 @@ export type PickerCategory = 'All' | 'Hardwave' | 'Instrument' | 'Effect' | 'Ana
 
 /**
  * A plug-in is "native" (red H icon) when it's shipped by Hardwave. We
- * key on `vendor === 'Hardwave'` rather than the serialized path so a
- * future Hardwave VST3 build of LoudLab still gets the badge — see
- * crates/hardwave-native-plugins/src/eq.rs:69 where every native sets
- * `vendor: "Hardwave"`.
+ * key on the vendor rather than the serialized path so the Hardwave
+ * plug-ins the Suite installs as VST3 or CLAP get the badge too. The
+ * built-ins say `vendor: "Hardwave"` (crates/hardwave-native-plugins);
+ * WettBoi, LoudLab and the rest say "Hardwave Studios", which the old
+ * exact match left out of the Hardwave list.
  */
-export function isHardwaveNative(p: PluginDescriptor): boolean {
-  return p.vendor === 'Hardwave'
+export function isHardwaveNative(p: Pick<PluginDescriptor, 'vendor'>): boolean {
+  const vendor = (p.vendor || '').trim().toLowerCase()
+  return vendor === 'hardwave' || vendor === 'hardwave studios'
 }
 
 interface PluginCatalogState {
