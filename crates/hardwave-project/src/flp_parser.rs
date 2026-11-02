@@ -145,6 +145,11 @@ const MIXER_PARAMS: u8 = TEXT + 33; // 225
 /// one before it (beats, a double), the value (a double), the tension (a
 /// float), four more.
 const CH_AUTOMATION: u8 = TEXT + 42; // 234
+/// The channel rack's filter groups ("Audio", "Unsorted"), one name each,
+/// in their order, before the channels.
+const RACK_GROUP_NAME: u8 = TEXT + 39; // 231
+/// A channel's filter group, by its place in that list (four bytes).
+const CH_GROUP: u8 = DWORD + 17; // 145
 /// What a channel controls: its number at byte 2, at byte 8 the knob, as
 /// the mixer's parameter list names one (a place in the top two bytes, the
 /// parameter in the bottom two).
@@ -486,6 +491,12 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                     });
                 }
                 current_channel = Some(index);
+            }
+            RACK_GROUP_NAME => project.rack_groups.push(text(event.data)),
+            CH_GROUP => {
+                if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
+                    channel.settings.group = u32::try_from(i32_at(event.data, 0)).ok();
+                }
             }
             CH_TYPE => {
                 if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
@@ -1356,6 +1367,29 @@ mod tests {
             project.channels[1].plugin_name.as_deref(),
             Some("Fruity Wrapper")
         );
+    }
+
+    /// FL keeps the rack's filter groups by name, then each channel's
+    /// group by its number in that list.
+    #[test]
+    fn the_rack_s_groups_come_across() {
+        let mut writer = Writer::new();
+        writer.text(RACK_GROUP_NAME, "Audio");
+        writer.text(RACK_GROUP_NAME, "Automation");
+        writer.text(RACK_GROUP_NAME, "Unsorted");
+        for (channel, group) in [(0u16, 0i32), (1, 2), (2, 1)] {
+            writer.event(CH_NEW, &channel.to_le_bytes());
+            writer.event(CH_GROUP, &group.to_le_bytes());
+        }
+        // A channel the file gives no group, and one with a group number
+        // that cannot be one.
+        writer.event(CH_NEW, &3u16.to_le_bytes());
+        writer.event(CH_NEW, &4u16.to_le_bytes());
+        writer.event(CH_GROUP, &(-1i32).to_le_bytes());
+        let project = parse(&writer.finish(96)).expect("it should read");
+        assert_eq!(project.rack_groups, ["Audio", "Automation", "Unsorted"]);
+        let groups: Vec<_> = project.channels.iter().map(|c| c.settings.group).collect();
+        assert_eq!(groups, [Some(0), Some(2), Some(1), None, None]);
     }
 
     #[test]

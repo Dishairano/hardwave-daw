@@ -118,6 +118,10 @@ pub struct FlChannelSettings {
     /// volume envelope, loop, voices and the sample's precomputed effects.
     #[serde(default)]
     pub sampler: FlSamplerSetup,
+    /// The channel rack filter group it is listed under, an index into
+    /// [`FlProject::rack_groups`]; none when the file does not say.
+    #[serde(default)]
+    pub group: Option<u32>,
 }
 
 /// A sampler channel's envelope, loop, voices and sample effects, as
@@ -206,6 +210,7 @@ impl Default for FlChannelSettings {
             fade_out: 0,
             stretch: FlStretch::default(),
             sampler: FlSamplerSetup::default(),
+            group: None,
         }
     }
 }
@@ -667,6 +672,10 @@ pub struct FlProject {
     /// The arrangement open in FL, an index into `arrangements`.
     #[serde(default)]
     pub current_arrangement: usize,
+    /// The channel rack's filter groups by number ("Audio", "Automation",
+    /// "Unsorted"): what a channel's `settings.group` points into.
+    #[serde(default)]
+    pub rack_groups: Vec<String>,
 }
 
 /// Plugin mapping — translate an FL native plugin name into a
@@ -965,6 +974,7 @@ mod tests {
             playlist_tracks_solo: Vec::new(),
             arrangements: Vec::new(),
             current_arrangement: 0,
+            rack_groups: Vec::new(),
         }
     }
 
