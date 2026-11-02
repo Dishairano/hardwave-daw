@@ -42,6 +42,7 @@ fn persist_audio_prefs(state: &State<AppState>) {
         click_channel_offset: engine.click_output().0,
         control_surface_enabled: state.control_surface.is_enabled(),
         control_surface_protocol: state.control_surface.protocol(),
+        control_surface_input: state.control_surface.desk_input(),
     };
     drop(engine);
     prefs.save();

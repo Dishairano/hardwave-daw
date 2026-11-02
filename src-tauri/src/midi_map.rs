@@ -234,6 +234,9 @@ pub fn spawn_dispatcher(
         if surface.is_enabled() && last_frame_at.elapsed() >= std::time::Duration::from_millis(33) {
             last_frame_at = std::time::Instant::now();
             let inputs = midi_input.lock().open_port_names();
+            // An input opened or closed since: which one is the desk now.
+            surface.find_desk(&inputs);
+            let inputs = surface.desk_inputs(inputs);
             send_desk_frame(&engine, &surface, &midi_out, &inputs);
             // A HUI desk stays on line only while it is pinged once a second.
             if surface.protocol() == crate::control_surface::DeskProtocol::Hui
@@ -253,20 +256,21 @@ pub fn spawn_dispatcher(
         if events.is_empty() {
             continue;
         }
-        for ev in events {
+        for hardwave_midi::ControlEvent { claimed, event, .. } in events {
             // A control surface speaks a fixed language rather than
-            // whatever a knob was learned to, so it is read first and
-            // what it claims never reaches the learn path.
-            if surface.is_enabled() {
-                let protocol = surface.protocol();
-                if crate::control_surface::claims(protocol, &ev) {
-                    if let Some(action) = reader.read(protocol, &ev) {
+            // whatever a knob was learned to, so what it claimed (only
+            // ever from the desk's own input) is read as the desk's and
+            // never reaches the learn path. Every other input's events
+            // played, and are not the desk's buttons or faders.
+            if claimed {
+                if surface.is_enabled() {
+                    if let Some(action) = reader.read(surface.protocol(), &event) {
                         apply_surface(&engine, &surface, &midi_out, action);
                     }
-                    continue;
                 }
+                continue;
             }
-            let (cc, channel, value) = match ev {
+            let (cc, channel, value) = match event {
                 MidiEvent::ControlChange {
                     cc, channel, value, ..
                 } => (cc, channel, value),

@@ -84,6 +84,10 @@ pub struct AudioPrefs {
     /// The protocol the desk speaks.
     #[serde(default)]
     pub control_surface_protocol: crate::control_surface::DeskProtocol,
+    /// Which MIDI input is the desk. A file from before the choice reads
+    /// as nothing chosen: a desk is then found by its name.
+    #[serde(default)]
+    pub control_surface_input: crate::control_surface::DeskInput,
 }
 
 fn default_sample_rate() -> u32 {
@@ -161,6 +165,7 @@ impl AudioPrefs {
             click_channel_offset: None,
             control_surface_enabled: false,
             control_surface_protocol: crate::control_surface::DeskProtocol::Mackie,
+            control_surface_input: crate::control_surface::DeskInput::Auto,
         }
     }
 }
@@ -188,6 +193,31 @@ mod tests {
         let back: AudioPrefs =
             serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).expect("round trip");
         assert_eq!(back.audio_host.as_deref(), Some("ASIO"));
+    }
+
+    /// The control surface's switch, protocol and input are kept, so a
+    /// desk works again at the next launch without a trip to the settings.
+    #[test]
+    fn the_control_surface_choices_are_kept() {
+        use crate::control_surface::{DeskInput, DeskProtocol};
+        let old = r#"{"control_surface_enabled":true}"#;
+        let prefs: AudioPrefs = serde_json::from_str(old).expect("loads");
+        assert_eq!(
+            prefs.control_surface_input,
+            DeskInput::Auto,
+            "nothing chosen"
+        );
+        for input in [DeskInput::Every, DeskInput::Port("X-Touch".into())] {
+            let mut prefs = AudioPrefs::factory();
+            prefs.control_surface_enabled = true;
+            prefs.control_surface_protocol = DeskProtocol::Hui;
+            prefs.control_surface_input = input.clone();
+            let back: AudioPrefs =
+                serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).expect("round trip");
+            assert!(back.control_surface_enabled);
+            assert_eq!(back.control_surface_protocol, DeskProtocol::Hui);
+            assert_eq!(back.control_surface_input, input);
+        }
     }
 
     #[test]

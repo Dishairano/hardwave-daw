@@ -88,6 +88,70 @@ pub enum DeskProtocol {
     Hui = 1,
 }
 
+/// Which MIDI input is the desk, as chosen in the settings.
+///
+/// Every open input used to be read as the desk, so a keyboard beside it
+/// lost notes to it: its lowest notes armed, soloed and muted tracks, G6
+/// to B6 pressed Stop, Play and Record, and its pitch wheel moved fader
+/// one.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeskInput {
+    /// Nothing chosen yet: an open input named like a desk is the desk,
+    /// and with none, every input is (as before there was a choice).
+    #[default]
+    Auto,
+    /// Every input is read as the desk.
+    Every,
+    /// This input, by name, and no other.
+    Port(String),
+}
+
+/// What desks are called, as words in an input's name, written without
+/// their hyphens and spaces: "X-Touch", "iCON Platform M+" and "PreSonus
+/// FaderPort 8" are desks; "Launchkey 49" is not.
+const DESK_NAMES: [&str; 8] = [
+    "xtouch",
+    "mcu",
+    "mackie",
+    "icon",
+    "platform",
+    "faderport",
+    "uf8",
+    "hui",
+];
+
+/// Whether an input is named like a known desk. Case does not matter, and
+/// a name counts only as whole words, which may be written apart ("X
+/// Touch", "Fader Port") or together ("XTouch").
+pub fn looks_like_desk(port: &str) -> bool {
+    let words: Vec<String> = port
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    (0..words.len()).any(|start| {
+        let mut joined = String::new();
+        words[start..].iter().any(|word| {
+            joined.push_str(word);
+            DESK_NAMES.contains(&joined.as_str())
+        })
+    })
+}
+
+/// The input read as the desk, or none to read every input: the one
+/// chosen, or with nothing chosen the first open input named like a desk.
+pub fn pick_desk_port<'a>(choice: &'a DeskInput, open_inputs: &'a [String]) -> Option<&'a str> {
+    match choice {
+        DeskInput::Port(port) => Some(port),
+        DeskInput::Every => None,
+        DeskInput::Auto => open_inputs
+            .iter()
+            .find(|port| looks_like_desk(port))
+            .map(String::as_str),
+    }
+}
+
 /// What the desk is doing: whether it is listened to at all, and which
 /// eight tracks its strips are on.
 #[derive(Default)]
@@ -102,6 +166,12 @@ pub struct ControlSurface {
     pub shown: std::sync::Mutex<Option<DeskFrame>>,
     /// The desk's [`DeskProtocol`], as its number.
     protocol: AtomicU8,
+    /// The input chosen in the settings as the desk's.
+    desk_input: parking_lot::Mutex<DeskInput>,
+    /// The input read as the desk now, worked out from that choice and the
+    /// inputs open; none reads every input. The claim reads it in the MIDI
+    /// input callback, so it is written only when it changes.
+    desk_port: parking_lot::RwLock<Option<Arc<str>>>,
 }
 
 impl ControlSurface {
@@ -135,6 +205,66 @@ impl ControlSurface {
         self.protocol.store(protocol as u8, Ordering::Relaxed);
         self.touched.store(0, Ordering::Relaxed);
         self.redraw();
+    }
+
+    /// The input chosen as the desk's.
+    pub fn desk_input(&self) -> DeskInput {
+        self.desk_input.lock().clone()
+    }
+
+    /// Choose the desk's input, and work out which open input that is.
+    pub fn set_desk_input(&self, input: DeskInput, open_inputs: &[String]) {
+        *self.desk_input.lock() = input;
+        self.find_desk(open_inputs);
+    }
+
+    /// Work out again which input is the desk, for when inputs were opened
+    /// or closed: a desk plugged in with nothing chosen is found by its
+    /// name. A different desk is sent everything.
+    pub fn find_desk(&self, open_inputs: &[String]) {
+        let choice = self.desk_input.lock();
+        let picked = pick_desk_port(&choice, open_inputs);
+        if self.desk_port.read().as_deref() == picked {
+            return;
+        }
+        *self.desk_port.write() = picked.map(Arc::from);
+        drop(choice);
+        self.redraw();
+    }
+
+    /// The input read as the desk now; none is every input.
+    pub fn desk_port(&self) -> Option<Arc<str>> {
+        self.desk_port.read().clone()
+    }
+
+    /// Whether the desk's input was found by its name, not chosen.
+    pub fn desk_found(&self) -> bool {
+        *self.desk_input.lock() == DeskInput::Auto && self.desk_port.read().is_some()
+    }
+
+    /// Whether an event that came in on the input `port` is the desk's:
+    /// the surface is on, the event is one the desk sends, and `port` is
+    /// the desk's input (or every input is read as the desk). Runs in the
+    /// MIDI input callback, so it only reads what is already worked out.
+    pub fn claims_from(&self, port: &str, event: &MidiEvent) -> bool {
+        self.is_enabled()
+            && claims(self.protocol(), event)
+            && self
+                .desk_port
+                .read()
+                .as_deref()
+                .is_none_or(|desk| desk == port)
+    }
+
+    /// The inputs whose outputs are the desk's, for sending it its lights
+    /// and faders: the desk's own input when it is known, every open one
+    /// otherwise. Feedback went to every output named like an open input,
+    /// so a keyboard's own output got the desk's pitch bends and notes.
+    pub fn desk_inputs(&self, open_inputs: Vec<String>) -> Vec<String> {
+        match self.desk_port() {
+            Some(desk) => vec![desk.to_string()],
+            None => open_inputs,
+        }
     }
 
     pub fn set_touched(&self, strip: usize, on: bool) {
@@ -1250,5 +1380,104 @@ mod tests {
             "no fader message while touched"
         );
         assert!(changes.is_empty(), "the level row is not on a HUI desk");
+    }
+
+    fn ports(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn a_desk_is_known_by_its_name_as_words_in_any_case() {
+        for desk in [
+            "X-Touch",
+            "X-TOUCH",
+            "MIDIIN2 (X-Touch)",
+            "XTouch One",
+            "Behringer X Touch",
+            "iCON Platform M+ V2.15",
+            "PreSonus FaderPort 8",
+            "Fader Port",
+            "SSL UF8",
+            "MCU Pro",
+            "Mackie Control",
+            "HUI",
+        ] {
+            assert!(looks_like_desk(desk), "{desk} is a desk");
+        }
+        for not_desk in [
+            "Novation Launchkey 49",
+            "Akai MPK Mini mk3",
+            "Microsoft GS Wavetable Synth",
+            "Launchpad X",
+            "Expressive E Touche",
+            "Iconic Keys",
+            "",
+        ] {
+            assert!(!looks_like_desk(not_desk), "{not_desk} is not a desk");
+        }
+    }
+
+    #[test]
+    fn the_desk_input_is_the_one_chosen_or_the_one_named_like_a_desk() {
+        let open = ports(&["Novation Launchkey 49", "X-Touch"]);
+        assert_eq!(pick_desk_port(&DeskInput::Auto, &open), Some("X-Touch"));
+        // With no desk among them, every input is read, as before.
+        let keys = ports(&["Novation Launchkey 49"]);
+        assert_eq!(pick_desk_port(&DeskInput::Auto, &keys), None);
+        assert_eq!(pick_desk_port(&DeskInput::Every, &open), None);
+        // A chosen desk that is not plugged in is still the desk: nothing
+        // else becomes it.
+        let chosen = DeskInput::Port("iCON P1-M".into());
+        assert_eq!(pick_desk_port(&chosen, &open), Some("iCON P1-M"));
+    }
+
+    /// A keyboard beside the desk keeps its notes: its G6 (94) plays, and
+    /// only the desk's own G6 is its Play button.
+    #[test]
+    fn only_the_desk_input_is_read_as_the_desk() {
+        let surface = ControlSurface::new();
+        surface.enabled.store(true, Ordering::Relaxed);
+        let open = ports(&["Novation Launchkey 49", "X-Touch"]);
+        surface.find_desk(&open);
+        assert_eq!(surface.desk_port().as_deref(), Some("X-Touch"));
+        assert!(surface.desk_found(), "found by its name");
+        let play = note_on(94);
+        assert!(!surface.claims_from("Novation Launchkey 49", &play));
+        assert!(surface.claims_from("X-Touch", &play));
+        // The keyboard's pitch wheel is its own, not fader one.
+        assert!(!surface.claims_from("Novation Launchkey 49", &bend(0, 0.3)));
+
+        // Every input, as it was before the choice.
+        surface.set_desk_input(DeskInput::Every, &open);
+        assert!(surface.claims_from("Novation Launchkey 49", &play));
+        assert!(!surface.desk_found());
+
+        // A chosen desk that is unplugged takes nothing from the keyboard.
+        surface.set_desk_input(DeskInput::Port("iCON P1-M".into()), &open);
+        assert!(!surface.claims_from("Novation Launchkey 49", &play));
+        assert!(!surface.desk_found(), "chosen, not found");
+
+        // Off, nothing is the desk's.
+        surface.set_desk_input(DeskInput::Auto, &open);
+        surface.enabled.store(false, Ordering::Relaxed);
+        assert!(!surface.claims_from("X-Touch", &play));
+    }
+
+    #[test]
+    fn a_different_desk_input_is_sent_everything_and_its_outputs_alone() {
+        let surface = ControlSurface::new();
+        *surface.shown.lock().unwrap() = Some(DeskFrame::default());
+        let open = ports(&["Novation Launchkey 49"]);
+        surface.find_desk(&open);
+        assert!(surface.shown.lock().unwrap().is_some(), "nothing changed");
+        assert_eq!(
+            surface.desk_inputs(open.clone()),
+            open,
+            "every input's outputs while no desk is known"
+        );
+        let open = ports(&["Novation Launchkey 49", "X-Touch"]);
+        surface.find_desk(&open);
+        assert!(surface.shown.lock().unwrap().is_none(), "sent everything");
+        assert_eq!(surface.desk_inputs(open), ports(&["X-Touch"]));
     }
 }
