@@ -54,10 +54,13 @@ pub struct ProjectMetadata {
 /// 1: MessagePack, struct written as a positional array.
 /// 2: MessagePack with field names, so the order of fields in the code no
 ///    longer decides whether an older song opens correctly.
+/// 3: where things show in FL's three lists: the playlist's rows, each
+///    clip's row, the mixer's numbers and the rack's groups. Display only;
+///    a song from before is laid out on opening exactly as it looked.
 ///
 /// A file claiming a higher number than this is refused on load instead of
 /// being read as whatever happens to line up.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// A film or a game capture, played in time with the song.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -190,7 +193,7 @@ impl Default for Project {
             tracks.push(Track::new_audio(id, format!("Insert {}", i)));
         }
 
-        Self {
+        let mut project = Self {
             version: FORMAT_VERSION,
             metadata: ProjectMetadata {
                 name: "Untitled".into(),
@@ -227,7 +230,11 @@ impl Default for Project {
                 "Scene 3".to_string(),
                 "Scene 4".to_string(),
             ],
-        }
+        };
+        // A new song shows as one made before FL's three lists did: its
+        // inserts numbered and on their rows.
+        project.lay_out_as_before();
+        project
     }
 }
 
@@ -360,11 +367,39 @@ impl Project {
     ///
     /// Format 1 to 2 changed how the file is written, not what it holds, so
     /// there is nothing to move: reading it already produced the right
-    /// values. Later steps go here, each one keyed on the version it starts
-    /// from, and the version is stamped at the end so the next save writes
-    /// the current format.
+    /// values. Format 2 to 3 fills in where everything shows in FL's three
+    /// lists, laid out exactly as the playlist, mixer and rack showed the
+    /// song before (`lay_out_as_before`); nothing that makes sound is
+    /// touched. Each step is keyed on the version it starts from, and the
+    /// version is stamped at the end so the next save writes the current
+    /// format.
     fn migrate(&mut self) {
+        if self.version < 3 {
+            self.lay_out_as_before();
+        }
         self.version = FORMAT_VERSION;
+    }
+
+    /// This song as a build from before format 3 saved it: format 2, with
+    /// none of the fields FL's three lists added. For tests that open an
+    /// older song and check it looks and sounds the same.
+    #[doc(hidden)]
+    pub fn older_format_bytes(&self) -> Vec<u8> {
+        let mut old = self.clone();
+        old.version = 2;
+        old.forget_layout();
+        let data = rmp_serde::to_vec_named(&old).unwrap_or_default();
+        zstd::encode_all(data.as_slice(), 3).unwrap_or_default()
+    }
+
+    /// A song's bytes read as they are, without bringing them up to date
+    /// or making them safe: what a build of the file's own format held.
+    /// For tests that compare a song before and after it is opened; never
+    /// for opening a song.
+    #[doc(hidden)]
+    pub fn read_as_saved(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        let data = decompress_capped(bytes)?;
+        Ok(rmp_serde::from_slice(&data)?)
     }
 
     /// Save as JSON (for debugging / interop). Atomic like `save`.
@@ -456,13 +491,18 @@ impl Project {
     /// the end after all.
     pub fn claim_row(&mut self, row: usize, name: &str, instrument: bool) -> String {
         let id = format!("insert-{row:03}");
-        let fresh = if instrument {
+        let mut fresh = if instrument {
             Track::new_midi(id.clone(), name.to_string())
         } else {
             Track::new_audio(id.clone(), name.to_string())
         };
         match self.tracks.iter_mut().find(|t| t.id == id) {
             Some(slot) => {
+                // It keeps the insert's number in the mixer, and an
+                // instrument is a channel in the rack, as the rack has
+                // always listed MIDI tracks.
+                fresh.mixer_number = slot.mixer_number;
+                fresh.rack_group = if instrument { Some(0) } else { slot.rack_group };
                 *slot = fresh;
                 id
             }
