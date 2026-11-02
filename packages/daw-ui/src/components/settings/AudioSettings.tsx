@@ -16,7 +16,7 @@ import { MtcFollowRow } from './MtcFollowRow'
 import { PluginLatencyRow } from './PluginLatencyRow'
 import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
-import { useSetupWizardStore } from '../../stores/setupWizardStore'
+import { useSetupWizardStore, type VelocityCurve } from '../../stores/setupWizardStore'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useTransportStore } from '../../stores/transportStore'
 import { TestToneStrip, useTestTone } from './TestToneStrip'
@@ -100,6 +100,16 @@ interface AudioSettingsProps {
 }
 
 const BUFFER_SIZES = [64, 128, 256, 512, 1024, 2048, 4096]
+
+/** The velocity curves an input can have. Soft lifts light hits, Hard holds
+ *  them down, the S-curve gives more dynamics; the softest and hardest hits
+ *  stay where they are. */
+const VELOCITY_CURVES: { id: VelocityCurve; label: string }[] = [
+  { id: 'linear', label: 'Linear' },
+  { id: 'soft', label: 'Soft' },
+  { id: 'hard', label: 'Hard' },
+  { id: 's-curve', label: 'S-curve' },
+]
 
 export function AudioSettings({ onClose }: AudioSettingsProps) {
   useLanguage()
@@ -191,6 +201,10 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   // output pair it plays on the device just opened, and the strip under the
   // device names it. Not over a song that plays; Test sound always does.
   const tone = useTestTone()
+  // MIDI input as a whole, and each input's velocity curve. The first run
+  // no longer asks either, so they are set here.
+  const midiMasterEnabled = useSetupWizardStore(s => s.midiMasterEnabled)
+  const velocityCurves = useSetupWizardStore(s => s.velocityCurves)
   const toneAfterChange = () => {
     if (!useTransportStore.getState().playing) void tone.play()
   }
@@ -1108,6 +1122,29 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               {tr(SURFACE_CAPTIONS[surface.protocol] ?? SURFACE_CAPTIONS.mackie)}
             </div>
 
+            {/* MIDI input as a whole. With it off no input reaches the
+                audio thread; ports stay open, so turning it on is instant. */}
+            <SettingRow label="MIDI input">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  onClick={() => useSetupWizardStore.getState().setMidiMasterEnabled(!midiMasterEnabled)}
+                  aria-pressed={midiMasterEnabled}
+                  style={{
+                    padding: '4px 12px', fontSize: 11, fontWeight: 600,
+                    borderRadius: hw.radius.sm, border: 'none', cursor: 'pointer',
+                    background: midiMasterEnabled ? hw.accent : 'rgba(255,255,255,0.08)',
+                    color: midiMasterEnabled ? '#fff' : hw.textSecondary,
+                    fontFamily: 'inherit',
+                  }}
+                >{midiMasterEnabled ? tr('On') : tr('Off')}</button>
+                <span style={{ fontSize: 10, color: hw.textFaint }}>
+                  {midiMasterEnabled
+                    ? tr('keys and knobs from every input below reach the song')
+                    : tr('off: nothing from the inputs below reaches the song')}
+                </span>
+              </div>
+            </SettingRow>
+
             {/* MIDI Inputs */}
             <div style={{
               marginBottom: 10, padding: '8px 12px',
@@ -1149,9 +1186,27 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                         borderRadius: hw.radius.sm,
                         border: `1px solid ${open ? hw.accent : hw.borderDark}`,
                       }}>
-                        <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit' }}>
+                        <span style={{ fontSize: 11, color: hw.textSecondary, fontFamily: 'inherit', flex: 1, minWidth: 0 }}>
                           {port}
                         </span>
+                        {/* How hard the keys have to be hit. Every input
+                            starts on Linear. */}
+                        <select
+                          value={velocityCurves[port] ?? 'linear'}
+                          onChange={e => useSetupWizardStore.getState().setVelocityCurve(port, e.target.value as VelocityCurve)}
+                          aria-label={tf('Velocity curve for {name}', { name: port })}
+                          title={tr('Velocity curve: how hard the keys have to be hit')}
+                          style={{
+                            marginRight: 6, padding: '1px 4px', fontSize: 10,
+                            background: hw.bgInput, color: hw.textSecondary,
+                            border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
+                            fontFamily: 'inherit', cursor: 'pointer',
+                          }}
+                        >
+                          {VELOCITY_CURVES.map(c => (
+                            <option key={c.id} value={c.id} style={{ background: '#0c0c10' }}>{tr(c.label)}</option>
+                          ))}
+                        </select>
                         <button
                           disabled={midiBusy}
                           onClick={() => toggleMidiPort(port)}

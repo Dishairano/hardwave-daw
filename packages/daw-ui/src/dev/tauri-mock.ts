@@ -168,10 +168,18 @@ type MockWindow = {
   __hwAudioFails?: string
   /** Hold the test tone's meters mid-play, for a still picture. */
   __hwToneHold?: boolean
+  /** The MIDI inputs plugged in (default: two keyboards and a desk). */
+  __hwMidiPorts?: string[]
   /** Outputs on the Focusrite (default 2), for an output pair to pick. */
   __hwOutputChannels?: number
 }
 const mockWin = () => window as unknown as MockWindow
+const mockMidiPorts = () => mockWin().__hwMidiPorts ?? ['Akai MPK Mini mk3', 'Novation Launchkey 49', 'X-Touch']
+/** What an input is by its name, as the backend's midi_hotplug says. */
+const mockInputKind = (port: string) =>
+  /loop ?midi|loopbe|midi ?through|iac driver|virmidi|virtual|rtpmidi/i.test(port) ? 'virtual'
+    : /\b(x-?touch|mcu|mackie|icon|platform|fader ?port|uf8|hui)\b/i.test(port) ? 'desk'
+      : 'keyboard'
 
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
@@ -785,6 +793,10 @@ const mock: TauriInternals = {
           peakRight: side === 'right' ? 0.126 : 0,
         }
       }
+      case 'list_midi_input_kinds':
+        return mockMidiPorts().map(port => ({ port, kind: mockInputKind(port) }))
+      case 'get_keyboard_target':
+        return { armed: [], keyboard: 'Lead' }
       // Settings window (screenshot harness renders it headless).
       case 'get_audio_input_devices':
         return [{ name: 'Focusrite Scarlett 2i2', is_default: true, sample_rates: [44100, 48000, 96000], max_channels: 2 }]
@@ -816,7 +828,7 @@ const mock: TauriInternals = {
         // Named ports so the setup wizard's device and velocity steps can
         // be photographed with something in them, and a desk beside the
         // keyboards for the control surface's input picker.
-        return ['Akai MPK Mini mk3', 'Novation Launchkey 49', 'X-Touch']
+        return mockMidiPorts()
       case 'open_midi_input': {
         const port = String(args?.portName ?? '')
         if (port && !mockMidiOpen.includes(port)) mockMidiOpen.push(port)

@@ -5,7 +5,7 @@
  * Lets visual changes be verified before a build.
  *
  * Pick the panel with `?panel=` — playlist (default) | mixer | channelrack |
- * pianoroll | wizard | browser. Served only via screenshot.html on the vite dev server; the
+ * pianoroll | wizard | newcontroller | browser. Served only via screenshot.html on the vite dev server; the
  * production bundle (index.html → main.tsx) never imports this.
  */
 import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
@@ -52,6 +52,8 @@ import { meterSegments } from '../utils/meter'
 import { SetupWizard } from '../components/SetupWizard'
 import '../components/SetupWizard.css'
 import { useSetupWizardStore, type WizardStep } from '../stores/setupWizardStore'
+import { NotificationHost } from '../components/NotificationHost'
+import { midiInputAppeared, type InputKind } from '../lib/midiHotplug'
 import { Browser } from '../components/browser/Browser'
 import { useBrowserStore } from '../stores/browserStore'
 import { useMidiCcStore } from '../stores/midiCcStore'
@@ -105,6 +107,19 @@ function WizardShot() {
     useSetupWizardStore.setState({ visible: true, step })
   }, [])
   return <SetupWizard />
+}
+
+/** A controller plugged in while a song is open: the message bottom right.
+ *  ?kind=desk plugs in a control surface instead of a keyboard. */
+function NewControllerShot() {
+  React.useEffect(() => {
+    const kind = (new URLSearchParams(location.search).get('kind') ?? 'keyboard') as InputKind
+    const port = kind === 'desk' ? 'Behringer X-Touch' : 'Akai MPK Mini mk3'
+    useSetupWizardStore.setState({ visible: false, midiInputs: {}, midiMasterEnabled: true })
+    const t = setTimeout(() => { void midiInputAppeared({ port, kind }) }, 400)
+    return () => clearTimeout(t)
+  }, [])
+  return <NotificationHost />
 }
 
 // ---- seed sample data -----------------------------------------------------
@@ -554,6 +569,16 @@ function Harness() {
       )
     case 'wizard':
       return <Full><WizardShot /></Full>
+    case 'newcontroller':
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Hardstyle starter">
+            <HwSecondRow />
+          </HwTopbar>
+          <Arrangement onSetHint={noop} />
+          <NewControllerShot />
+        </div>
+      )
     case 'browser':
       // Docked at its real width beside the playlist, as in the app.
       return (

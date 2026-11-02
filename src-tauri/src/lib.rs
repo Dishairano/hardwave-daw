@@ -13,6 +13,7 @@ mod endpoints;
 mod frontend_updater;
 mod main_window;
 mod midi_clock;
+mod midi_hotplug;
 mod midi_map;
 mod midi_sync;
 mod midi_timecode;
@@ -604,6 +605,7 @@ pub fn run() {
             commands::tracks::set_track_swap_lr,
             commands::tracks::set_track_stereo_separation,
             commands::tracks::set_keyboard_track,
+            commands::tracks::get_keyboard_target,
             commands::tracks::set_track_mix_live,
             commands::tracks::set_track_delay_samples,
             commands::tracks::set_track_pitch_semitones,
@@ -814,6 +816,7 @@ pub fn run() {
             commands::midi::legato_clip_notes,
             // MIDI input (live)
             commands::midi_input::list_midi_inputs,
+            commands::midi_input::list_midi_input_kinds,
             commands::midi_input::open_midi_input,
             commands::midi_input::close_midi_input,
             commands::midi_input::close_all_midi_inputs,
@@ -1007,15 +1010,29 @@ pub fn run() {
             // have come back online and drops connections whose device has
             // vanished. Desired set is maintained by open/close commands so
             // the user's choice survives unplug/replug.
+            // Then it tells the window which inputs are new, with their kind:
+            // a controller plugged in later stayed off until the producer
+            // found Settings > MIDI. The window decides what to do with each.
             {
                 // The ports are listed before the lock is taken: listing can take
                 // seconds on a busy machine, and everything that reads MIDI waits
                 // for this lock.
                 let midi_input = Arc::clone(&state.midi_input);
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_millis(2000));
-                    let available = hardwave_midi::MidiInputManager::available_ports();
-                    let _report = midi_input.lock().reconcile_with(&available);
+                let app = app_handle.clone();
+                std::thread::spawn(move || {
+                    let mut watch = midi_hotplug::PortWatch::new();
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(2000));
+                        let available = hardwave_midi::MidiInputManager::available_ports();
+                        let _report = midi_input.lock().reconcile_with(&available);
+                        for port in watch.arrivals(&available) {
+                            let kind = midi_hotplug::kind_of(&port);
+                            let _ = app.emit(
+                                "midi-input-appeared",
+                                midi_hotplug::InputSeen { port, kind },
+                            );
+                        }
+                    }
                 });
             }
 
