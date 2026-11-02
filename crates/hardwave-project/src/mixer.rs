@@ -77,13 +77,20 @@ pub fn solo_audible(tracks: &[crate::track::Track]) -> Option<std::collections::
     if heard.is_empty() {
         return None;
     }
-    // What plays into a soloed track, all the way back.
+    // What plays into a soloed track, all the way back: through its output
+    // or through a send. A soloed reverb return was silent, because the
+    // tracks sending to it were muted with everything else.
     loop {
         let feeders: Vec<TrackId> = tracks
             .iter()
             .filter(audible_kind)
             .filter(|t| !heard.contains(&t.id))
-            .filter(|t| t.output_bus.as_ref().is_some_and(|bus| heard.contains(bus)))
+            .filter(|t| {
+                t.output_bus.as_ref().is_some_and(|bus| heard.contains(bus))
+                    || t.sends
+                        .iter()
+                        .any(|s| s.enabled && heard.contains(&s.target))
+            })
             .map(|t| t.id.clone())
             .collect();
         if feeders.is_empty() {
@@ -187,6 +194,34 @@ mod tests {
             track("kick", None, false),
         ];
         assert_eq!(heard(&tracks), vec!["fx", "group", "lead", "reverb"]);
+    }
+
+    /// Soloing a reverb return hears it with the tracks that send to it.
+    /// It was silent: the senders were muted by the solo, so nothing
+    /// reached it.
+    #[test]
+    fn a_soloed_return_is_heard_with_the_tracks_that_send_to_it() {
+        let mut lead = track("lead", None, false);
+        lead.sends.push(Send {
+            target: "reverb".into(),
+            gain_db: -6.0,
+            pre_fader: false,
+            enabled: true,
+        });
+        let mut pad = track("pad", None, false);
+        pad.sends.push(Send {
+            target: "reverb".into(),
+            gain_db: -6.0,
+            pre_fader: false,
+            enabled: false,
+        });
+        let tracks = [
+            lead,
+            pad,
+            track("reverb", None, true),
+            track("kick", None, false),
+        ];
+        assert_eq!(heard(&tracks), vec!["lead", "reverb"]);
     }
 
     #[test]
