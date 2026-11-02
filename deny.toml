@@ -21,8 +21,10 @@ ignore = [
     # high advisories in ZipArchive::extract and ZipStreamReader::extract:
     # symlinks that point outside the destination, permissions applied
     # through symlinks, and SUID/SGID bits kept (GHSA-4v9h-p7m9-rh26,
-    # GHSA-4684-h2q9-2vcp, GHSA-vv5m-jxxh-4627). Nothing of ours uses zip;
-    # tauri-plugin-updater does, on Windows only, and even its newest
+    # GHSA-4684-h2q9-2vcp, GHSA-vv5m-jxxh-4627). Our code does not use zip 4:
+    # it reads and writes zips with zip 9, and the unused zip4 line in
+    # src-tauri/Cargo.toml only keeps the updater's zip 4 built with deflate.
+    # tauri-plugin-updater uses it, on Windows only, and even its newest
     # release (2.14.0) asks for zip ^4. It unpacks the update archive only
     # after checking it against the DAW's minisign signature, so the
     # archive is ours; and Windows has no Unix permission bits. Remove this
@@ -38,9 +40,9 @@ ignore = [
     # ZipArchive::extract aborts the process on a symlink entry with a huge
     # declared size. Our own code never calls extract (FL packages, sample
     # packs and DAWproject files are read entry by entry with our own size
-    # caps, and links are refused); the only caller is the updater, on our own
-    # signed archive. Our direct use moves to zip 9 separately; remove this
-    # when the updater moves too.
+    # caps, and no link is ever made) and since 2 Nov uses zip 9, which has
+    # the fix; the only caller left is the updater, on our own signed
+    # archive. Remove this when the updater moves to zip 9 too.
     { id = "RUSTSEC-2026-0429", reason = "abort on a crafted symlink entry in extract: we never call extract; the updater unpacks our own signed archive (founder accepted 2 Nov)" },
 ]
 
