@@ -393,6 +393,28 @@ impl DitherState {
     }
 }
 
+/// A sample with dither added, one step of the output's bit depth wide,
+/// ready to be rounded to it.
+fn add_dither(
+    s: f32,
+    lsb: f32,
+    dither: DitherMode,
+    state: &mut DitherState,
+    channel: usize,
+) -> f32 {
+    match dither {
+        DitherMode::None => s,
+        DitherMode::Tpdf => s + state.rng.next_tpdf() * lsb,
+        DitherMode::TpdfShaped => {
+            let n = state.rng.next_tpdf() * lsb;
+            let ch = channel & 1;
+            let x = s + n - state.prev_err[ch];
+            state.prev_err[ch] = n;
+            x
+        }
+    }
+}
+
 fn write_sample_dithered(
     wav: &mut WavWriter<BufWriter<File>>,
     s: f32,
@@ -404,35 +426,13 @@ fn write_sample_dithered(
     match bit_depth {
         16 => {
             let max = i16::MAX as f32;
-            let lsb = 1.0 / max;
-            let mut x = s;
-            match dither {
-                DitherMode::None => {}
-                DitherMode::Tpdf => x += state.rng.next_tpdf() * lsb,
-                DitherMode::TpdfShaped => {
-                    let n = state.rng.next_tpdf() * lsb;
-                    let ch = channel & 1;
-                    x = x + n - state.prev_err[ch];
-                    state.prev_err[ch] = n;
-                }
-            }
+            let x = add_dither(s, 1.0 / max, dither, state, channel);
             let v = (x.clamp(-1.0, 1.0) * max).round() as i16;
             wav.write_sample(v)
         }
         24 => {
             let max = 8_388_607.0_f32;
-            let lsb = 1.0 / max;
-            let mut x = s;
-            match dither {
-                DitherMode::None => {}
-                DitherMode::Tpdf => x += state.rng.next_tpdf() * lsb,
-                DitherMode::TpdfShaped => {
-                    let n = state.rng.next_tpdf() * lsb;
-                    let ch = channel & 1;
-                    x = x + n - state.prev_err[ch];
-                    state.prev_err[ch] = n;
-                }
-            }
+            let x = add_dither(s, 1.0 / max, dither, state, channel);
             let v = (x.clamp(-1.0, 1.0) * max).round() as i32;
             wav.write_sample(v)
         }
@@ -489,21 +489,13 @@ fn write_flac_from_buffer(
     buffer: &[f32],
     sample_rate: u32,
     bit_depth: u32,
+    dither: DitherMode,
 ) -> Result<(), String> {
     use flacenc::component::BitRepr;
     use flacenc::error::Verify;
 
-    let bits: u32 = match bit_depth {
-        16 => 16,
-        0 | 24 => 24,
-        n => n.clamp(8, 24),
-    };
-    let max = ((1i64 << (bits - 1)) - 1) as f32;
-    let mut samples: Vec<i32> = Vec::with_capacity(buffer.len());
-    for &s in buffer {
-        let v = (s.clamp(-1.0, 1.0) * max).round() as i32;
-        samples.push(v);
-    }
+    let bits = flac_bits(bit_depth);
+    let samples = flac_samples(buffer, bits, dither);
 
     let config = flacenc::config::Encoder::default()
         .into_verified()
@@ -518,6 +510,33 @@ fn write_flac_from_buffer(
         .map_err(|e| format!("flac serialize: {e:?}"))?;
     fs::write(out_path, sink.as_slice()).map_err(|e| format!("flac file: {e}"))?;
     Ok(())
+}
+
+/// The bit depth a FLAC is written at: float has no FLAC form, so 24.
+fn flac_bits(bit_depth: u32) -> u32 {
+    match bit_depth {
+        16 => 16,
+        0 | 24 => 24,
+        n => n.clamp(8, 24),
+    }
+}
+
+/// Interleaved samples rounded to `bits`, with the dither the export asked
+/// for. FLAC exports used to round without it whatever the setting said, so
+/// a 16-bit FLAC's fades and quiet tails broke up into the distortion
+/// dither is there to prevent, while the same export as WAV was dithered.
+fn flac_samples(buffer: &[f32], bits: u32, dither: DitherMode) -> Vec<i32> {
+    let max = ((1i64 << (bits - 1)) - 1) as f32;
+    let lsb = 1.0 / max;
+    let mut state = DitherState::new();
+    buffer
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| {
+            let x = add_dither(s, lsb, dither, &mut state, i & 1);
+            (x.clamp(-1.0, 1.0) * max).round() as i32
+        })
+        .collect()
 }
 
 /// FLAC path: always buffer the full render, apply normalization, then encode.
@@ -597,7 +616,13 @@ where
 
     on_progress((total_samples * 90) / 100, total_samples);
     meter.push_interleaved(&buffer);
-    write_flac_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.bit_depth)?;
+    write_flac_from_buffer(
+        out_path,
+        &buffer,
+        fmt.sample_rate,
+        fmt.bit_depth,
+        fmt.dither,
+    )?;
     on_progress(total_samples, total_samples);
     Ok(true)
 }
@@ -2675,6 +2700,29 @@ mod stem_and_freeze_tests {
         assert!(
             p.track(&drums).unwrap().muted,
             "another track's own mute stays, as it keys sidechains as heard"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dither_tests {
+    use super::{flac_bits, flac_samples, DitherMode};
+
+    /// A FLAC export is dithered when the export says so. A level under
+    /// one 16-bit step rounded to nothing; dithered, it averages out at
+    /// its level, as it does in a dithered WAV.
+    #[test]
+    fn a_16_bit_flac_is_dithered_when_asked() {
+        let step = 1.0 / i16::MAX as f32;
+        let quiet = vec![0.3 * step; 96_000];
+        let bits = flac_bits(16);
+        let plain = flac_samples(&quiet, bits, DitherMode::None);
+        assert!(plain.iter().all(|&v| v == 0), "rounded away undithered");
+        let dithered = flac_samples(&quiet, bits, DitherMode::Tpdf);
+        let mean = dithered.iter().map(|&v| v as f64).sum::<f64>() / dithered.len() as f64;
+        assert!(
+            (mean - 0.3).abs() < 0.05,
+            "dithered, the level survives on average: {mean}"
         );
     }
 }
