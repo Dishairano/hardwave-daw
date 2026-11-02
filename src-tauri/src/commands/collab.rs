@@ -144,10 +144,11 @@ pub async fn start_collab(
     }
 
     // Out: what this person does, with its bytes as base64 when the room
-    // service reads that.
+    // service reads that, and never faster than the room takes it.
     let base64 = wire >= hardwave_project::multiplayer::WIRE_VERSION;
     let collab_for_writer = Arc::clone(&collab);
     collab.hold(tokio::spawn(async move {
+        let mut pace = crate::collab::Pacer::default();
         while let Some(message) = to_send.recv().await {
             let text = match crate::collab::wire_text(&message, base64) {
                 Ok(text) => text,
@@ -157,6 +158,8 @@ pub async fn start_collab(
                     continue;
                 }
             };
+            let at = pace.slot(&message.kind, std::time::Instant::now());
+            tokio::time::sleep_until(at.into()).await;
             if writer
                 .send(tokio_tungstenite::tungstenite::Message::Text(text))
                 .await
