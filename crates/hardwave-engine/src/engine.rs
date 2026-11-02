@@ -3876,13 +3876,26 @@ impl EngineCallback {
                     // ones its declicking mode stands for.
                     let (declick_in, declick_out) = treatment.declick.fades_ms();
                     let micro = |ms: f64| (ms / 1000.0 * sample_rate).round() as u64;
+                    // A fade lasts its ticks at the tempo where it is: from
+                    // the clip's start, and up to its end. Counted from the
+                    // song's start, a fade after a tempo change played at
+                    // the opening tempo, longer or shorter than drawn.
+                    let clip_end_ticks = clip.position_ticks + clip.length_ticks;
                     let fade_in_samples = if audio_clip.fade_in_ticks > 0 {
-                        tempo_map.tick_to_samples(audio_clip.fade_in_ticks, sample_rate)
+                        tempo_map
+                            .tick_to_samples(
+                                clip.position_ticks + audio_clip.fade_in_ticks,
+                                sample_rate,
+                            )
+                            .saturating_sub(timeline_start)
                     } else {
                         micro(declick_in)
                     };
                     let fade_out_samples = if audio_clip.fade_out_ticks > 0 {
-                        tempo_map.tick_to_samples(audio_clip.fade_out_ticks, sample_rate)
+                        timeline_end.saturating_sub(tempo_map.tick_to_samples(
+                            clip_end_ticks.saturating_sub(audio_clip.fade_out_ticks),
+                            sample_rate,
+                        ))
                     } else {
                         micro(declick_out)
                     };
@@ -6256,6 +6269,102 @@ mod offline_insert_tests {
         assert!(
             (0.33..0.38).contains(&peak),
             "the clip at half level through one pan law, peak {peak}"
+        );
+    }
+
+    #[test]
+    fn a_fade_after_a_tempo_change_lasts_its_beats_at_that_tempo() {
+        use hardwave_project::tempo::{TempoEntry, TempoRamp};
+        let engine = DawEngine::new();
+        let sr = 48_000u32;
+        let frames = 4 * sr as usize;
+        let ch: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * 1_000.0 * n as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        engine.audio_pool.insert(
+            "sine".to_string(),
+            crate::AudioBuffer {
+                channels: vec![ch.clone(), ch],
+                sample_rate: sr,
+                num_frames: frames,
+            },
+        );
+        let beat = hardwave_midi::PPQ;
+        let clip_start = {
+            let mut project = engine.project.lock();
+            // 140 at the start, half that from the second bar on.
+            project.tempo_map.entries[0].bpm = 140.0;
+            project.tempo_map.entries.push(TempoEntry {
+                tick: 4 * beat,
+                bpm: 70.0,
+                time_sig_num: 4,
+                time_sig_den: 4,
+                ramp: TempoRamp::Instant,
+            });
+            let id = project.add_audio_track("Pad".into());
+            if let Some(t) = project.track_mut(&id) {
+                t.clips.push(ClipPlacement {
+                    content: ClipContent::Audio(AudioClip {
+                        id: "pad".into(),
+                        name: "pad".into(),
+                        source_path: "sine".into(),
+                        source_hash: String::new(),
+                        source_start: 0,
+                        source_end: frames as u64,
+                        gain_db: 0.0,
+                        // One beat: 60 / 70 s here, not 60 / 140 s.
+                        fade_in_ticks: beat,
+                        fade_out_ticks: 0,
+                        muted: false,
+                        reversed: false,
+                        pitch_semitones: 0.0,
+                        stretch_ratio: 1.0,
+                        warp_markers: Vec::new(),
+                        fade_in_curve: FadeCurve::Linear,
+                        fade_out_curve: FadeCurve::Linear,
+                        source_file: String::new(),
+                        treatment: Default::default(),
+                    }),
+                    track_id: id.clone(),
+                    position_ticks: 8 * beat,
+                    length_ticks: 4 * beat,
+                    lane: 0,
+                    color: None,
+                });
+            }
+            project.tempo_map.tick_to_samples(8 * beat, sr as f64)
+        };
+        let mut out: Vec<f32> = Vec::new();
+        engine
+            .render_offline_with(
+                sr,
+                sr as u64 * 2,
+                clip_start,
+                None,
+                |_| {},
+                |b| {
+                    out.extend_from_slice(b);
+                    true
+                },
+            )
+            .expect("it renders");
+        // Interleaved stereo: the peak of the left channel over a stretch.
+        let peak = |from: usize, to: usize| {
+            out[from * 2..to * 2]
+                .iter()
+                .step_by(2)
+                .fold(0.0f32, |m, &v| m.max(v.abs()))
+        };
+        let beat_here = 60.0 / 70.0 * sr as f64;
+        let full = peak(60_000, 70_000);
+        // Half a beat at 70 into the clip: halfway up the fade. Counted at
+        // 140 the fade was over by then and this was at full level.
+        let mid = (beat_here / 2.0) as usize;
+        let halfway = peak(mid - 480, mid + 480);
+        assert!(full > 0.2, "the clip plays, peak {full}");
+        assert!(
+            (0.4..0.6).contains(&(halfway / full)),
+            "halfway up the fade: {halfway} of {full}"
         );
     }
 
