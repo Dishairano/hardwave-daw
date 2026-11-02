@@ -3,7 +3,20 @@ import { createPortal } from 'react-dom'
 import { hw } from '../theme'
 import { t, tf, useLanguage } from '../i18n'
 
-export type CrashChoice = 'recover' | 'discard' | 'open'
+/** `later` closes the dialog and keeps the auto-saves. */
+export type CrashChoice = 'recover' | 'discard' | 'open' | 'later'
+
+/**
+ * What a key does in the dialog. Escape closes it and keeps the auto-saves,
+ * which File > Revert to last backup still opens. It used to mean Discard,
+ * so the key people press to get a dialog out of the way deleted the only
+ * copy of the work the crash interrupted.
+ */
+export function crashChoiceForKey(key: string): CrashChoice | null {
+  if (key === 'Escape') return 'later'
+  if (key === 'Enter') return 'recover'
+  return null
+}
 
 interface Props {
   autosavePath: string
@@ -15,8 +28,8 @@ export function CrashRecoveryDialog({ autosavePath, modifiedUnix, onChoice }: Pr
   useLanguage()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onChoice('discard')
-      if (e.key === 'Enter') onChoice('recover')
+      const choice = crashChoiceForKey(e.key)
+      if (choice) onChoice(choice)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
