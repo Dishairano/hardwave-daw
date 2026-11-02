@@ -21,16 +21,36 @@ export function useSongPartChanged(section: string, reload: () => void): void {
   }, [section, reload])
 }
 
+/**
+ * The whole song taken from the other side of a room ("Get the song from
+ * them"): the tracks are read again and the song is theirs, unsaved, so
+ * saving asks where instead of writing over the song that was open here.
+ * Its rack, markers, tempo and other parts arrive by their own events.
+ */
+export async function takeRoomSong(name: string): Promise<void> {
+  const [{ useProjectStore }, { useTrackStore }] = await Promise.all([
+    import('./projectStore'),
+    import('./trackStore'),
+  ])
+  useProjectStore.setState({ filePath: null, projectName: name || 'Untitled', dirty: true })
+  await useTrackStore.getState().fetchTracks()
+}
+
 /** The same for the VCA store, which lives outside any one window. */
 let started = false
 export function startSongPartSync(): void {
   if (started) return
   started = true
   import('@tauri-apps/api/event')
-    .then(({ listen }) => listen<string>('daw:songChanged', (ev) => {
-      if (ev.payload === 'vcas') {
-        void import('./vcaStore').then(({ useVcaStore }) => useVcaStore.getState().fetch())
-      }
-    }))
+    .then(({ listen }) => Promise.all([
+      listen<string>('daw:songChanged', (ev) => {
+        if (ev.payload === 'vcas') {
+          void import('./vcaStore').then(({ useVcaStore }) => useVcaStore.getState().fetch())
+        }
+      }),
+      listen<{ name: string }>('daw:songTaken', (ev) => {
+        void takeRoomSong(ev.payload?.name ?? '')
+      }),
+    ]))
     .catch(() => { /* outside the app */ })
 }
