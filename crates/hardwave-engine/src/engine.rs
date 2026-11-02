@@ -4653,6 +4653,7 @@ impl EngineCallback {
                 );
             }
             node.set_delay_samples(track.delay_samples);
+            node.set_frozen(track.frozen);
             let filter_kind = crate::track_node::TrackFilterType::parse(&track.filter_type);
             node.set_filter(
                 filter_kind,
@@ -4662,10 +4663,16 @@ impl EngineCallback {
             );
 
             // Per-track coarse + fine pitch offset. Combined as a single resample
-            // factor that's folded into each clip's source_step below.
+            // factor that's folded into each clip's source_step below. A
+            // freeze render already has it: played through it again, a
+            // frozen track came out transposed twice and out of time.
             let track_pitch_offset =
                 (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0;
-            let track_pitch_factor = 2.0_f64.powf(track_pitch_offset);
+            let track_pitch_factor = if track.frozen {
+                1.0
+            } else {
+                2.0_f64.powf(track_pitch_offset)
+            };
 
             let regions = self.audio_regions(track, tempo_map, sample_rate, track_pitch_factor);
             node.set_clips(regions);
@@ -8865,6 +8872,18 @@ mod track_render_tests {
         project.track_mut(original).unwrap().muted = true;
     }
 
+    /// Place a render on the track's freeze lane and freeze it, as a freeze
+    /// does.
+    fn place_freeze(engine: &DawEngine, track: &str, rendered: &[f32]) {
+        let frames = pool_render(engine, "freeze", rendered);
+        let mut project = engine.project.lock();
+        let mut placed = clip("f", "freeze", frames, track);
+        placed.lane = hardwave_project::clip::FREEZE_LANE;
+        let t = project.track_mut(track).unwrap();
+        t.clips.push(placed);
+        t.frozen = true;
+    }
+
     /// The loudest difference between two renders, away from the first and
     /// last few milliseconds where each clip's own declick fades sit.
     fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
@@ -8901,6 +8920,49 @@ mod track_render_tests {
         assert!(
             diff < 1e-3,
             "the bounce plays as the part did: worst difference {diff}, peaks {} and {}",
+            peak(&heard),
+            peak(&played)
+        );
+    }
+
+    /// A frozen track plays as it did live. The freeze render goes up to
+    /// the fader (the app leaves the fader and pan out of it), and the
+    /// frozen track plays it through its fader and pan only. It also ran
+    /// the render through its delay, swap, polarity, width, filter and pitch
+    /// a second time: a flipped polarity flipped back, swapped sides swapped
+    /// back, the filter cut twice as steep and the part played transposed
+    /// twice, and faster.
+    #[test]
+    fn a_frozen_track_plays_as_it_did_before_it_was_frozen() {
+        let (engine, id, len) = sine_song();
+        {
+            let mut project = engine.project.lock();
+            let t = project.track_mut(&id).unwrap();
+            t.volume_db = -6.0;
+            t.pan = 0.4;
+            t.phase_invert = true;
+            t.swap_lr = true;
+            t.stereo_separation = 0.5;
+            t.filter_type = "lp".into();
+            t.filter_cutoff_hz = 300.0;
+            t.filter_resonance = 0.707;
+            t.pitch_semitones = 2;
+        }
+        let heard = render(&engine, len, |_| {});
+        assert!(peak(&heard) > 0.05, "the song plays: {}", peak(&heard));
+
+        let target = id.clone();
+        let rendered = render_for_a_track(&engine, &id, len, move |p| {
+            let t = p.track_mut(&target).unwrap();
+            t.volume_db = 0.0;
+            t.pan = 0.0;
+        });
+        place_freeze(&engine, &id, &rendered);
+        let played = render(&engine, len, |_| {});
+        let diff = worst_difference(&heard, &played);
+        assert!(
+            diff < 1e-3,
+            "the frozen track plays as it did: worst difference {diff}, peaks {} and {}",
             peak(&heard),
             peak(&played)
         );
