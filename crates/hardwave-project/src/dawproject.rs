@@ -1141,6 +1141,7 @@ mod tests {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: "C:/Samples/kick loop.wav".into(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "drums".into(),
             position_ticks: 0,

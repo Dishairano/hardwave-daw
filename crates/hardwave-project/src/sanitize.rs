@@ -71,6 +71,9 @@ fn safe_clip(placement: &mut ClipPlacement, notes: &mut usize) {
             if a.source_start > a.source_end {
                 a.source_start = a.source_end;
             }
+            // Notes tuned by hand become a render plan the engine follows:
+            // in order, in range, and no more of them than any take has.
+            crate::clip::sanitize_tuned_notes(&mut a.tuned_notes, None);
         }
         ClipContent::Midi(m) => {
             *notes += m.clip.notes.len();
@@ -169,6 +172,62 @@ mod tests {
         p.tempo_map.entries[0].tick = 9600;
         p.make_safe().unwrap();
         assert_eq!(p.tempo_map.entries[0].tick, 0);
+    }
+
+    #[test]
+    fn notes_tuned_by_hand_are_kept_to_what_a_take_can_hold() {
+        use crate::clip::{AudioClip, TunedNote, MAX_TUNED_NOTES};
+        let mut p = Project::default();
+        let id = p.add_audio_track("Vocal".into());
+        let note = |i: usize| TunedNote {
+            start: i as f64,
+            end: i as f64 + 0.5,
+            sung: 60.0,
+            pitch: if i == 1 { f64::NAN } else { 61.0 },
+            drift: 1.0,
+            new_start: i as f64,
+            new_end: i as f64 + 0.5,
+            formants: true,
+        };
+        let clip = AudioClip {
+            id: "c".into(),
+            name: "c".into(),
+            source_path: "s".into(),
+            source_hash: String::new(),
+            source_start: 0,
+            source_end: 0,
+            gain_db: 0.0,
+            fade_in_ticks: 0,
+            fade_out_ticks: 0,
+            muted: false,
+            reversed: false,
+            pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            warp_markers: Vec::new(),
+            source_file: String::new(),
+            treatment: Default::default(),
+            tuned_notes: (0..MAX_TUNED_NOTES + 500).map(note).collect(),
+        };
+        p.track_mut(&id).unwrap().clips.push(ClipPlacement {
+            content: ClipContent::Audio(clip),
+            track_id: id.clone(),
+            position_ticks: 0,
+            length_ticks: 960,
+            lane: 0,
+            color: None,
+        });
+        p.make_safe().unwrap();
+        let ClipContent::Audio(a) = &p.track(&id).unwrap().clips[0].content else {
+            unreachable!()
+        };
+        assert_eq!(
+            a.tuned_notes.len(),
+            MAX_TUNED_NOTES - 1,
+            "capped, the broken one dropped"
+        );
+        assert!(a.tuned_notes.iter().all(|n| n.pitch.is_finite()));
     }
 
     #[test]

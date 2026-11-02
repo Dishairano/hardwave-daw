@@ -6512,6 +6512,7 @@ mod offline_insert_tests {
                 t.clips.push(ClipPlacement {
                     content: ClipContent::Midi(MidiClipRef {
                         id: "c".into(),
+                    tuned_notes: Vec::new(),
                         clip,
                     }),
                     track_id: id.clone(),
@@ -6647,6 +6648,7 @@ mod offline_insert_tests {
                     true
                 },
             )
+                        tuned_notes: Vec::new(),
             .expect("it renders");
         let first = out.iter().position(|v| v.abs() > 0.02).map(|i| i / 2);
         assert!(
@@ -7014,6 +7016,7 @@ mod offline_insert_tests {
             missing.is_empty(),
             "unexpected missing sources: {missing:?}"
         );
+            tuned_notes: Vec::new(),
         let buf = engine
             .audio_pool
             .get(&source_id)
@@ -7106,6 +7109,7 @@ mod offline_insert_tests {
             peak_with < 1e-6,
             "insert chain must apply offline; silencer should zero output, got peak={peak_with}"
         );
+                        tuned_notes: Vec::new(),
         // Without a factory (old behavior), the insert is skipped and the
         // kick is audible — confirming the difference is the hydration.
         let peak_without = render_peak(&engine, None);
@@ -7272,6 +7276,7 @@ fn moved_to(before: Option<String>, now: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod device_restart_tests {
     use super::moved_to;
+                    tuned_notes: Vec::new(),
 
     /// After a sound card would not open, picking another tries to start
     /// audio; it only stored the choice. The outputs asked for here exist
@@ -7361,6 +7366,7 @@ mod rt_safety_tests {
             // One thread: these tests are about the callback, not about
             // sharing the work.
             Arc::new(Mutex::new(None)),
+                    tuned_notes: Vec::new(),
             Arc::new(Mutex::new(None)),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
             Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -8748,6 +8754,7 @@ mod monitoring_tests {
         r.cb.process(&mut out, 256, 2);
         r.cb.transport.set_position(1_900);
         r.cb.process(&mut out, 256, 2);
+                tuned_notes: Vec::new(),
         assert_eq!(
             r.cb.transport.position(),
             1_000 + 156,

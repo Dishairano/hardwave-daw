@@ -109,6 +109,7 @@ pub(crate) fn import_audio_file_blocking(
         // reloads silent.
         source_file: path.to_string_lossy().into_owned(),
         treatment: Default::default(),
+        tuned_notes: Vec::new(),
     };
 
     let placement = hardwave_project::clip::ClipPlacement {
@@ -242,6 +243,7 @@ pub fn slices_to_playlist(
                         fade_out_curve: Default::default(),
                         source_file: path.to_string_lossy().into_owned(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     },
                 ),
                 track_id: track_id.clone(),
@@ -1094,6 +1096,7 @@ mod tests {
     fn a_sample_s_settings_reach_every_clip_of_it_and_no_other() {
         use hardwave_project::clip::{ClipContent, ClipPlacement};
         let mut project = hardwave_project::Project::default();
+            tuned_notes: Vec::new(),
         let beat = hardwave_midi::PPQ;
         let place = |track: &str, clip: hardwave_project::clip::AudioClip, at: u64| ClipPlacement {
             content: ClipContent::Audio(clip),

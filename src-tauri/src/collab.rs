@@ -1135,6 +1135,7 @@ mod tests {
                 fade_out_curve: Default::default(),
                 source_file: file.into(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: id.clone(),
             position_ticks: 0,

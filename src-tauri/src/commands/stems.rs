@@ -304,6 +304,7 @@ mod tests {
                 fade_out_curve: Default::default(),
                 source_file: test_wav().to_string_lossy().into_owned(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             };
             project.track_mut(&track_id).unwrap().clips.push(
                 hardwave_project::clip::ClipPlacement {

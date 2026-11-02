@@ -197,6 +197,7 @@ mod tests {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: String::new(),
             position_ticks: position,

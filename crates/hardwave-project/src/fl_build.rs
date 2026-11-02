@@ -799,6 +799,7 @@ pub fn build_project(
                     }
                     t
                 },
+                tuned_notes: Vec::new(),
             };
             let stretch = settings.stretch;
             audio_fixups.push(AudioFixup {
@@ -1970,6 +1971,7 @@ mod tests {
             warp_markers: Vec::new(),
             source_file: String::new(),
             treatment: Default::default(),
+            tuned_notes: Vec::new(),
         }
     }
 

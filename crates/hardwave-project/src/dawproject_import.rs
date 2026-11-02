@@ -900,6 +900,7 @@ impl Importer {
                 resample: audio.attr("algorithm") == Some("repitch"),
                 ..Default::default()
             },
+            tuned_notes: Vec::new(),
         };
         if let Some(t) = self.project.track_mut(track_id) {
             t.clips.push(ClipPlacement {
@@ -1322,6 +1323,7 @@ mod tests {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: "/s/loop.wav".into(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "drums".into(),
             position_ticks: 960 * 2,
