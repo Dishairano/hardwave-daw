@@ -655,6 +655,10 @@ pub struct DawEngine {
     pub midi_capture_ring: Arc<Mutex<MidiCaptureRing>>,
     /// How many times `start` has succeeded; see `start_count`.
     starts: u64,
+    /// The last `start` failed: audio is meant to be on and is not. A new
+    /// device, rate, buffer or driver starts it, as it restarts a running
+    /// one.
+    start_failed: bool,
 }
 
 /// Commands sent from UI thread to audio thread.
@@ -718,6 +722,7 @@ impl DawEngine {
             pending_state_snapshot: Arc::new(Mutex::new(None)),
             midi_capture_ring: Arc::new(Mutex::new(MidiCaptureRing::new(8192))),
             starts: 0,
+            start_failed: false,
         }
     }
 
@@ -1202,6 +1207,12 @@ impl DawEngine {
 
     /// Start the audio engine.
     pub fn start(&mut self) -> Result<(), String> {
+        let started = self.start_stream();
+        self.start_failed = started.is_err();
+        started
+    }
+
+    fn start_stream(&mut self) -> Result<(), String> {
         let transport = self.transport.clone();
         let project = Arc::clone(&self.project);
         let command_rx = self.command_rx.clone();
@@ -2037,13 +2048,14 @@ impl DawEngine {
         self.audio_device.host_name()
     }
 
-    /// Switch audio host backend. Restarts the stream if it was running.
+    /// Switch audio host backend. Restarts the stream if it was running,
+    /// or starts it if the last start failed.
     pub fn set_audio_host(&mut self, host_name: &str) -> Result<(), String> {
-        let was_running = self.audio_device.is_running();
+        let restart = self.audio_device.is_running() || self.start_failed;
         self.audio_device
             .set_host(host_name)
             .map_err(|e| e.to_string())?;
-        if was_running {
+        if restart {
             self.start()?;
         }
         Ok(())
@@ -2189,6 +2201,10 @@ impl DawEngine {
         }
     }
 
+    /// Starts audio as well when the last start failed: a sound card that
+    /// would not open (another program had it) left audio off, and picking
+    /// another one only stored the choice, so the song stayed silent until
+    /// the app was started again.
     pub fn set_audio_config(
         &mut self,
         device: Option<String>,
@@ -2196,6 +2212,7 @@ impl DawEngine {
         buffer_size: u32,
     ) -> Result<(), String> {
         let was_running = self.audio_device.is_running();
+        let restart = was_running || self.start_failed;
         if was_running {
             self.stop_for_restart();
         }
@@ -2204,7 +2221,7 @@ impl DawEngine {
         self.audio_device.sample_rate = sample_rate;
         self.audio_device.buffer_size = buffer_size;
 
-        if was_running {
+        if restart {
             self.start()?;
         }
 
@@ -6856,6 +6873,22 @@ fn moved_to(before: Option<String>, now: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod device_restart_tests {
     use super::moved_to;
+
+    /// After a sound card would not open, picking another tries to start
+    /// audio; it only stored the choice. The outputs asked for here exist
+    /// on no machine, so every start fails, and the second error is the
+    /// proof that it tried.
+    #[test]
+    fn a_new_choice_after_a_failed_start_starts_audio() {
+        let mut engine = super::DawEngine::new();
+        engine.set_channel_offsets(0, 1000);
+        assert!(engine.start().is_err(), "no device has a thousand outputs");
+        assert!(!engine.is_running());
+        assert!(
+            engine.set_audio_config(None, 48_000, 256).is_err(),
+            "the new choice was tried, not only stored"
+        );
+    }
 
     #[test]
     fn a_restart_on_the_same_device_says_nothing() {

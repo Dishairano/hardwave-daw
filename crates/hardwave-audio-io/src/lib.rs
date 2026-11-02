@@ -565,7 +565,25 @@ impl AudioDeviceManager {
     }
 
     /// Start the output audio stream with the given callback.
+    ///
+    /// A stream that does not start leaves the manager stopped. The running
+    /// flag goes up before the stream is opened; a sound card that would not
+    /// open (another program has it to itself, it was unplugged, it refuses
+    /// the format) left it up, so the engine took itself for running: "Retry
+    /// audio" answered at once without trying again, and the next settings
+    /// change restarted a stream that was not there.
     pub fn start<C: AudioCallback>(&mut self, callback: C) -> Result<(), AudioIoError> {
+        let started = self.open_output_stream(callback);
+        if started.is_err() {
+            self.running.store(false, Ordering::Relaxed);
+            self.active_device_name = None;
+            self.active_exclusive = false;
+            self.active_click_offset = None;
+        }
+        started
+    }
+
+    fn open_output_stream<C: AudioCallback>(&mut self, callback: C) -> Result<(), AudioIoError> {
         // Defensive re-negotiation: if a caller built the callback without
         // first calling `negotiate_output_rate()` (or the device set has
         // changed between the two calls), this guarantees the cpal stream
@@ -1239,5 +1257,33 @@ mod default_output_tests {
         );
         assert!(is_display_audio("Intel(R) Display Audio"));
         assert!(!is_display_audio("Focusrite USB ASIO"));
+    }
+}
+
+#[cfg(test)]
+mod start_tests {
+    use super::*;
+
+    struct Silence;
+    impl AudioCallback for Silence {
+        fn process(&mut self, output: &mut [f32], _num_frames: usize, _num_channels: u16) {
+            output.fill(0.0);
+        }
+    }
+
+    /// A sound card that will not open leaves the manager stopped, so a
+    /// retry really tries again. The stream asked for here cannot open on
+    /// any machine: a thousand channels in.
+    #[test]
+    fn a_stream_that_does_not_start_is_not_running() {
+        let mut manager = AudioDeviceManager::new();
+        manager.output_channel_offset = 1000;
+        let started = manager.start(Silence);
+        assert!(started.is_err(), "no device has a thousand outputs");
+        assert!(
+            !manager.is_running(),
+            "a stream that did not start is not running"
+        );
+        assert_eq!(manager.active_device_name(), None);
     }
 }
