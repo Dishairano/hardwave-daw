@@ -94,6 +94,7 @@ pub fn add_audio_track_with_sine(
             length_ticks: 100_000,
             lane: 0,
             color: None,
+            row: None,
         });
     }
     track_id

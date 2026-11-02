@@ -313,6 +313,7 @@ mod tests {
                     length_ticks: 7680,
                     lane: 0,
                     color: None,
+                    row: None,
                 },
             );
             let _ = after;

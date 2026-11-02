@@ -35,6 +35,10 @@ pub struct Arrangement {
     /// Tracks absent from the map have no clips in this arrangement.
     #[serde(default)]
     pub timelines: BTreeMap<String, TrackTimeline>,
+    /// This arrangement's playlist rows, as `Project::rows` holds them
+    /// while it is the open one.
+    #[serde(default)]
+    pub rows: Vec<crate::layout::PlaylistRow>,
 }
 
 fn new_id() -> String {
@@ -71,6 +75,7 @@ impl Project {
                 id: id.clone(),
                 name: "Arrangement 1".into(),
                 timelines,
+                rows: Vec::new(),
             });
             self.active_arrangement = id;
         } else if self.active_arrangement.is_empty()
@@ -137,6 +142,7 @@ impl Project {
             id: id.clone(),
             name: name.to_string(),
             timelines,
+            rows: Vec::new(),
         });
         // Switch onto it (clears the live timeline when starting empty).
         let _ = self.apply_arrangement(&id);
@@ -189,6 +195,7 @@ mod tests {
             length_ticks: 960,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

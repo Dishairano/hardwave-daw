@@ -118,6 +118,7 @@ pub(crate) fn import_audio_file_blocking(
         length_ticks,
         lane: 0,
         color: None,
+        row: None,
     };
 
     {
@@ -249,6 +250,7 @@ pub fn slices_to_playlist(
                 length_ticks: length,
                 lane: 0,
                 color: None,
+                row: None,
             }
         })
         .collect();
@@ -1102,6 +1104,7 @@ mod tests {
             length_ticks: 4 * beat,
             lane: 0,
             color: None,
+            row: None,
         };
         project.track_mut("insert-001").unwrap().clips.push(place(
             "insert-001",
@@ -2448,6 +2451,7 @@ pub fn audio_clip_to_midi(
             length_ticks,
             lane: 0,
             color: None,
+            row: None,
         };
         if let Some(track) = project.track_mut(&new_track_id) {
             track.clips.push(placement);

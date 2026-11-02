@@ -1755,6 +1755,7 @@ mod tests {
                     tension: 0.0,
                 }],
                 visible: true,
+                row: None,
             }]);
             node.meter.set_vca_gain(vca);
             block(&mut node, 96_000, 256)

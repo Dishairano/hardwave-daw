@@ -1080,6 +1080,7 @@ mod tests {
             length_ticks: 960 * 4,
             lane: 0,
             color: None,
+            row: None,
         });
         lead.automation_lanes.push(AutomationLane {
             id: "a1".into(),
@@ -1102,6 +1103,7 @@ mod tests {
                 },
             ],
             visible: true,
+            row: None,
         });
         lead.automation_lanes.push(AutomationLane {
             id: "a2".into(),
@@ -1113,6 +1115,7 @@ mod tests {
                 tension: 0.0,
             }],
             visible: true,
+            row: None,
         });
         let mut drums = Track::new_audio("drums".into(), "Drum loop".into());
         drums.sends.push(Send {
@@ -1147,6 +1150,7 @@ mod tests {
             length_ticks: 960 * 8,
             lane: 0,
             color: None,
+            row: None,
         });
         let mut warped = drums.clips[0].clone();
         if let ClipContent::Audio(a) = &mut warped.content {

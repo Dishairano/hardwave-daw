@@ -70,6 +70,7 @@ fn build_sine_engine() -> (DawEngine, String) {
             length_ticks: 1_000_000,
             lane: 0,
             color: None,
+            row: None,
         });
     }
     drop(project);

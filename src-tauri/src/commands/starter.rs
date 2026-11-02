@@ -164,6 +164,7 @@ pub(super) fn midi_clip(
         length_ticks: length,
         lane: 0,
         color: None,
+        row: None,
     }
 }
 
