@@ -1661,7 +1661,7 @@ pub struct SampleMarkerInfo {
 /// sample was there); the root comes with the new sample, and so does its
 /// loop when the file carries one, as FL's "use loop points" plays the
 /// sample's own loop.
-fn params_for_new_sample(
+pub(crate) fn params_for_new_sample(
     mut params: Vec<(u32, f32)>,
     root: u8,
     frames: usize,

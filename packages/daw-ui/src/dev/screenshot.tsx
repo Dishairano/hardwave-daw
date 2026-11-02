@@ -8,7 +8,7 @@
  * pianoroll | firstrun | newcontroller | browser. Served only via screenshot.html on the vite dev server; the
  * production bundle (index.html → main.tsx) never imports this.
  */
-import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
+import { MOCK_DRUM_FOLDER } from './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
 import '../fonts'
 import '../mockup.css' // the real top bar uses the fl-* classes from here
 import '../rework.css'
@@ -97,6 +97,82 @@ function RackShot() {
     return () => clearTimeout(t)
   }, [])
   return <ChannelRack />
+}
+
+/** A new song as it opens: Kick (the kick synth), Clap, Hat and Snare on the
+ *  first rows, the samplers naming the drums installed with the app, and
+ *  nothing open in the piano roll. */
+function seedNewSong() {
+  const sampler = (id: string, file: string) => [{
+    id: `slot-${id}`, pluginId: 'hardwave.native.sampler', pluginName: 'Hardwave Sampler',
+    enabled: true, wet: 1, sidechainSource: null, samplePath: `${MOCK_DRUM_FOLDER}/${file}`,
+  }]
+  const song: TrackWithClips[] = [
+    track('master', 'Master', '#a1a1aa', [], 'Master'),
+    { ...track('insert-001', 'Kick', '#DC2626', [], 'Midi'), instrument: 'kick_synth', volume_db: 0 },
+    { ...track('insert-002', 'Clap', '#10B981', [], 'Midi'), inserts: sampler('clap', 'Clap 1.wav'), insert_count: 1, volume_db: -3 },
+    { ...track('insert-003', 'Hat', '#A855F7', [], 'Midi'), inserts: sampler('hat', 'Hat 1.wav'), insert_count: 1, volume_db: -8 },
+    { ...track('insert-004', 'Snare', '#F59E0B', [], 'Midi'), inserts: sampler('snare', 'Snare 1.wav'), insert_count: 1, volume_db: -3 },
+    ...Array.from({ length: 6 }, (_, i) => track(`insert-${String(i + 5).padStart(3, '0')}`, `Insert ${i + 5}`, '#52525b', [])),
+  ]
+  useTrackStore.setState({
+    tracks: song,
+    tracksById: Object.fromEntries(song.map((t) => [t.id, t])),
+    selectedTrackId: null, selectedClipId: null, selectedClipIds: new Set(),
+    activeMidiTrackId: null, activeMidiClipId: null,
+  } as never)
+  ;(window as unknown as { __hwMockTracks?: unknown[] }).__hwMockTracks = JSON.parse(JSON.stringify(song))
+  // What the plug-in scan found: the built-ins and a few free synths.
+  const plugin = (id: string, name: string, vendor: string, format = 'Vst3') =>
+    ({ id, name, vendor, version: '1', format, path: id.startsWith('hardwave.native.') ? '<native>' : `/plugins/${name}.vst3`, category: 'Instrument', has_midi_input: true, has_editor: true })
+  ;(window as unknown as { __hwMockPlugins?: unknown[] }).__hwMockPlugins = [
+    plugin('hardwave.native.tripleosc', 'Hardwave 3xOSC', 'Hardwave'),
+    plugin('hardwave.native.wavetable', 'Hardwave Wavetable', 'Hardwave'),
+    plugin('hardwave.native.fm', 'Hardwave FM', 'Hardwave'),
+    plugin('hardwave.native.noise', 'Hardwave Noise', 'Hardwave'),
+    plugin('hardwave.native.sampler', 'Hardwave Sampler', 'Hardwave'),
+    plugin('vital', 'Vital', 'Vital Audio'),
+    plugin('surge-xt', 'Surge XT', 'Surge Synth Team', 'Clap'),
+    plugin('dexed', 'Dexed', 'Digital Suburban'),
+    plugin('obxd', 'OB-Xd', 'discoDSP'),
+  ]
+}
+
+/** The new song: the browser on the drums folder, the channel rack over the
+ *  playlist, and the mouse resting on Clap's name (its tooltip). */
+function NewSongShot() {
+  React.useEffect(() => {
+    const tip = setTimeout(() => {
+      const clap = document.querySelectorAll('[data-testid="channel-name"]')[1] as HTMLElement | undefined
+      const r = clap?.getBoundingClientRect()
+      if (!clap || !r) return
+      clap.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: r.left + 60, clientY: r.top + 12 }))
+    }, 900)
+    return () => clearTimeout(tip)
+  }, [])
+  return (
+    <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+      <HwTopbar showPlaylist showChannelRack showPianoRoll={false} showMixer={false} projectName="Untitled">
+        <HwSecondRow />
+      </HwTopbar>
+      <div className="fl-body">
+        <div className="fl-browser"><Browser /></div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <div style={{ height: 230, flex: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)' }}><ChannelRack /></div>
+          <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div className="fl-pl-body" style={{ ['--row-h' as never]: '52px' }}>
+              <HwPlaylistTracks />
+              <div className="fl-pl-grid">
+                <div className="fl-pl-canvas">
+                  <Arrangement onSetHint={noop} />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /** The first run, opened on a step (?step=start | sound | controller |
@@ -341,6 +417,9 @@ function Harness() {
       return <Full><MixerPanel /></Full>
     case 'channelrack':
       return <Full><RackShot /></Full>
+    case 'newsong':
+      seedNewSong()
+      return <NewSongShot />
     case 'pianoroll': {
       // SHOT_CC=cc1 opens a controller lane under the notes.
       const lane = new URLSearchParams(location.search).get('cc')

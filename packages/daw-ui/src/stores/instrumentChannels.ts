@@ -49,3 +49,18 @@ export function channelSound(track: TrackInfo, withExtension = false): string | 
   if (track.instrument === 'kick_synth' && !hasPlugin) return t('Kick synth')
   return null
 }
+
+/**
+ * A new song's channels: Kick (the kick synth), Clap, Hat and Snare, each
+ * with its sound loaded, the way FL opens. The engine leaves a song whose
+ * first rows are in use alone, and a missing drums folder leaves the song
+ * as it was; either way the song opens.
+ */
+export async function startNewSong(): Promise<void> {
+  try {
+    await invoke('add_new_song_channels')
+  } catch (err) {
+    console.warn('The new song opened without its drums:', err)
+  }
+  await useTrackStore.getState().fetchTracks()
+}

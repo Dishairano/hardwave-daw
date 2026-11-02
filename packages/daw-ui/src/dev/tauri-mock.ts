@@ -102,10 +102,18 @@ function synthNotes() {
 
 // Browser Places tree: a small fake sample library for the screenshot
 // harness and Playwright. Shape matches the Rust `BrowserEntry`.
+/** Where the mocked app installed its drums. */
+export const MOCK_DRUM_FOLDER = '/Applications/Hardwave DAW.app/Contents/Resources/drums'
+
 function mockDirectory(path: string) {
   const entry = (name: string, isDir: boolean, sizeBytes = 0) =>
     ({ name, path: `${path}/${name}`, isDir, sizeBytes })
   const leaf = path.split('/').pop() ?? ''
+  // The drums installed with the DAW (see get_drum_folder).
+  if (leaf === 'drums') {
+    return ['Clap 1.wav', 'Clap 2.wav', 'Hat 1.wav', 'Hat 2.wav', 'Open hat 1.wav', 'Rim 1.wav', 'Snare 1.wav', 'Snare 2.wav']
+      .map(n => entry(n, false, 40_000))
+  }
   if (leaf === 'Kicks') {
     return ['Kick Hard 01.wav', 'Kick Hard 02.wav', 'Kick Rawstyle 03.wav', 'Kick Tail 04.wav']
       .map(n => entry(n, false, 412_000))
@@ -495,6 +503,10 @@ const mock: TauriInternals = {
       case 'set_channel_offsets':
         mockAudio.outputPair = Number(args?.output ?? 0)
         return null
+      case 'get_drum_folder':
+        return MOCK_DRUM_FOLDER
+      case 'get_keyboard_track':
+        return null
       case 'get_library_folder':
       case 'set_library_folder':
         return 'C:/Users/you/Documents/Hardwave/Library'
@@ -664,10 +676,12 @@ const mock: TauriInternals = {
         return (window as unknown as { __hwMockTracks?: unknown[] }).__hwMockTracks ?? []
       case 'set_sample_settings':
         return 1
-      case 'get_tracks':
-      case 'find_missing_plugins':
       case 'scan_plugins':
       case 'get_plugins':
+        // A harness shot can seed the scan (window.__hwMockPlugins).
+        return (window as unknown as { __hwMockPlugins?: unknown[] }).__hwMockPlugins ?? []
+      case 'get_tracks':
+      case 'find_missing_plugins':
         return []
       case 'get_transport_state':
         return {

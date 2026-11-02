@@ -86,7 +86,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "binaries/*"
+      "binaries/*",
+      "drums/*"
     ],
     "createUpdaterArtifacts": "v1Compatible",
     "windows": {

@@ -115,6 +115,8 @@ permissions = [
   "allow-set-modulation",
   "allow-delete-modulation",
   "allow-create-starter-song",
+  "allow-add-new-song-channels",
+  "allow-get-drum-folder",
   "allow-separate-stems",
   "allow-stop-stems",
   "allow-stems-service",
