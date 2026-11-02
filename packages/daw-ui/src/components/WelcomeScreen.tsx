@@ -99,8 +99,11 @@ export function WelcomeScreen({
             >
               {t('Start from a hardstyle song')}
             </button>
+            {/* Closes this screen like the buttons above: the settings
+                window opens under it, so leaving it up made the button
+                look like it did nothing. */}
             <button
-              onClick={() => { onOpenAudioSettings() }}
+              onClick={() => { onOpenAudioSettings(); dismiss() }}
               style={actionBtn(false)}
               title={t('Pick an output device, sample rate and buffer size')}
             >

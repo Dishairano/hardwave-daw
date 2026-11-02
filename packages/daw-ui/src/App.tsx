@@ -2779,7 +2779,14 @@ export function App() {
             await newProject()
             await applyTemplate('starter:hardstyle')
           }}
-          onOpenAudioSettings={() => setShowAudioSettings(true)}
+          onOpenAudioSettings={() => {
+            // On the first launch the setup wizard is up, over every
+            // window, so the settings window opened under it out of sight.
+            // The wizard's own audio step is the same choice.
+            const wizard = useSetupWizardStore.getState()
+            if (wizard.visible) wizard.setStep('audio')
+            else setShowAudioSettings(true)
+          }}
           onDismiss={dismissWelcome}
         />
       )}
