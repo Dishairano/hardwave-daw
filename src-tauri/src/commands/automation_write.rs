@@ -191,22 +191,14 @@ pub fn automation_write_sample(
 ) {
     let target: AutomationTarget = target.into();
     let key = (track_id, target_key(&target));
-    let tick = playhead_tick(&state.engine.lock());
+    let (tick, playing) = {
+        let engine = state.engine.lock();
+        (playhead_tick(&engine), engine.transport.is_playing())
+    };
     let play_start = *state.automation_write.play_start_tick.lock().unwrap();
-    let value = value.clamp(0.0, 1.0);
     let mut sessions = state.automation_write.sessions.lock().unwrap();
     if let Some(pass) = sessions.get_mut(&key) {
-        if !pass.recorder.is_recording() {
-            return;
-        }
-        // Write covers the song from where playback started: the stretch
-        // before the first move holds the value the control had.
-        if pass.from_play_start && pass.recorder.sample_count() == 0 {
-            if let Some(start) = play_start.filter(|&t| t < tick) {
-                pass.recorder.push_sample(start, value);
-            }
-        }
-        pass.recorder.push_sample(tick, value);
+        pass.sample(tick, value, playing, play_start);
     }
 }
 
@@ -253,6 +245,25 @@ impl Pass {
     fn release(&mut self) -> bool {
         self.recorder.end_touch();
         matches!(self.recorder.mode(), WriteMode::Touch)
+    }
+
+    /// One value from the control at the playhead `tick`. Only while the
+    /// song plays: with it stopped every value landed on the same tick, so
+    /// setting a fader before pressing play wrote a lane that then held the
+    /// fader at that value for the whole song.
+    fn sample(&mut self, tick: u64, value: f64, playing: bool, play_start: Option<u64>) {
+        if !playing || !self.recorder.is_recording() {
+            return;
+        }
+        let value = value.clamp(0.0, 1.0);
+        // Write covers the song from where playback started: the stretch
+        // before the first move holds the value the control had.
+        if self.from_play_start && self.recorder.sample_count() == 0 {
+            if let Some(start) = play_start.filter(|&t| t < tick) {
+                self.recorder.push_sample(start, value);
+            }
+        }
+        self.recorder.push_sample(tick, value);
     }
 
     /// The song stopped at `tick`: the last value holds until there.
@@ -465,6 +476,25 @@ mod pass_tests {
             target: AutomationTarget::TrackVolume,
             recorder,
             from_play_start: matches!(mode, WriteMode::Write),
+        }
+    }
+
+    /// A fader moved with the song stopped writes nothing: the values all
+    /// sat on one tick and became a lane that pinned the fader.
+    #[test]
+    fn a_move_with_the_song_stopped_writes_nothing() {
+        for mode in [WriteMode::Touch, WriteMode::Latch, WriteMode::Write] {
+            let mut p = pass(mode);
+            p.sample(480, 0.2, false, None);
+            p.sample(480, 0.7, false, None);
+            assert_eq!(p.recorder.sample_count(), 0, "{mode:?}");
+            p.sample(480, 0.7, true, None);
+            p.sample(960, 0.8, true, None);
+            assert_eq!(
+                p.recorder.sample_count(),
+                2,
+                "{mode:?} records once playing"
+            );
         }
     }
 
