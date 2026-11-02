@@ -312,6 +312,7 @@ pub(crate) fn track_clips_to_info(
                         false,
                     ),
                     note_preview: Vec::new(),
+                    row: clip.row,
                 }
             }
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
@@ -342,6 +343,7 @@ pub(crate) fn track_clips_to_info(
                 fade_in_ms: 0.0,
                 fade_out_ms: 0.0,
                 note_preview: note_preview(&mc.clip.notes),
+                row: clip.row,
             },
         })
         .collect()
@@ -645,6 +647,8 @@ pub struct ClipInfo {
     /// `NOTE_PREVIEW_MAX`, spread over the clip when there are more.
     #[serde(rename = "notePreview", skip_serializing_if = "Vec::is_empty")]
     note_preview: Vec<[u32; 3]>,
+    /// The playlist row it is drawn on. Not drawn there yet.
+    row: Option<u32>,
 }
 
 /// The most notes a clip sends for its preview: enough to show the shape

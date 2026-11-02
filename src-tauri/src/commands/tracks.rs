@@ -75,6 +75,14 @@ pub struct TrackInfo {
     /// engine's hardstyle default for this layer".
     #[serde(rename = "kickPatch")]
     kick_patch: KickPatchInfo,
+    /// Its number in the mixer (0 the master), or none for a channel that
+    /// is not in the mixer. Not drawn yet.
+    #[serde(rename = "mixerNumber")]
+    mixer_number: Option<u16>,
+    /// The channel rack group it is listed in, or none for an insert or
+    /// the master. Not drawn yet.
+    #[serde(rename = "rackGroup")]
+    rack_group: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -102,6 +110,8 @@ pub struct AutomationLaneInfo {
     pub target: AutomationTargetInfo,
     pub points: Vec<AutomationPointInfo>,
     pub visible: bool,
+    /// The playlist row it is drawn on. Not drawn there yet.
+    pub row: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -142,6 +152,11 @@ pub struct AutomationClipInfo {
     #[serde(rename = "colorArgb")]
     pub color_argb: u32,
     pub points: Vec<AutomationPointInfo>,
+    /// The playlist row it is drawn on. Not drawn there yet.
+    pub row: Option<u32>,
+    /// The track whose knob it moves, when not the one it sits on.
+    #[serde(rename = "targetTrack")]
+    pub target_track: Option<String>,
 }
 
 /// Map a project automation target to its UI DTO (shared by lanes + clips).
@@ -243,6 +258,7 @@ pub(crate) fn track_to_info(
                     })
                     .collect(),
                 visible: l.visible,
+                row: l.row,
             })
             .collect(),
         automation_clips: t
@@ -265,6 +281,8 @@ pub(crate) fn track_to_info(
                         tension: p.tension,
                     })
                     .collect(),
+                row: c.row,
+                target_track: c.target_track.clone(),
             })
             .collect(),
         instrument: match t.instrument {
@@ -319,6 +337,8 @@ pub(crate) fn track_to_info(
                 }),
             ],
         },
+        mixer_number: t.mixer_number,
+        rack_group: t.rack_group,
     }
 }
 
