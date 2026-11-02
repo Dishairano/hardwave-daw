@@ -94,7 +94,7 @@ import { startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import type { LayoutName, PanelKey } from './lib/workspaceLayout'
-import { TEMPLATE_ROWS, templateRowTargets } from './lib/templateRows'
+import { SILENT_SEND_DB, TEMPLATE_ROWS, mixingTemplateSends, templateRowTargets } from './lib/templateRows'
 import { followSelectionInPianoRoll } from './stores/pianoRollBinding'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
@@ -1486,6 +1486,13 @@ export function App() {
             await ps.addToTrack(trackId, 'hardwave.native.compressor')
           } catch (err) {
             console.warn('Failed to insert native EQ+Comp on template track', trackId, err)
+          }
+        }
+        for (const send of mixingTemplateSends(trackIds)) {
+          try {
+            await useSendStore.getState().addSend(send.from, send.to, SILENT_SEND_DB)
+          } catch (err) {
+            console.warn('Failed to add the template send', send, err)
           }
         }
         await ts.fetchTracks()

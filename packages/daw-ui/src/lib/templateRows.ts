@@ -41,3 +41,19 @@ export function templateRowTargets(
   }
   return out
 }
+
+/**
+ * The sends the Mixing template sets up between its tracks, given the
+ * track ids in row order: each of the eight tracks sends to Bus A and
+ * Bus B. The template said "Bus A/B return sends, pre-routed" and set up
+ * none. They start silent (`SILENT_SEND_DB`), ready to be turned up, so
+ * the mix sounds the same until one is.
+ */
+export function mixingTemplateSends(trackIds: string[]): { from: string; to: string }[] {
+  const [busA, busB] = [trackIds[8], trackIds[9]]
+  if (!busA || !busB) return []
+  return trackIds.slice(0, 8).flatMap((from) => [{ from, to: busA }, { from, to: busB }])
+}
+
+/** The level a template's send starts at: as low as a send goes. */
+export const SILENT_SEND_DB = -100
