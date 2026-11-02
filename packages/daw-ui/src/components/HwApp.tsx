@@ -33,7 +33,8 @@ import { tempoChanged, tickOfSample, useTempoMapStore } from '../stores/tempoMap
 import { TEMPO_COLOR, TEMPO_LANE_HEIGHT, tempoSummary } from './arrangement/tempoLaneDraw'
 import { barBeatAtTick, PPQ as PPQ_TICKS } from '../utils/meter'
 import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
-import { useTrackStore } from '../stores/trackStore'
+import { useTrackStore, type TrackInfo } from '../stores/trackStore'
+import { usePluginCatalogStore } from '../stores/pluginCatalogStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
@@ -1480,6 +1481,12 @@ export function HwPlaylistTracks() {
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
   const selectedTrackId = useTrackStore(s => s.selectedTrackId)
   const selectTrack = useTrackStore(s => s.selectTrack)
+  // A channel with an instrument plug-in plays that, and the built-in
+  // voice under it is silent: its badge said SIN on a sampler channel.
+  const catalog = usePluginCatalogStore(s => s.plugins)
+  useEffect(() => { void usePluginCatalogStore.getState().ensureLoaded() }, [])
+  const pluginInstrument = (t: TrackInfo) =>
+    t.inserts?.find(s => catalog.find(p => p.id === s.pluginId)?.category === 'Instrument')?.pluginName.replace(/^Hardwave /, '')
   const [trackMenu, setTrackMenu] = useState<{ trackId: string; x: number; y: number } | null>(null)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   // Only the rows in view are drawn. All 500 were, each with its buttons,
@@ -1547,7 +1554,9 @@ export function HwPlaylistTracks() {
               <span className="strip" />
               <span className="nm">
                 <b>{t.name}</b>
-                {isMidi ? (
+                {isMidi && pluginInstrument(t) ? (
+                  <small>{pluginInstrument(t)}</small>
+                ) : isMidi ? (
                   <HwInstrumentPicker
                     trackId={t.id}
                     current={(t.instrument as any) || 'builtin_sine'}

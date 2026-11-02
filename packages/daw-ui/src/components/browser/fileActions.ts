@@ -42,7 +42,11 @@ export type SendTarget =
 
 export function selectedSendTarget(): SendTarget {
   const { tracks, selectedTrackId } = useTrackStore.getState()
-  const track = tracks.find(t => t.id === selectedTrackId)
+  return sendTargetFor(tracks.find(t => t.id === selectedTrackId))
+}
+
+/** What sending a sample to this channel would do, or why it cannot. */
+export function sendTargetFor(track: TrackInfo | undefined): SendTarget {
   if (!track || track.kind === 'Master') return { kind: 'none', reason: t('No channel selected') }
   if (track.kind === 'Audio') return { kind: 'audio', trackId: track.id, name: track.name }
   if (track.kind === 'Midi') {
@@ -59,11 +63,28 @@ async function loadIntoSampler(trackId: string, slotId: string, path: string) {
 }
 
 export async function sendToSelectedChannel(path: string) {
-  const target = selectedSendTarget()
+  await sendTo(selectedSendTarget(), path)
+}
+
+/**
+ * A sample dropped on a channel in the channel rack: its sampler plays the
+ * new sample, an empty instrument channel gets a sampler with it, and a
+ * channel with another instrument is left alone (the reason is returned).
+ */
+export async function sendToChannel(trackId: string, path: string): Promise<string | null> {
+  const target = sendTargetFor(useTrackStore.getState().tracks.find(tr => tr.id === trackId))
+  if (target.kind === 'none') return target.reason
+  await sendTo(target, path)
+  return null
+}
+
+async function sendTo(target: SendTarget, path: string) {
   const store = useTrackStore.getState()
   switch (target.kind) {
     case 'sampler':
       await loadIntoSampler(target.trackId, target.slotId, path)
+      // The channel says which sample it plays.
+      await store.refreshTrack(target.trackId)
       break
     case 'emptyMidi': {
       const slotId = await invoke<string>('add_plugin_to_track', { trackId: target.trackId, pluginId: SAMPLER_ID })

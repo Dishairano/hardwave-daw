@@ -162,6 +162,8 @@ export interface InsertInfo {
   enabled: boolean
   wet: number
   sidechainSource: string | null
+  /** For a sampler: the file its sample came from. */
+  samplePath?: string
 }
 
 /** What an armed track lets you hear: nothing, always the input, or the

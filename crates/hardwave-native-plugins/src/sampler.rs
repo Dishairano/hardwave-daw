@@ -1198,6 +1198,15 @@ pub fn decode_sample_state(bytes: &[u8]) -> Option<SamplerState> {
     SamplerState::from_bytes(bytes)
 }
 
+/// The file a sampler's sample came from, read past the audio without
+/// copying it: the channel rack names every sampler channel's sample on
+/// each refresh of the track list. `None` with no sample or no name.
+pub fn sample_path_of(bytes: &[u8]) -> Option<String> {
+    let used = SampleData::pcm_len(bytes)?;
+    let (_, path) = parse_tail(&bytes[used..])?;
+    (!path.is_empty()).then_some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1224,6 +1233,28 @@ mod tests {
         let mut junk = dc_sample();
         junk.extend_from_slice(b"what");
         assert!(SamplerState::from_bytes(&junk).is_none());
+    }
+
+    #[test]
+    fn the_sample_file_is_read_without_the_audio() {
+        assert_eq!(
+            sample_path_of(&ramp_sample(1000)).as_deref(),
+            Some("C:\\packs\\ramp.wav")
+        );
+        let with_settings = encode_sample_state_with(
+            44_100,
+            60,
+            vec![vec![0.1; 50]],
+            "/k/Clap 1.wav",
+            vec![(PARAM_ROOT, 0.5)],
+        );
+        assert_eq!(
+            sample_path_of(&with_settings).as_deref(),
+            Some("/k/Clap 1.wav")
+        );
+        // A sample without a name, and bytes that are not a sample.
+        assert_eq!(sample_path_of(&dc_sample()), None);
+        assert_eq!(sample_path_of(b"not a sample"), None);
     }
 
     fn dc_sample() -> Vec<u8> {
