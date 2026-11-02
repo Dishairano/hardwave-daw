@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { useLanguageStore } from '../../i18n'
 import {
   DEFAULT_SONG, finishLabel, nextStep, noteName, previousStep, stepCounter, stepStates,
-} from './firstRunFlow'
+} from './firstRunSteps'
 
 describe('the first run', () => {
   it('goes start, sound, controller, song when a controller is found', () => {
