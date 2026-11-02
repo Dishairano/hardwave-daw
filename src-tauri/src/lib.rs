@@ -681,6 +681,7 @@ pub fn run() {
             commands::project::new_project,
             commands::project::save_project,
             commands::project::next_song_version_path,
+            commands::project::song_has_unsaved_edits,
             commands::project::load_project,
             commands::project::get_project_info,
             commands::project::get_project_meta,

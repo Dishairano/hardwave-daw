@@ -52,6 +52,9 @@ interface ProjectState {
   newFromSongTemplate: (name: string) => Promise<void>
   getInfo: () => Promise<ProjectInfo>
   markDirty: () => void
+  /** Ask the backend whether the song changed since it was saved or opened,
+   *  and mark it changed if so. Resolves to whether it is changed. */
+  refreshDirty: () => Promise<boolean>
   pushRecent: (path: string) => void
   removeRecent: (path: string) => void
   clearRecent: () => void
@@ -227,6 +230,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   markDirty: () => set({ dirty: true }),
+
+  refreshDirty: async () => {
+    if (get().dirty) return true
+    // Many edits never told this store: a new tempo, an added plug-in or an
+    // automation point left the song "unchanged", so closing the DAW did
+    // not ask to save and autosave never ran. The backend counts every edit
+    // that can be undone.
+    const changed = await invoke<boolean>('song_has_unsaved_edits').catch(() => false)
+    if (changed && !get().dirty) set({ dirty: true })
+    return get().dirty
+  },
 
   pushRecent: (path: string) => {
     const next = [path, ...get().recentProjects.filter(p => p !== path)].slice(0, RECENT_MAX)

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-song-has-unsaved-edits"
+description = "Enables the song_has_unsaved_edits command without any pre-configured scope."
+commands.allow = ["song_has_unsaved_edits"]
+
+[[permission]]
+identifier = "deny-song-has-unsaved-edits"
+description = "Denies the song_has_unsaved_edits command without any pre-configured scope."
+commands.deny = ["song_has_unsaved_edits"]

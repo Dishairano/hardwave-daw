@@ -304,6 +304,7 @@ permissions = [
   "allow-new-project",
   "allow-save-project",
   "allow-next-song-version-path",
+  "allow-song-has-unsaved-edits",
   "allow-load-project",
   "allow-get-project-info",
   "allow-get-project-meta",
