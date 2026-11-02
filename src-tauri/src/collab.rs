@@ -211,10 +211,17 @@ impl Collab {
     /// it is newer than ours, or as new and from the higher author. An
     /// edit of ours not sent yet counts as ours first, so the two compare
     /// fairly; it then goes out on the next send.
+    ///
+    /// When theirs loses and is not what we have, ours goes out again on
+    /// the next send. They may never have had it (they took the whole
+    /// song since, or came back after a drop, and count from 0 again):
+    /// without it they kept their edit, we kept ours, and the two songs
+    /// stayed different with nothing left to put them right.
     pub fn should_take_section(
         &self,
         name: &str,
         current: &[u8],
+        incoming: &[u8],
         version: u64,
         author: u64,
     ) -> bool {
@@ -238,6 +245,9 @@ impl Collab {
         if !take {
             // Ours stands; the version still counts for the next edit.
             clock.version = clock.version.max(version);
+            if hash_of(incoming) != clock.hash {
+                clock.unsent = true;
+            }
         }
         take
     }
@@ -625,7 +635,7 @@ mod tests {
             let current = to.project.song_section(name).unwrap();
             if to
                 .collab
-                .should_take_section(name, &current, version, author)
+                .should_take_section(name, &current, &blob, version, author)
             {
                 to.project.put_song_section(name, &blob).unwrap();
                 let now = to.project.song_section(name).unwrap();
@@ -710,6 +720,32 @@ mod tests {
             a.project.tempo_map.entries[0].bpm,
             b.project.tempo_map.entries[0].bpm
         );
+    }
+
+    /// A side that counts from 0 again (it took the whole song, or came
+    /// back after a drop) edits a part the other side has a newer version
+    /// of. Theirs loses there, and the newer one goes back to them, so the
+    /// two songs end the same rather than each keeping its own.
+    #[test]
+    fn an_edit_that_loses_gets_the_newer_part_sent_back() {
+        let start = song();
+        let (mut a, mut b) = (side(&start), side(&start));
+        for bpm in [150.0, 151.0] {
+            a.project.tempo_map.entries[0].bpm = bpm;
+            let sent = a.collab.song_changes(&a.project);
+            deliver(sent, &mut b);
+        }
+        b.collab.remember_tracks(&b.project);
+        b.project.tempo_map.entries[0].bpm = 133.0;
+        let from_b = b.collab.song_changes(&b.project);
+        deliver(from_b, &mut a);
+        assert_eq!(a.project.tempo_map.entries[0].bpm, 151.0, "A's is newer");
+        let from_a = a.collab.song_changes(&a.project);
+        deliver(from_a, &mut b);
+        assert_eq!(b.project.tempo_map.entries[0].bpm, 151.0);
+        // Settled: nothing more either way.
+        assert!(a.collab.song_changes(&a.project).is_empty());
+        assert!(b.collab.song_changes(&b.project).is_empty());
     }
 
     fn fader() -> SyncKind {

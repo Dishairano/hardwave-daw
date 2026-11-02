@@ -621,7 +621,7 @@ fn apply_song_state(
             };
             // Ours stands when it is newer, or as new and from the higher
             // author: the other side takes ours by the same rule.
-            if !collab.should_take_section(section, &current, version, author) {
+            if !collab.should_take_section(section, &current, blob, version, author) {
                 return;
             }
             // Not an undo step: undoing it would only send the old part
