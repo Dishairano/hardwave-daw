@@ -17,7 +17,7 @@ import { UpdateModal } from './components/UpdateModal'
 import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow, DetachButton } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
-import { TemplateDialog, type TemplateId } from './components/TemplateDialog'
+import { TemplateDialog, type StarterId, type TemplateId } from './components/TemplateDialog'
 import { ExportDialog } from './components/ExportDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
 import { TrackTemplateManager } from './components/TrackTemplateManager'
@@ -39,8 +39,7 @@ import { Oscilloscope } from './components/Oscilloscope'
 import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
 import { VirtualKeyboard } from './components/transport/VirtualKeyboard'
 import './components/transport/VirtualKeyboard.css'
-import { SetupWizard } from './components/SetupWizard'
-import './components/SetupWizard.css'
+import { FirstRunFlow } from './components/firstrun/FirstRunFlow'
 import { startMidiHotplug } from './lib/midiHotplug'
 import { ProjectInfoDialog } from './components/ProjectInfoDialog'
 import { TempoTapper } from './components/TempoTapper'
@@ -737,6 +736,13 @@ export function App() {
     setShowWelcome(false)
     try { sessionStorage.setItem('hardwave.daw.welcomeDismissed', '1') } catch {}
   }, [])
+  // The first run is the start screen on a first launch: while it is open
+  // the start screen stays down, and once it closes the start screen does
+  // not come up after it. They stacked, three windows deep.
+  const firstRunOpen = useSetupWizardStore(s => s.visible)
+  useEffect(() => useSetupWizardStore.subscribe((now, before) => {
+    if (before.visible && !now.visible) dismissWelcome()
+  }), [dismissWelcome])
 
   // Crash recovery
   const [crashInfo, setCrashInfo] = useState<{ path: string; modified_unix: number } | null>(null)
@@ -1034,10 +1040,9 @@ export function App() {
     if (initRan.current) return
     initRan.current = true
     startListening()
-    // Auto-open the MIDI Setup Wizard once on first boot. The store
-    // tracks completedFirstRun + skippedAt so this is a no-op after
-    // the user has finished or skipped. The Help menu has a manual
-    // "Re-run setup wizard" entry to reopen it on demand.
+    // Open the first run on a first launch. The store keeps whether setup
+    // was finished or skipped, so this does nothing after that. Help >
+    // Re-run setup opens it again on demand.
     maybeAutoOpenSetupWizard()
     // The wizard's answers live in localStorage, so the engine has to be told
     // them on every launch or they only apply in the session they were set.
@@ -1640,6 +1645,13 @@ export function App() {
     await applyTemplate(id)
     await fetchTracks()
   }, [newProject, fetchTracks, applyTemplate])
+
+  /** The song the first run ends in: a starter, or the empty project. The
+   *  same as picking it in File > New, so it is the same song. */
+  const startSongAfterSetup = useCallback(async (choice: 'empty' | `starter:${StarterId}`) => {
+    if (!(await confirmDiscardIfDirty('Save changes before starting a new song'))) return
+    await handlePickTemplate(choice === 'empty' ? 'blank' : choice)
+  }, [confirmDiscardIfDirty, handlePickTemplate])
 
   // Missing plugins surface as a PERSISTENT banner (MissingPluginsBanner)
   // instead of the old one-shot dialog — the dialog was dismissed and
@@ -2591,7 +2603,7 @@ export function App() {
           { label: 'Help topics', shortcut: 'F1', action: () => setShowHelp(v => !v) },
           { label: 'Keyboard shortcuts', shortcut: 'Shift+F1', action: () => { focusSettingsTab('shortcuts'); setShowAudioSettings(true) } },
           { label: 'Roadmap', action: () => setShowRoadmap(v => !v) },
-          { label: 'Re-run setup wizard…', action: () => useSetupWizardStore.getState().open() },
+          { label: 'Re-run setup…', action: () => useSetupWizardStore.getState().open() },
           { separator: true, label: '' },
           { label: 'Manual', action: () => setShowManual(true) },
           { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
@@ -2740,7 +2752,6 @@ export function App() {
       {showOscilloscope && <Oscilloscope onClose={() => setShowOscilloscope(false)} />}
       {showSpectrum && <SpectrumAnalyzer onClose={() => setShowSpectrum(false)} />}
       <VirtualKeyboard visible={touchControllerVisible} onClose={() => setTouchControllerVisible(false)} />
-      <SetupWizard />
       {showProjectInfo && <ProjectInfoDialog onClose={() => setShowProjectInfo(false)} />}
       <BugReportDialog
         open={bugReport.open}
@@ -2816,7 +2827,7 @@ export function App() {
         />
       )}
 
-      {showWelcome && !showSplash && !crashInfo && (
+      {showWelcome && !firstRunOpen && !showSplash && !crashInfo && (
         <WelcomeScreen
           recentProjects={recentProjects}
           onOpenRecent={handleOpenRecent}
@@ -2826,15 +2837,19 @@ export function App() {
             await newProject()
             await applyTemplate('starter:hardstyle')
           }}
-          onOpenAudioSettings={() => {
-            // On the first launch the setup wizard is up, over every
-            // window, so the settings window opened under it out of sight.
-            // The wizard's own audio step is the same choice.
-            const wizard = useSetupWizardStore.getState()
-            if (wizard.visible) wizard.setStep('audio')
-            else setShowAudioSettings(true)
-          }}
+          onOpenAudioSettings={() => setShowAudioSettings(true)}
           onDismiss={dismissWelcome}
+        />
+      )}
+
+      {/* After the splash, like the start screen it replaces on a first
+          launch. */}
+      {!showSplash && !crashInfo && (
+        <FirstRunFlow
+          recentProjects={recentProjects}
+          onOpenRecent={handleOpenRecent}
+          onOpenProject={handleOpenProject}
+          onStartSong={(choice) => { void startSongAfterSetup(choice) }}
         />
       )}
 

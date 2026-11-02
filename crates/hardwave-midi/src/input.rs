@@ -69,6 +69,9 @@ struct SharedState {
     /// for a mapping sometimes reached a plug-in instead.
     control: VecDeque<ControlEvent>,
     last_event_at: Option<Instant>,
+    /// The last key played, as (note, velocity 1 to 127), for the first
+    /// run's Controller step to say what came in.
+    last_note_on: Option<(u8, u8)>,
     dropped: u64,
     // Clock sync — updated in the midir callback on system realtime bytes.
     last_tick_at: Option<Instant>,
@@ -151,6 +154,12 @@ fn push_event(
             state.dropped = state.dropped.saturating_add(1);
         }
         state.events.push_back((now, event));
+        if let MidiEvent::NoteOn { note, velocity, .. } = event {
+            if velocity > 0.0 {
+                let velocity = (velocity * 127.0).round().clamp(1.0, 127.0) as u8;
+                state.last_note_on = Some((note, velocity));
+            }
+        }
     }
     if state.control.len() >= QUEUE_CAPACITY {
         state.control.pop_front();
@@ -491,6 +500,12 @@ impl MidiInputManager {
         state
             .last_event_at
             .map(|t| t.elapsed().as_millis().min(u64::MAX as u128) as u64)
+    }
+
+    /// The last key played on any input, as (note, velocity 1 to 127). A
+    /// control surface's buttons are notes too, and are not counted.
+    pub fn last_note_on(&self) -> Option<(u8, u8)> {
+        self.shared.lock().last_note_on
     }
 }
 
@@ -1011,6 +1026,39 @@ mod tests {
                 (Some("X-Touch"), true),
                 (None, false)
             ]
+        );
+    }
+
+    /// The first run's Controller step says which key came in and how hard:
+    /// the last note played, not a release, and not a desk's button.
+    #[test]
+    fn the_last_key_played_is_kept_for_the_controller_step() {
+        let shared = Arc::new(Mutex::new(SharedState::default()));
+        let claim: Claim = Arc::new(|port, _| port == "X-Touch");
+        let keys = test_port("Akai MPK Mini mk3", &shared, Some(Arc::clone(&claim)));
+        let desk = test_port("X-Touch", &shared, Some(claim));
+        let manager = MidiInputManager {
+            shared,
+            ..MidiInputManager::new()
+        };
+        assert_eq!(manager.last_note_on(), None, "nothing played yet");
+
+        handle_input_bytes(&[0x90, 48, 96], &keys);
+        assert_eq!(manager.last_note_on(), Some((48, 96)), "C3 at 96");
+
+        handle_input_bytes(&[0x80, 48, 0], &keys);
+        handle_input_bytes(&[0x90, 48, 0], &keys);
+        assert_eq!(
+            manager.last_note_on(),
+            Some((48, 96)),
+            "a release is no key"
+        );
+
+        handle_input_bytes(&[0x90, 94, 127], &desk);
+        assert_eq!(
+            manager.last_note_on(),
+            Some((48, 96)),
+            "the desk's Play button is no key"
         );
     }
 

@@ -101,7 +101,7 @@ test.describe('Channel Rack — FL Studio layout', () => {
     await expect(page.getByTestId('rack-swing')).toBeVisible()
 
     // Step count
-    await expect(page.getByText('Steps')).toBeVisible()
+    await expect(page.getByText('Steps', { exact: true })).toBeVisible()
 
     // Pattern label
     await expect(page.getByText('Pattern 1').first()).toBeVisible()

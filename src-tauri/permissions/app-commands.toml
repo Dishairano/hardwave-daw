@@ -427,6 +427,7 @@ permissions = [
   "allow-legato-clip-notes",
   "allow-list-midi-inputs",
   "allow-list-midi-input-kinds",
+  "allow-set-check-voice",
   "allow-open-midi-input",
   "allow-close-midi-input",
   "allow-close-all-midi-inputs",

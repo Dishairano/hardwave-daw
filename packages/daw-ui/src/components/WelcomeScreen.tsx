@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { hw } from '../theme'
 import { t, useLanguage } from '../i18n'
 
@@ -8,14 +8,25 @@ export function shouldSkipWelcome() {
   try { return localStorage.getItem(SKIP_KEY) === '1' } catch { return false }
 }
 
+/** The start screen as the first step of the first run: a stepper, Set up
+ *  and start a song, and Skip setup, in place of today's buttons. */
+interface FirstRunStart {
+  stepper: ReactNode
+  onSetUp: () => void
+  onSkip: () => void
+}
+
 interface Props {
   recentProjects: string[]
   onOpenRecent: (path: string) => void
-  onNewProject: () => void
   onOpenProject: () => void
-  onOpenSampleProject: () => void
-  onOpenAudioSettings: () => void
-  onDismiss: () => void
+  // Today's start screen; the first run's has none of these.
+  onNewProject?: () => void
+  onOpenSampleProject?: () => void
+  onOpenAudioSettings?: () => void
+  onDismiss?: () => void
+  /** Shown as the first step of the first run (first launch only). */
+  firstRun?: FirstRunStart
 }
 
 export function WelcomeScreen({
@@ -26,6 +37,7 @@ export function WelcomeScreen({
   onOpenSampleProject,
   onOpenAudioSettings,
   onDismiss,
+  firstRun,
 }: Props) {
   useLanguage()
   const [mounted, setMounted] = useState(false)
@@ -35,9 +47,12 @@ export function WelcomeScreen({
   // The key sits in the sentence wherever the language puts it.
   const [pressBefore, pressAfter] = t('Press {key} anytime for shortcuts').split('{key}')
 
-  const dismiss = () => {
+  const keepSkipChoice = () => {
     try { localStorage.setItem(SKIP_KEY, skipNext ? '1' : '0') } catch {}
-    onDismiss()
+  }
+  const dismiss = () => {
+    keepSkipChoice()
+    onDismiss?.()
   }
 
   return (
@@ -71,50 +86,65 @@ export function WelcomeScreen({
         }}>
           Hardwave DAW
         </div>
-        <div style={{ fontSize: 13, color: hw.textMuted, marginBottom: 28 }}>
-          {t('Start a new project or open a recent one.')}
+        <div style={{ fontSize: 13, color: hw.textMuted, marginBottom: firstRun ? 16 : 28 }}>
+          {firstRun
+            ? t('Three short steps and you are in a song: where the sound comes out, your controller, a song to start from.')
+            : t('Start a new project or open a recent one.')}
         </div>
+        {firstRun && <div style={{ marginBottom: 22 }}>{firstRun.stepper}</div>}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28 }}>
           <div>
             <div style={{ fontSize: 11, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
               {t('Get started')}
             </div>
-            <button
-              onClick={() => { onNewProject(); dismiss() }}
-              style={actionBtn(true)}
-            >
-              {t('New project')}
-            </button>
-            <button
-              onClick={() => { onOpenProject(); dismiss() }}
-              style={actionBtn(false)}
-            >
-              {t('Open project…')}
-            </button>
-            <button
-              onClick={() => { onOpenSampleProject(); dismiss() }}
-              style={actionBtn(false)}
-              title={t('A hardstyle song at 150 BPM with a kick that plays straight away. New project offers rawstyle, frenchcore and uptempo too.')}
-            >
-              {t('Start from a hardstyle song')}
-            </button>
-            {/* Closes this screen like the buttons above: the settings
-                window opens under it, so leaving it up made the button
-                look like it did nothing. */}
-            <button
-              onClick={() => { onOpenAudioSettings(); dismiss() }}
-              style={actionBtn(false)}
-              title={t('Pick an output device, sample rate and buffer size')}
-            >
-              {t('Configure audio device…')}
-            </button>
-            <button
-              onClick={dismiss}
-              style={{ ...actionBtn(false), marginTop: 18 }}
-            >
-              {t('Close this screen')}
-            </button>
+            {firstRun ? (<>
+              <button onClick={() => { keepSkipChoice(); firstRun.onSetUp() }} style={actionBtn(true)}>
+                {t('Set up and start a song')}
+              </button>
+              <button onClick={() => { keepSkipChoice(); onOpenProject() }} style={actionBtn(false)}>
+                {t('Open project…')}
+              </button>
+              <button onClick={() => { keepSkipChoice(); firstRun.onSkip() }} style={actionBtn(false)}>
+                {t('Skip setup, open an empty project')}
+              </button>
+            </>) : (<>
+              <button
+                onClick={() => { onNewProject?.(); dismiss() }}
+                style={actionBtn(true)}
+              >
+                {t('New project')}
+              </button>
+              <button
+                onClick={() => { onOpenProject(); dismiss() }}
+                style={actionBtn(false)}
+              >
+                {t('Open project…')}
+              </button>
+              <button
+                onClick={() => { onOpenSampleProject?.(); dismiss() }}
+                style={actionBtn(false)}
+                title={t('A hardstyle song at 150 BPM with a kick that plays straight away. New project offers rawstyle, frenchcore and uptempo too.')}
+              >
+                {t('Start from a hardstyle song')}
+              </button>
+              {/* Closes this screen like the buttons above: the settings
+                  window opens under it, so leaving it up made the button
+                  look like it did nothing. */}
+              <button
+                onClick={() => { onOpenAudioSettings?.(); dismiss() }}
+                style={actionBtn(false)}
+                title={t('Pick an output device, sample rate and buffer size')}
+              >
+                {t('Configure audio device…')}
+              </button>
+              <button
+                onClick={dismiss}
+                style={{ ...actionBtn(false), marginTop: 18 }}
+              >
+                {t('Close this screen')}
+              </button>
+            </>)}
           </div>
 
           <div>
@@ -145,6 +175,14 @@ export function WelcomeScreen({
                 })}
               </div>
             )}
+            {firstRun && (<>
+              <div style={{ fontSize: 11, color: hw.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, margin: '6px 0 10px' }}>
+                {t('Takes about a minute')}
+              </div>
+              <div style={{ fontSize: 12, color: hw.textMuted, lineHeight: 1.55 }}>
+                {t('Everything here can be changed later in Settings.')}
+              </div>
+            </>)}
           </div>
         </div>
 
@@ -171,7 +209,7 @@ export function WelcomeScreen({
           </div>
         </div>
 
-        <div style={{
+        {!firstRun && <div style={{
           marginTop: 24, paddingTop: 16,
           borderTop: `1px solid ${hw.border}`,
         }}>
@@ -201,7 +239,7 @@ export function WelcomeScreen({
               hint={t('Bug reports and feature requests')}
             />
           </div>
-        </div>
+        </div>}
 
         <div style={{
           marginTop: 20, display: 'flex', alignItems: 'center', gap: 8,

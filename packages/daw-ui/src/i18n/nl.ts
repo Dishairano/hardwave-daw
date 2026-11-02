@@ -103,7 +103,7 @@ export const nl: Record<string, string> = {
   // Help menu
   'Help topics': 'Helponderwerpen',
   'Roadmap': 'Roadmap',
-  'Re-run setup wizard…': 'Installatiewizard opnieuw starten…',
+  'Re-run setup…': 'Instellen opnieuw doorlopen…',
   'Report a bug…': 'Een fout melden…',
   'Report an issue on GitHub': 'Een probleem melden op GitHub',
   'Export diagnostics…': 'Diagnose exporteren…',

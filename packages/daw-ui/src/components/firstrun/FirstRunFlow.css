@@ -1,0 +1,205 @@
+/*
+ * The first run: one window from the start screen to a song, with the new
+ * project waiting behind it, dimmed. Drawn after the first-run mockup
+ * (suite: daw-first-run-mockup, approved 2 Nov).
+ */
+
+.hw-fr-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 30%, rgba(220, 38, 38, 0.10) 0%, rgba(8, 8, 12, 0.55) 60%);
+  backdrop-filter: blur(3px) brightness(0.5);
+}
+
+.hw-fr {
+  width: 720px;
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #111116;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 0 40px rgba(220, 38, 38, 0.14), 0 26px 72px rgba(0, 0, 0, 0.7);
+  font-family: var(--font-sans, Inter, system-ui, sans-serif);
+  color: #fafafa;
+}
+
+.hw-fr-head {
+  padding: 15px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #16161d;
+  border-bottom: 1px solid #2a2a35;
+}
+.hw-fr-head h3 { margin: 0; font-size: 15px; font-weight: 600; color: #fff; }
+.hw-fr-skip {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #b6b6c2;
+  cursor: pointer;
+}
+.hw-fr-skip:hover { color: #e8e8f0; }
+
+.hw-fr-stepwrap { padding: 10px 22px 0; background: #16161d; }
+.hw-fr-stepper { display: flex; }
+.hw-fr-stepper span {
+  flex: 1;
+  padding: 8px 6px;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #5a5a64;
+  text-align: center;
+  border-bottom: 2px solid #2a2a35;
+}
+.hw-fr-stepper .is-done { color: #3ed07a; border-bottom-color: #3ed07a; }
+.hw-fr-stepper .is-active { color: #ff2d4f; border-bottom-color: #ff2d4f; }
+.hw-fr-stepper .is-skipped { color: #5a5a64; text-decoration: line-through; }
+
+.hw-fr-body { padding: 20px 22px; overflow-y: auto; }
+.hw-fr-body h4 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: #fff; }
+.hw-fr-body > p { margin: 0 0 14px; font-size: 13px; color: #e8e8f0; line-height: 1.6; }
+.hw-fr-muted { color: #b6b6c2; font-size: 12px; line-height: 1.6; }
+.hw-fr-muted b { color: #e8e8f0; }
+
+.hw-fr-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-top: 1px solid #2a2a35;
+  background: #16161d;
+}
+.hw-fr-meta { font-size: 11.5px; color: #b6b6c2; margin-right: auto; }
+
+.hw-fr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #0d0d12;
+  color: #e8e8f0;
+  cursor: pointer;
+}
+.hw-fr-btn:hover { border-color: rgba(255, 255, 255, 0.3); }
+.hw-fr-btn:disabled { opacity: 0.55; cursor: default; }
+.hw-fr-btn.is-primary { background: #ff2d4f; border-color: #ff2d4f; color: #fff; }
+.hw-fr-btn.is-primary:hover { filter: brightness(1.1); }
+
+/* Sound */
+.hw-fr-audio { display: grid; grid-template-columns: 1.7fr 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.hw-fr-audio label { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: #b6b6c2; min-width: 0; }
+.hw-fr-audio select {
+  height: 32px;
+  padding: 0 10px;
+  background: #0b0b0f;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12.5px;
+  color: #fafafa;
+  min-width: 0;
+}
+
+/* Controller */
+.hw-fr-device {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #0b0b0f;
+  margin-bottom: 10px;
+}
+.hw-fr-device b { font-size: 13px; display: block; }
+.hw-fr-device small { display: block; font-size: 11px; color: #3ed07a; }
+.hw-fr-device.is-off small { color: #8b8b93; }
+.hw-fr-led { width: 10px; height: 10px; border-radius: 50%; background: #3ed07a; box-shadow: 0 0 8px #3ed07a; flex: none; }
+.hw-fr-device.is-off .hw-fr-led { background: #5a5a64; box-shadow: none; }
+.hw-fr-toggle {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  border: 0;
+  padding: 0;
+  background: #2a2a35;
+  flex: none;
+  cursor: pointer;
+}
+.hw-fr-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #8b8b93;
+  transition: left 0.12s;
+}
+.hw-fr-toggle.is-on { background: #3ed07a; }
+.hw-fr-toggle.is-on::after { left: 18px; background: #fff; }
+
+.hw-fr-activity {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #0b0b0f;
+  margin-bottom: 12px;
+}
+.hw-fr-activity b { font-size: 13.5px; }
+.hw-fr-bigled { width: 34px; height: 34px; border-radius: 50%; background: #2a2a35; flex: none; transition: background 0.15s, box-shadow 0.15s; }
+.hw-fr-bigled.is-lit { background: #ff2d4f; box-shadow: 0 0 18px rgba(255, 45, 79, 0.8); }
+.hw-fr-keys { display: flex; height: 46px; position: relative; flex: none; }
+.hw-fr-keys .w { width: 19px; height: 46px; background: #e4e4e7; border: 1px solid #0b0b0f; border-radius: 0 0 3px 3px; box-sizing: border-box; }
+.hw-fr-keys .k { position: absolute; top: 0; width: 12px; height: 28px; background: #111; border-radius: 0 0 2px 2px; }
+.hw-fr-keys .is-hit { background: #ff2d4f; }
+
+/* Song */
+.hw-fr-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.hw-fr-card {
+  text-align: left;
+  padding: 11px 13px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  color: #fafafa;
+  font: inherit;
+  cursor: pointer;
+}
+.hw-fr-card:hover { border-color: rgba(255, 255, 255, 0.2); }
+.hw-fr-card b { font-size: 13px; }
+.hw-fr-card em { font-style: normal; font-size: 11.5px; color: #a1a1a6; margin-left: 6px; }
+.hw-fr-card p { margin: 4px 0 0; font-size: 11.5px; color: #d4d4d8; line-height: 1.45; }
+.hw-fr-card.is-picked { border-color: #dc2626; background: rgba(220, 38, 38, 0.10); }
+
+@media (max-width: 640px) {
+  .hw-fr-audio, .hw-fr-cards { grid-template-columns: 1fr; }
+  .hw-fr-keys { display: none; }
+}
