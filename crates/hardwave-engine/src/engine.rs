@@ -2809,13 +2809,14 @@ impl DawEngine {
             // export pipeline never asks for it. Pass a parked Arc that
             // can never be filled.
             Arc::new(Mutex::new(None)),
-            // Share the LIVE midi_input and capture ring so tests (and
-            // any caller who pre-injects MIDI events) can drive the
-            // offline render with synthesised input. Production export
-            // workflows stop live playback before bouncing, so cross-
-            // thread drain contention is not a real concern.
-            Arc::clone(&self.midi_input),
-            Arc::clone(&self.midi_capture_ring),
+            // A MIDI input and capture ring of its own, never wired to a
+            // device. It shared the live ones, and a render runs many times
+            // faster than playback, so a key or controller touched while an
+            // export ran landed in the file at whatever point the render had
+            // reached, never reached the instrument being played, and went
+            // into the capture ring at the render's positions.
+            Arc::new(Mutex::new(MidiInputManager::new())),
+            Arc::new(Mutex::new(MidiCaptureRing::new(64))),
             sample_rate,
             buffer_size as u32,
             LoadCounters::new(),
@@ -7112,6 +7113,27 @@ mod offline_insert_tests {
             peak_without > 1e-3,
             "without the factory the source should still sound, got peak={peak_without}"
         );
+    }
+
+    /// A key played while an export runs is not in the export, and still
+    /// reaches the track being played.
+    #[test]
+    fn a_key_played_during_an_export_stays_out_of_it() {
+        let engine = DawEngine::new();
+        engine.project.lock().add_midi_track("Lead".into());
+        engine.midi_input.lock().inject(MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 1.0,
+        });
+        let peak = render_peak(&engine, None);
+        assert!(
+            peak < 1e-6,
+            "the render is the song, not the keyboard: peak {peak}"
+        );
+        let live = engine.midi_input.lock().drain_events();
+        assert_eq!(live.len(), 1, "the key is still there for playback");
     }
 
     /// A frozen track's plug-ins stay out of an export, as they stay out
