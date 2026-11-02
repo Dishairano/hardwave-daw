@@ -9,7 +9,7 @@ import type { MidiInputSeen } from '../../lib/midiHotplug'
 import {
   DEFAULT_SONG, FLOW_STEPS, finishLabel, nextStep, noteName, previousStep,
   stepCounter, stepStates, type FlowStep, type SongChoice,
-} from './firstRunFlow'
+} from './firstRunSteps'
 import './FirstRunFlow.css'
 
 /**
