@@ -442,6 +442,7 @@ fn apply_one(
     if !collab.is_current(generation) {
         return;
     }
+    collab.count_received(&message.kind);
     match &message.kind {
         SyncKind::TrackState {
             track_id,
