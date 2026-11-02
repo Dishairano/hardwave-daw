@@ -5,7 +5,7 @@
  * Lets visual changes be verified before a build.
  *
  * Pick the panel with `?panel=` — playlist (default) | mixer | channelrack |
- * pianoroll | wizard | newcontroller | browser. Served only via screenshot.html on the vite dev server; the
+ * pianoroll | firstrun | newcontroller | browser. Served only via screenshot.html on the vite dev server; the
  * production bundle (index.html → main.tsx) never imports this.
  */
 import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
@@ -49,8 +49,7 @@ import { useTransportStore } from '../stores/transportStore'
 import { usePatternStore } from '../stores/patternStore'
 import { useTempoMapStore } from '../stores/tempoMapStore'
 import { meterSegments } from '../utils/meter'
-import { SetupWizard } from '../components/SetupWizard'
-import '../components/SetupWizard.css'
+import { FirstRunFlow } from '../components/firstrun/FirstRunFlow'
 import { useSetupWizardStore, type WizardStep } from '../stores/setupWizardStore'
 import { NotificationHost } from '../components/NotificationHost'
 import { midiInputAppeared, type InputKind } from '../lib/midiHotplug'
@@ -98,15 +97,21 @@ function RackShot() {
   return <ChannelRack />
 }
 
-/** Renders the SetupWizard opened on the audio step for UI screenshots. */
-function WizardShot() {
+/** The first run, opened on a step (?step=start | sound | controller |
+ *  song), over the DAW as on a first launch. On the Controller step one
+ *  controller is plugged in and C3 was just played; ?ports=none takes the
+ *  controllers away, so the stepper shows Controller struck through. */
+function FirstRunShot() {
+  const params = new URLSearchParams(location.search)
+  const step = (params.get('step') ?? 'start') as WizardStep
+  const w = window as unknown as { __hwMidiPorts?: string[]; __hwLastNote?: unknown; __hwToneHold?: boolean }
+  w.__hwMidiPorts = params.get('ports') === 'none' ? [] : ['Akai MPK Mini mk3']
+  if (step === 'controller') w.__hwLastNote = { note: 48, velocity: 96 }
+  if (step === 'sound') w.__hwToneHold = true
   React.useEffect(() => {
-    // ?step=velocity photographs a later step than the default.
-    const step = (new URLSearchParams(location.search).get('step') ??
-      'audio') as WizardStep
-    useSetupWizardStore.setState({ visible: true, step })
-  }, [])
-  return <SetupWizard />
+    useSetupWizardStore.setState({ visible: true, step, completedFirstRun: false, skippedAt: null, midiInputs: {} })
+  }, [step])
+  return <FirstRunFlow recentProjects={[]} onOpenRecent={noop} onOpenProject={noop} onStartSong={noop} />
 }
 
 /** A controller plugged in while a song is open: the message bottom right.
@@ -567,8 +572,16 @@ function Harness() {
           <MacroPanel onClose={noop} />
         </div>
       )
-    case 'wizard':
-      return <Full><WizardShot /></Full>
+    case 'firstrun':
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
+          <Arrangement onSetHint={noop} />
+          <FirstRunShot />
+        </div>
+      )
     case 'newcontroller':
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>

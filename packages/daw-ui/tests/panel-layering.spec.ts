@@ -5,9 +5,8 @@ import { test, expect, type Page, type Locator } from '@playwright/test'
 
 async function boot(page: Page) {
   await page.goto('/')
-  // The welcome screen and the first-run setup wizard sit over everything until closed.
-  await page.getByText('Close this screen').click({ timeout: 10000 })
-  await page.getByText(/won.t ask again/i).click({ timeout: 5000 }).catch(() => {})
+  // On a first launch the first run sits over everything until it is skipped.
+  await page.getByText('Skip setup, open an empty project').click({ timeout: 10000 })
 }
 
 /** Whether the element drawn at the middle of `target` belongs to it. */

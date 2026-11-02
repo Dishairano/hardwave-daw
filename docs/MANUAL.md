@@ -10,8 +10,13 @@ rights: it installs for the person who runs it. Windows SmartScreen
 warns about it because the installer is not signed yet, so the first
 time you have to choose "More info" and then "Run anyway".
 
-On first launch the setup wizard asks for an audio device and a MIDI
-input. You can change both later in Options > Settings.
+On first launch one window takes you from the start screen to a song:
+where the sound comes out (a short test tone plays on the device you
+pick, left then right), your MIDI controller (only when one is found;
+it is turned on, and you hear the keys), and a starter song to begin
+from, the Hardstyle one unless you pick another. Skip setup opens an
+empty project instead. You can change all of it later in Options >
+Settings, and Help > Re-run setup walks through it again.
 
 ## 2. The window
 

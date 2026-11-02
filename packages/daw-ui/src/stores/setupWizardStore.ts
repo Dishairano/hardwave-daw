@@ -3,35 +3,41 @@ import { persist } from 'zustand/middleware'
 import { invoke } from '@tauri-apps/api/core'
 
 /**
- * First-run Setup Wizard state. Tracks which steps the user has
- * completed, per-device velocity curve preferences, and the master
- * "Enable MIDI remote control" gate. Persists across launches so the
- * wizard only auto-opens once.
+ * The first run's state, and the MIDI input choices it and Settings > MIDI
+ * make. Persists across launches so the first run only opens once.
  *
- * The wizard wraps the existing MIDI Tauri commands (list_midi_inputs
- * / open_midi_input / close_midi_input / get_midi_activity) — those
- * are the source of truth for port state. This store captures pure
- * preferences the backend doesn't track:
+ * It keeps the setup wizard's saved answers under the same name and with
+ * the same meaning, so someone who finished or skipped the wizard never
+ * sees the first run:
  *
- *  - completedFirstRun: dismisses the auto-open
- *  - skippedAt: remembers if the user hit "Skip — won't ask again"
- *  - velocityCurves: per-input curve preset
- *  - midiMasterEnabled: master gate (future: gates events at engine level)
- *  - midiInputs: which inputs are on, opened again at every launch
+ *  - completedFirstRun: setup was finished (or skipped)
+ *  - skippedAt: when the user skipped it, so it is not offered again
+ *  - velocityCurves: per-input curve preset (Settings > MIDI)
+ *  - midiMasterEnabled: MIDI input on or off as a whole (Settings > MIDI)
+ *  - midiInputs: which inputs are on, opened again at every launch; an
+ *    input in here has been seen, and one switched off stays off
  *
- * Wizard step is transient (not persisted) so reopening the wizard
- * always starts from step 1.
+ * The step is transient (not persisted), so opening the first run again
+ * from the Help menu always starts at the start screen.
  */
 
 export type VelocityCurve = 'linear' | 'soft' | 'hard' | 's-curve'
 
-export type WizardStep = 'welcome' | 'audio' | 'devices' | 'velocity' | 'test' | 'done'
+/** The first run's steps: the start screen, the sound card, the
+ * controller (only when one is found) and a song to start from. */
+export type WizardStep = 'start' | 'sound' | 'controller' | 'song'
+
+/** Who sees the first run: the people who never finished or skipped setup,
+ *  as the saved answers say. Nobody who finished it sees it again. */
+export function isFirstRun(saved: { completedFirstRun: boolean; skippedAt: number | null }): boolean {
+  return !saved.completedFirstRun && saved.skippedAt == null
+}
 
 interface SetupWizardState {
-  /** True when the wizard is open (modal visible). Not persisted — opening
-   * is via auto-trigger on first launch OR Help menu → "Re-run setup wizard". */
+  /** True while the first run is open. Not persisted: it opens by itself
+   * on a first launch, and from Help > Re-run setup. */
   visible: boolean
-  /** Active step in the 5-step flow. */
+  /** The step showing. */
   step: WizardStep
 
   /** Persisted: whether the user has finished the wizard at least once. */
@@ -54,8 +60,6 @@ interface SetupWizardState {
   open: () => void
   close: () => void
   setStep: (step: WizardStep) => void
-  next: () => void
-  back: () => void
   skipForever: () => void
   markComplete: () => void
   setMidiMasterEnabled: (v: boolean) => void
@@ -75,32 +79,20 @@ export function midiInputOn(inputs: Record<string, boolean>, portName: string): 
   return inputs[portName] ?? true
 }
 
-const STEP_ORDER: WizardStep[] = ['welcome', 'audio', 'devices', 'velocity', 'test', 'done']
-
 export const useSetupWizardStore = create<SetupWizardState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       visible: false,
-      step: 'welcome',
+      step: 'start',
       completedFirstRun: false,
       skippedAt: null,
       midiMasterEnabled: true,
       velocityCurves: {},
       midiInputs: {},
 
-      open: () => set({ visible: true, step: 'welcome' }),
+      open: () => set({ visible: true, step: 'start' }),
       close: () => set({ visible: false }),
       setStep: (step) => set({ step }),
-      next: () => {
-        const idx = STEP_ORDER.indexOf(get().step)
-        const nextStep = STEP_ORDER[Math.min(STEP_ORDER.length - 1, idx + 1)]
-        set({ step: nextStep })
-      },
-      back: () => {
-        const idx = STEP_ORDER.indexOf(get().step)
-        const prev = STEP_ORDER[Math.max(0, idx - 1)]
-        set({ step: prev })
-      },
       skipForever: () =>
         set({ visible: false, skippedAt: Date.now(), completedFirstRun: true }),
       markComplete: () => set({ visible: false, completedFirstRun: true }),
@@ -133,14 +125,11 @@ export const useSetupWizardStore = create<SetupWizardState>()(
   ),
 )
 
-/** Auto-open the wizard once when the app first boots and the user
- * hasn't completed or skipped it yet. Idempotent — subsequent calls
- * do nothing once the flag is set. Called from `App.tsx` setup hook. */
+/** Open the first run when the app boots and setup was never finished or
+ * skipped. Does nothing after that. Called from `App.tsx` at boot. */
 export function maybeAutoOpenSetupWizard(): void {
   const s = useSetupWizardStore.getState()
-  if (!s.completedFirstRun && s.skippedAt == null) {
-    s.open()
-  }
+  if (isFirstRun(s)) s.open()
 }
 
 /**
