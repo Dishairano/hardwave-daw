@@ -14,6 +14,7 @@ import '../mockup.css' // the real top bar uses the fl-* classes from here
 import '../rework.css'
 
 import React from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import ReactDOM from 'react-dom/client'
 import { HwApp, HwTopbar, HwSecondRow, HwPlaylistTracks } from '../components/HwApp'
 import { HistoryPanel } from '../components/HistoryPanel'
@@ -565,7 +566,15 @@ function Harness() {
       )
     case 'settings': {
       // SHOT_TAB=midi (?tab=) photographs a specific settings tab.
-      focusSettingsTab((new URLSearchParams(location.search).get('tab') || 'audio') as SettingsTab)
+      const tab = (new URLSearchParams(location.search).get('tab') || 'audio') as SettingsTab
+      focusSettingsTab(tab)
+      // A keyboard and a desk plugged in, so the control surface's desk
+      // input picker has both to show.
+      if (tab === 'midi') {
+        for (const portName of ['Novation Launchkey 49', 'X-Touch']) {
+          void invoke('open_midi_input', { portName })
+        }
+      }
       return (
         <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
           <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
