@@ -393,6 +393,30 @@ impl AudioGraph {
         self.order_dirty = true;
     }
 
+    /// Whether sound leaving `from` already arrives at `to` through the
+    /// edges added so far. An edge from `to` back to `from` would close a
+    /// loop, and a node in a loop is never put in the order: it, and every
+    /// node after it (the master among them), would stop running.
+    pub fn reaches(&self, from: NodeId, to: NodeId) -> bool {
+        let mut seen = vec![false; self.nodes.len()];
+        let mut stack = vec![from];
+        while let Some(node) = stack.pop() {
+            if node == to {
+                return true;
+            }
+            if std::mem::replace(&mut seen[node], true) {
+                continue;
+            }
+            stack.extend(
+                self.edges
+                    .iter()
+                    .filter(|e| e.source == node && !seen[e.dest])
+                    .map(|e| e.dest),
+            );
+        }
+        false
+    }
+
     /// Remove all nodes and edges.
     pub fn clear(&mut self) {
         self.nodes.clear();
