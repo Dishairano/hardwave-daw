@@ -30,6 +30,47 @@ pub struct PlaylistRow {
     pub soloed: bool,
 }
 
+/// Which playlist rows are silent while the song plays: the muted ones,
+/// and while any row is soloed every row that is not. Worked out once
+/// when the engine builds its graph; a clip with no row is never silent.
+#[derive(Debug, Default)]
+pub struct SilentRows {
+    /// Per row, from the top; empty when no row is muted or soloed.
+    silent: Vec<bool>,
+    /// A row past the end of the list is silent while any row is soloed.
+    any_solo: bool,
+}
+
+impl SilentRows {
+    /// Nothing is silent (and nothing is allocated) unless a row is muted
+    /// or soloed.
+    pub fn of(rows: &[PlaylistRow]) -> Self {
+        let any_solo = rows.iter().any(|r| r.soloed);
+        if !any_solo && !rows.iter().any(|r| r.muted) {
+            return Self::default();
+        }
+        Self {
+            silent: rows
+                .iter()
+                .map(|r| r.muted || (any_solo && !r.soloed))
+                .collect(),
+            any_solo,
+        }
+    }
+
+    /// Whether what sits on `row` stays quiet.
+    pub fn has(&self, row: Option<u32>) -> bool {
+        match row {
+            Some(r) => self
+                .silent
+                .get(r as usize)
+                .copied()
+                .unwrap_or(self.any_solo),
+            None => false,
+        }
+    }
+}
+
 /// What a track is in FL's three lists, from its kind and its two display
 /// fields (`mixer_number`, `rack_group`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -441,5 +482,27 @@ mod tests {
         assert_eq!(row.name, "Drums");
         assert!(!row.muted && !row.soloed);
         assert_eq!(row.color, None);
+    }
+
+    #[test]
+    fn a_muted_row_is_silent_and_a_solo_silences_every_other_row() {
+        let row = |muted, soloed| PlaylistRow {
+            muted,
+            soloed,
+            ..PlaylistRow::default()
+        };
+        let none = SilentRows::of(&[row(false, false), row(false, false)]);
+        assert!(!none.has(Some(0)) && !none.has(Some(7)) && !none.has(None));
+        let muted = SilentRows::of(&[row(false, false), row(true, false)]);
+        assert!(!muted.has(Some(0)));
+        assert!(muted.has(Some(1)));
+        assert!(!muted.has(Some(9)), "a row past the list is on");
+        assert!(!muted.has(None), "a clip with no row always plays");
+        let solo = SilentRows::of(&[row(false, true), row(false, false), row(true, true)]);
+        assert!(!solo.has(Some(0)));
+        assert!(solo.has(Some(1)));
+        assert!(solo.has(Some(2)), "muted wins over soloed, as in FL");
+        assert!(solo.has(Some(9)), "a row past the list is not soloed");
+        assert!(!solo.has(None));
     }
 }
