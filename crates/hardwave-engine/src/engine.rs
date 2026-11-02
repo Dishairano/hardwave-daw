@@ -2827,6 +2827,24 @@ impl DawEngine {
         }
     }
 
+    /// How long building the audio graph for the song takes, `runs` times
+    /// over. The graph is rebuilt on the audio thread after every edit, so
+    /// this is how long a block waits after one. The plug-ins are left out;
+    /// clips, notes, automation and routing are all there.
+    #[doc(hidden)]
+    pub fn graph_build_times(&self, runs: usize) -> Vec<std::time::Duration> {
+        let mut callback =
+            self.offline_callback(48_000, 512, 0, None, |_| {}, Arc::new(Mutex::new(None)));
+        (0..runs)
+            .map(|_| {
+                callback.needs_rebuild = true;
+                let started = std::time::Instant::now();
+                callback.rebuild_graph();
+                started.elapsed()
+            })
+            .collect()
+    }
+
     /// How long each block of the project takes to compute, block by
     /// block, at a given buffer size.
     ///
