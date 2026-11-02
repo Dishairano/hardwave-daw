@@ -67,7 +67,7 @@ struct SharedState {
     /// each event went to whichever of the two got there first: a note
     /// taken by the mapping thread was never played, and a knob moved
     /// for a mapping sometimes reached a plug-in instead.
-    control: VecDeque<MidiEvent>,
+    control: VecDeque<ControlEvent>,
     last_event_at: Option<Instant>,
     dropped: u64,
     // Clock sync — updated in the midir callback on system realtime bytes.
@@ -117,11 +117,34 @@ pub struct MidiInputManager {
 
 /// Says whether an event is the control surface's: its buttons send notes
 /// and its faders pitch bends, which must not play an armed instrument.
-pub type Claim = Arc<dyn Fn(&MidiEvent) -> bool + Send + Sync>;
+/// It is told the input the event came in on, so a keyboard beside the
+/// desk keeps its notes. Runs in the MIDI input callback, so it must be
+/// cheap: no allocation, no lock anyone holds for long.
+pub type Claim = Arc<dyn Fn(&str, &MidiEvent) -> bool + Send + Sync>;
+
+/// One event for the thread that applies mappings and reads a control
+/// surface.
+#[derive(Debug, Clone)]
+pub struct ControlEvent {
+    /// The input it came in on; none for one the app made itself (the
+    /// on-screen and computer keyboards).
+    pub port: Option<Arc<str>>,
+    /// Whether the control surface claimed it. A claimed event went to
+    /// the surface and not to the audio thread; one that was not was
+    /// played, and is no button or fader of the desk.
+    pub claimed: bool,
+    pub event: MidiEvent,
+}
 
 /// Queue an event that arrived: for the audio thread unless the control
 /// surface claims it, and for the thread that applies mappings either way.
-fn push_event(state: &mut SharedState, now: Instant, event: MidiEvent, claimed: bool) {
+fn push_event(
+    state: &mut SharedState,
+    now: Instant,
+    event: MidiEvent,
+    port: Option<&Arc<str>>,
+    claimed: bool,
+) {
     if !claimed {
         if state.events.len() >= QUEUE_CAPACITY {
             state.events.pop_front();
@@ -132,13 +155,27 @@ fn push_event(state: &mut SharedState, now: Instant, event: MidiEvent, claimed: 
     if state.control.len() >= QUEUE_CAPACITY {
         state.control.pop_front();
     }
-    state.control.push_back(event);
+    state.control.push_back(ControlEvent {
+        port: port.cloned(),
+        claimed,
+        event,
+    });
     state.last_event_at = Some(now);
 }
 
+/// Whether the control surface claims an event that came in on `port`.
+fn is_claimed(claim: &parking_lot::RwLock<Option<Claim>>, port: &str, event: &MidiEvent) -> bool {
+    claim
+        .read()
+        .as_ref()
+        .is_some_and(|claim| claim(port, event))
+}
+
 /// What the midir callback for one port needs: the queue every port shares,
-/// and that port's own velocity curve.
+/// that port's own velocity curve, and its name, so its events say where
+/// they came from.
 struct PortContext {
+    port: Arc<str>,
     shared: Arc<Mutex<SharedState>>,
     velocity_curve: Arc<AtomicU8>,
     enabled: Arc<AtomicBool>,
@@ -212,6 +249,7 @@ impl MidiInputManager {
             .ok_or_else(|| format!("MIDI port not found: {port_name}"))?;
 
         let context = PortContext {
+            port: Arc::from(port_name),
             shared: Arc::clone(&self.shared),
             velocity_curve: Arc::clone(self.velocity_curve_slot(port_name)),
             enabled: Arc::clone(&self.enabled),
@@ -358,9 +396,10 @@ impl MidiInputManager {
     }
 
     /// Every event since the last call, for the thread that applies MIDI
-    /// mappings and reads a control surface. Its own copy: the audio thread
-    /// drains the same events from its queue (`try_drain_events_into`).
-    pub fn drain_events(&self) -> Vec<MidiEvent> {
+    /// mappings and reads a control surface, with the input each came in
+    /// on. Its own copy: the audio thread drains the same events from its
+    /// queue (`try_drain_events_into`), less the ones the surface claimed.
+    pub fn drain_events(&self) -> Vec<ControlEvent> {
         let mut state = self.shared.lock();
         state.control.drain(..).collect()
     }
@@ -408,7 +447,17 @@ impl MidiInputManager {
     /// exact same drain pipeline as a physical controller.
     pub fn inject(&self, ev: MidiEvent) {
         let mut state = self.shared.lock();
-        push_event(&mut state, Instant::now(), ev, false);
+        push_event(&mut state, Instant::now(), ev, None, false);
+    }
+
+    /// Inject an event as if it came in on the input `port`: the control
+    /// surface's claim treats it as that input's. Lets the desk input be
+    /// checked without a desk plugged in.
+    pub fn inject_from(&self, port: &str, ev: MidiEvent) {
+        let port: Arc<str> = Arc::from(port);
+        let claimed = is_claimed(&self.claim, &port, &ev);
+        let mut state = self.shared.lock();
+        push_event(&mut state, Instant::now(), ev, Some(&port), claimed);
     }
 
     /// Return the current clock-sync observation and clear the pending
@@ -536,13 +585,9 @@ fn handle_input_bytes(bytes: &[u8], context: &PortContext) {
                     event,
                     VelocityCurve::from_index(context.velocity_curve.load(Ordering::Relaxed)),
                 );
-                let claimed = context
-                    .claim
-                    .read()
-                    .as_ref()
-                    .is_some_and(|claim| claim(&event));
+                let claimed = is_claimed(&context.claim, &context.port, &event);
                 let mut state = shared.lock();
-                push_event(&mut state, now, event, claimed);
+                push_event(&mut state, now, event, Some(&context.port), claimed);
             }
         }
     }
@@ -657,6 +702,31 @@ pub fn parse_midi_bytes(timing: u32, bytes: &[u8]) -> Option<MidiEvent> {
 mod tests {
     use super::*;
 
+    /// One input's callback context over a shared queue.
+    fn test_port(
+        name: &str,
+        shared: &Arc<Mutex<SharedState>>,
+        claim: Option<Claim>,
+    ) -> PortContext {
+        PortContext {
+            port: Arc::from(name),
+            shared: Arc::clone(shared),
+            velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
+            enabled: Arc::new(AtomicBool::new(true)),
+            claim: Arc::new(parking_lot::RwLock::new(claim)),
+        }
+    }
+
+    fn note_ons(events: &[MidiEvent]) -> Vec<u8> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                MidiEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn parses_note_on() {
         let ev = parse_midi_bytes(0, &[0x90, 60, 100]).unwrap();
@@ -716,12 +786,7 @@ mod tests {
     #[test]
     fn song_position_and_timecode_reach_the_sync_snapshot() {
         let shared = Arc::new(Mutex::new(SharedState::default()));
-        let context = PortContext {
-            shared: Arc::clone(&shared),
-            velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
-            enabled: Arc::new(AtomicBool::new(true)),
-            claim: Arc::new(parking_lot::RwLock::new(None)),
-        };
+        let context = test_port("Clock", &shared, None);
         handle_input_bytes(&[0xF2, 0x00, 0x02], &context);
         // 00:00:10:00 at 30 fps, as eight quarter frames.
         for d in [0x00, 0x10, 0x2A, 0x30, 0x40, 0x50, 0x60, 0x76] {
@@ -759,10 +824,8 @@ mod tests {
         let shared = Arc::new(Mutex::new(SharedState::default()));
         let enabled = Arc::new(AtomicBool::new(false));
         let context = PortContext {
-            shared: Arc::clone(&shared),
-            velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
             enabled: Arc::clone(&enabled),
-            claim: Arc::new(parking_lot::RwLock::new(None)),
+            ..test_port("Keys", &shared, None)
         };
 
         handle_input_bytes(&[0x90, 60, 100], &context);
@@ -858,13 +921,8 @@ mod tests {
     #[test]
     fn a_message_the_control_surface_claims_never_reaches_the_audio_thread() {
         let shared = Arc::new(Mutex::new(SharedState::default()));
-        let claim: Claim = Arc::new(|ev| matches!(ev, MidiEvent::NoteOn { note: 94, .. }));
-        let context = PortContext {
-            shared: Arc::clone(&shared),
-            velocity_curve: Arc::new(AtomicU8::new(VelocityCurve::Linear.to_index())),
-            enabled: Arc::new(AtomicBool::new(true)),
-            claim: Arc::new(parking_lot::RwLock::new(Some(claim))),
-        };
+        let claim: Claim = Arc::new(|_, ev| matches!(ev, MidiEvent::NoteOn { note: 94, .. }));
+        let context = test_port("X-Touch", &shared, Some(claim));
         handle_input_bytes(&[0x90, 94, 127], &context); // the desk's Play button
         handle_input_bytes(&[0x90, 60, 100], &context); // a key
         let manager = MidiInputManager {
@@ -873,18 +931,86 @@ mod tests {
         };
         let mut audio = Vec::new();
         manager.try_drain_events_into(&mut audio);
-        let notes: Vec<u8> = audio
-            .iter()
-            .filter_map(|e| match e {
-                MidiEvent::NoteOn { note, .. } => Some(*note),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(notes, vec![60], "the key plays, the button does not");
         assert_eq!(
-            manager.drain_events().len(),
-            2,
-            "the surface thread sees both"
+            note_ons(&audio),
+            vec![60],
+            "the key plays, the button does not"
+        );
+        let control = manager.drain_events();
+        assert_eq!(control.len(), 2, "the surface thread sees both");
+        assert_eq!(
+            control.iter().map(|c| c.claimed).collect::<Vec<_>>(),
+            vec![true, false],
+            "and knows which one was the desk's"
+        );
+    }
+
+    /// With a desk on one input and a keyboard on another, the claim is
+    /// told which input each event came in on: the keyboard's G6 (94) is
+    /// a note it plays, while the same note from the desk is its Play
+    /// button. Every input used to be read as the desk, so the keyboard's
+    /// G6 to B6 pressed Stop, Play and Record and never sounded.
+    #[test]
+    fn the_claim_knows_which_input_an_event_came_in_on() {
+        let shared = Arc::new(Mutex::new(SharedState::default()));
+        let claim: Claim = Arc::new(|port, ev| {
+            port == "X-Touch" && matches!(ev, MidiEvent::NoteOn { note: 94, .. })
+        });
+        let desk = test_port("X-Touch", &shared, Some(claim));
+        let keys = PortContext {
+            claim: Arc::clone(&desk.claim),
+            ..test_port("Launchkey 49", &shared, None)
+        };
+        handle_input_bytes(&[0x90, 94, 100], &keys);
+        handle_input_bytes(&[0x90, 94, 127], &desk);
+        let manager = MidiInputManager {
+            shared,
+            ..MidiInputManager::new()
+        };
+        let mut audio = Vec::new();
+        manager.try_drain_events_into(&mut audio);
+        assert_eq!(note_ons(&audio), vec![94], "the keyboard's note plays once");
+        let control = manager.drain_events();
+        let seen: Vec<(Option<&str>, bool)> = control
+            .iter()
+            .map(|c| (c.port.as_deref(), c.claimed))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![(Some("Launchkey 49"), false), (Some("X-Touch"), true)]
+        );
+    }
+
+    /// An event injected as if from an input goes through the same claim,
+    /// so the desk input can be checked without a desk; a plain injected
+    /// one (the on-screen keyboard) is never the desk's.
+    #[test]
+    fn an_event_injected_from_an_input_is_claimed_as_that_inputs() {
+        let manager = MidiInputManager::new();
+        manager.set_claim(Some(Arc::new(|port, _| port == "X-Touch")));
+        let play = MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 94,
+            velocity: 1.0,
+        };
+        manager.inject_from("Launchkey 49", play);
+        manager.inject_from("X-Touch", play);
+        manager.inject(play);
+        let mut audio = Vec::new();
+        manager.try_drain_events_into(&mut audio);
+        assert_eq!(audio.len(), 2, "the keyboard's and the on-screen one play");
+        let control = manager.drain_events();
+        assert_eq!(
+            control
+                .iter()
+                .map(|c| (c.port.as_deref(), c.claimed))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some("Launchkey 49"), false),
+                (Some("X-Touch"), true),
+                (None, false)
+            ]
         );
     }
 

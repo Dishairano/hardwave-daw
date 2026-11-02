@@ -100,6 +100,7 @@ permissions = [
   "allow-set-control-surface-enabled",
   "allow-set-control-surface-bank",
   "allow-set-control-surface-protocol",
+  "allow-set-control-surface-input",
   "allow-get-undo-history",
   "allow-label-undo-step",
   "allow-clear-undo-history",

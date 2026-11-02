@@ -247,10 +247,17 @@ impl MidiEventDto {
 /// dispatcher all observe events from these calls. Fire-and-forget —
 /// errors are unrecoverable from the UI side (engine not started, lock
 /// contention) so we silently no-op.
+///
+/// With `port`, the event is taken as one that came in on that MIDI input,
+/// so the control surface reads it as that input's: the desk input can be
+/// checked without a desk plugged in.
 #[tauri::command]
-pub fn inject_midi_event(state: State<AppState>, event: MidiEventDto) {
+pub fn inject_midi_event(state: State<AppState>, event: MidiEventDto, port: Option<String>) {
     let manager = state.midi_input.lock();
-    manager.inject(event.into_event());
+    match port {
+        Some(port) => manager.inject_from(&port, event.into_event()),
+        None => manager.inject(event.into_event()),
+    }
 }
 
 /// Whether a control surface is being listened to, and where its
@@ -264,6 +271,10 @@ pub struct ControlSurfaceStatus {
     pub bank_count: usize,
     /// "mackie" or "hui".
     pub protocol: crate::control_surface::DeskProtocol,
+    /// The MIDI input read as the desk; none reads every input.
+    pub input: Option<String>,
+    /// Whether that input was found by its name rather than chosen.
+    pub found: bool,
 }
 
 #[tauri::command]
@@ -274,15 +285,19 @@ pub fn get_control_surface(state: State<AppState>) -> ControlSurfaceStatus {
         let project = engine.project.lock();
         crate::control_surface::bank_count(&project)
     };
+    let open = state.midi_input.lock().open_port_names();
+    state.control_surface.find_desk(&open);
     ControlSurfaceStatus {
         enabled: state.control_surface.is_enabled(),
         bank: state.control_surface.bank.load(Ordering::Relaxed),
         bank_count,
         protocol: state.control_surface.protocol(),
+        input: state.control_surface.desk_port().map(|p| p.to_string()),
+        found: state.control_surface.desk_found(),
     }
 }
 
-/// Listen to a Mackie Control or HUI desk on the open MIDI inputs.
+/// Listen to a Mackie Control or HUI desk on its MIDI input.
 ///
 /// With it on, the desk's faders and buttons drive the mixer instead of
 /// going through MIDI Learn: eight faders with mute, solo and arm, the
@@ -297,6 +312,8 @@ pub fn set_control_surface_enabled(state: State<AppState>, enabled: bool) {
         .enabled
         .store(enabled, Ordering::Relaxed);
     if enabled {
+        let open = state.midi_input.lock().open_port_names();
+        state.control_surface.find_desk(&open);
         crate::midi_map::send_bank_state(
             &state.engine,
             &state.control_surface,
@@ -314,6 +331,21 @@ pub fn set_control_surface_protocol(
     protocol: crate::control_surface::DeskProtocol,
 ) {
     state.control_surface.set_protocol(protocol);
+    crate::commands::engine::persist_audio_prefs_public(&state);
+}
+
+/// Which MIDI input is the desk: one input by name, or none for every
+/// input. Only the desk's input is read as the desk; every other input
+/// plays as before, so a keyboard beside the desk keeps its notes.
+#[tauri::command]
+pub fn set_control_surface_input(state: State<AppState>, input: Option<String>) {
+    use crate::control_surface::DeskInput;
+    let choice = match input {
+        Some(port) if !port.is_empty() => DeskInput::Port(port),
+        _ => DeskInput::Every,
+    };
+    let open = state.midi_input.lock().open_port_names();
+    state.control_surface.set_desk_input(choice, &open);
     crate::commands::engine::persist_audio_prefs_public(&state);
 }
 
