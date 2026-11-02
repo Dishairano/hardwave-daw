@@ -42,7 +42,7 @@ fn export_blocking(state: State<AppState>, path: &str) -> Result<DawProjectRepor
     if path.extension().and_then(|e| e.to_str()) != Some("dawproject") {
         path.set_extension("dawproject");
     }
-    let (mut project, pool_rates, live) = {
+    let (mut project, pool_rates, live, song_dir, trusted) = {
         let engine = state.engine.lock();
         // What the plug-ins hold now, not at the last save.
         let live = engine
@@ -59,7 +59,13 @@ fn export_blocking(state: State<AppState>, path: &str) -> Result<DawProjectRepor
                 }
             }
         }
-        (project, rates, live)
+        (
+            project,
+            rates,
+            live,
+            engine.project_dir(),
+            engine.trusted_servers(),
+        )
     };
     for track in &mut project.tracks {
         let track_id = track.id.clone();
@@ -100,14 +106,7 @@ fn export_blocking(state: State<AppState>, path: &str) -> Result<DawProjectRepor
     }
 
     let media = |a: &AudioClip| -> Option<MediaInfo> {
-        let file = if a.source_file.is_empty() {
-            PathBuf::from(&a.source_path)
-        } else {
-            PathBuf::from(&a.source_file)
-        };
-        if !file.is_file() {
-            return None;
-        }
+        let file = sample_file(a, song_dir.as_deref(), &trusted)?;
         let info = hardwave_dsp::audio_file::AudioFileReader::probe(&file)?;
         Some(MediaInfo {
             frames_per_second: pool_rates
@@ -164,6 +163,24 @@ fn export_blocking(state: State<AppState>, path: &str) -> Result<DawProjectRepor
         files: out.files.len(),
         left_out: out.left_out,
     })
+}
+
+/// Where a clip's sample is on disk, by the rules playback reads it with.
+///
+/// A collected song names its samples relative to its own folder ("Song
+/// Samples/kick.wav"). Taken as they stood, those names were looked up
+/// against the app's working folder, found nothing, and exporting a
+/// collected song left every one of its samples out.
+fn sample_file(a: &AudioClip, song_dir: Option<&Path>, trusted: &[String]) -> Option<PathBuf> {
+    // Projects older than `source_file` kept the path in `source_path`.
+    let named = if a.source_file.is_empty() {
+        &a.source_path
+    } else {
+        &a.source_file
+    };
+    hardwave_engine::source_paths::check(named, song_dir, trusted)
+        .ok()
+        .filter(|file| file.is_file())
 }
 
 fn project_plugin_state(
@@ -690,6 +707,53 @@ mod tests {
         assert_eq!(read("audio/kick.wav"), b"RIFF....WAVEfake");
         assert_eq!(read("plugins/lead-s1.vstpreset"), b"VST3state");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn clip_of(file: &str) -> AudioClip {
+        AudioClip {
+            id: "clip-1".into(),
+            name: "kick".into(),
+            source_path: "9f2c".into(),
+            source_hash: String::new(),
+            source_start: 0,
+            source_end: 48_000,
+            gain_db: 0.0,
+            fade_in_ticks: 0,
+            fade_out_ticks: 0,
+            muted: false,
+            reversed: false,
+            pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            warp_markers: Vec::new(),
+            source_file: file.into(),
+            treatment: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_collected_songs_samples_go_into_the_export() {
+        let song = std::env::temp_dir().join(format!("hw-dpx-{}", std::process::id()));
+        let kick = song.join("Anthem Samples").join("kick.wav");
+        std::fs::create_dir_all(kick.parent().unwrap()).unwrap();
+        std::fs::write(&kick, b"RIFF....WAVEfake").unwrap();
+
+        // Named relative to the song's folder, as Collect writes it.
+        let collected = clip_of("Anthem Samples/kick.wav");
+        assert_eq!(
+            sample_file(&collected, Some(&song), &[]),
+            Some(kick.clone())
+        );
+        // A full path still works, and a sample that is not there is left out.
+        let full = clip_of(&kick.to_string_lossy());
+        assert_eq!(sample_file(&full, None, &[]), Some(kick.clone()));
+        assert_eq!(
+            sample_file(&clip_of("Anthem Samples/gone.wav"), Some(&song), &[]),
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&song);
     }
 
     fn zip_with(entries: &[(&str, &[u8])], at: &Path) -> zip::ZipArchive<std::fs::File> {
