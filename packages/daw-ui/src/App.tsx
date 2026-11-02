@@ -94,6 +94,7 @@ import { startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import type { LayoutName, PanelKey } from './lib/workspaceLayout'
+import { TEMPLATE_ROWS, templateRowTargets } from './lib/templateRows'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
 import { useCollabStore } from './stores/collabStore'
@@ -1472,27 +1473,29 @@ export function App() {
       await ts.addAudioTrack('Snare')
       await ts.addAudioTrack('Hi-Hat')
       await ts.addAudioTrack('Bass')
-    } else if (id === 'vocal') {
-      await ts.addAudioTrack('Vocal')
-      await ts.addAudioTrack('Backing Vocals')
-      await ts.addAudioTrack('FX Return')
-    } else if (id === 'mixing') {
-      const ps = usePluginStore.getState()
-      const existingBefore = useTrackStore.getState().tracks.filter(t => t.kind !== 'Master')
-      for (let i = 1; i <= 8; i++) await ts.addAudioTrack(`Track ${i}`)
-      await ts.addAudioTrack('Bus A')
-      await ts.addAudioTrack('Bus B')
-      // Add EQ + Compressor to each of the 8 new audio tracks (Bus A/B stay clean).
+    } else if (id === 'vocal' || id === 'mixing') {
+      // On the first playlist rows, where they are seen (see templateRows).
       await ts.fetchTracks()
-      const afterTracks = useTrackStore.getState().tracks.filter(t => t.kind !== 'Master')
-      const newTracks = afterTracks.slice(existingBefore.length, existingBefore.length + 8)
-      for (const tr of newTracks) {
-        try {
-          await ps.addToTrack(tr.id, 'hardwave.native.eq')
-          await ps.addToTrack(tr.id, 'hardwave.native.compressor')
-        } catch (err) {
-          console.warn('Failed to insert native EQ+Comp on template track', tr.id, err)
+      const names = TEMPLATE_ROWS[id]
+      const rows = templateRowTargets(useTrackStore.getState().tracks, names)
+      for (const row of rows) await ts.renameTrack(row.trackId, row.name)
+      const trackIds = rows.map(row => row.trackId)
+      for (const name of names.slice(rows.length)) {
+        const added = await ts.addAudioTrack(name)
+        if (added) trackIds.push(added)
+      }
+      if (id === 'mixing') {
+        // Add EQ + Compressor to each of the 8 tracks (Bus A/B stay clean).
+        const ps = usePluginStore.getState()
+        for (const trackId of trackIds.slice(0, 8)) {
+          try {
+            await ps.addToTrack(trackId, 'hardwave.native.eq')
+            await ps.addToTrack(trackId, 'hardwave.native.compressor')
+          } catch (err) {
+            console.warn('Failed to insert native EQ+Comp on template track', trackId, err)
+          }
         }
+        await ts.fetchTracks()
       }
     } else if (id.startsWith('user:')) {
       const tpl = useUserTemplateStore.getState().get(id.slice(5))
