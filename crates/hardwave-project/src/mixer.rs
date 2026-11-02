@@ -136,6 +136,30 @@ pub fn solo_audible(tracks: &[crate::track::Track]) -> Option<std::collections::
     Some(heard)
 }
 
+/// Every track one track's sound passes through after it leaves: the bus
+/// it plays into, that bus's bus, the tracks it sends to and where those
+/// go, on to the master. Not the track itself, unless its routing comes
+/// back round to it.
+pub fn way_out(tracks: &[crate::track::Track], id: &str) -> std::collections::HashSet<TrackId> {
+    let mut passed: std::collections::HashSet<TrackId> = std::collections::HashSet::new();
+    let mut queue: Vec<&str> = vec![id];
+    while let Some(id) = queue.pop() {
+        let Some(track) = tracks.iter().find(|t| t.id == id) else {
+            continue;
+        };
+        let onward = track
+            .output_bus
+            .iter()
+            .chain(track.sends.iter().filter(|s| s.enabled).map(|s| &s.target));
+        for next in onward {
+            if passed.insert(next.clone()) {
+                queue.push(next);
+            }
+        }
+    }
+    passed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +237,35 @@ mod tests {
         assert_eq!(soloed(&tracks), vec!["lead"]);
         solo_exclusively(&mut tracks, "lead");
         assert!(soloed(&tracks).is_empty());
+    }
+
+    #[test]
+    fn a_track_s_way_out_is_its_buses_and_sends_and_where_they_go() {
+        let mut lead = track("lead", Some("group"), false);
+        lead.sends.push(Send {
+            target: "reverb".into(),
+            gain_db: -6.0,
+            pre_fader: false,
+            enabled: true,
+        });
+        lead.sends.push(Send {
+            target: "delay".into(),
+            gain_db: -6.0,
+            pre_fader: false,
+            enabled: false,
+        });
+        let tracks = [
+            lead,
+            track("chords", Some("group"), false),
+            track("group", Some("fx"), false),
+            track("fx", None, false),
+            track("reverb", Some("fx"), false),
+            track("delay", None, false),
+        ];
+        let mut ids: Vec<String> = way_out(&tracks, "lead").into_iter().collect();
+        ids.sort();
+        assert_eq!(ids, vec!["fx", "group", "reverb"]);
+        assert!(way_out(&tracks, "fx").is_empty(), "straight to the master");
     }
 
     #[test]

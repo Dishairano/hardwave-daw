@@ -1348,6 +1348,39 @@ fn has_a_stem(project: &Project, track: &hardwave_project::track::Track) -> bool
             .any(|s| s.id != track.id && s.midi_route_to.contains(&track.id) && plays(s))
 }
 
+/// Narrow a stem's copy of the song to one track's own sound, on its whole
+/// way out: through the buses it plays into and the returns it sends to, on
+/// to the master. The buses and returns on the way carry only this track,
+/// not their own clips, and every other track is excluded.
+///
+/// Exclude rather than mute. A muted track stops feeding any sidechain keyed
+/// off it, so muting the kick to render the bass stem produced a stem with
+/// no ducking while the full mix ducked. Excluded tracks keep running and
+/// still key sidechains; they just don't reach the master and their sends
+/// are dropped. This also keeps the producer's own mute state.
+///
+/// The buses and returns used to be excluded too, so a track routed into a
+/// bus came out silent (the bus never reached the master) and no stem had
+/// the reverb its sends fed. Each stem now carries its own share of them,
+/// so the stems add up to the mix.
+fn isolate_for_stem(proj: &mut Project, target: &str) {
+    let way_out = hardwave_project::mixer::way_out(&proj.tracks, target);
+    for t in proj.tracks.iter_mut() {
+        if t.id == target {
+            t.stem_excluded = false;
+        } else if way_out.contains(&t.id) {
+            t.stem_excluded = false;
+            t.clips.clear();
+        } else {
+            t.stem_excluded = true;
+        }
+        // Notes another track routes to a bus on the way would play there.
+        if t.id != target {
+            t.midi_route_to.retain(|to| !way_out.contains(to));
+        }
+    }
+}
+
 /// Glue a track's clips between two points into one audio clip.
 ///
 /// Several takes, chopped and rearranged, are fine to work with and awkward
@@ -1745,20 +1778,7 @@ pub async fn export_project_stems(
                     },
                     false,
                     |proj: &mut Project| {
-                        // Exclude rather than mute. A muted TrackNode returns
-                        // before writing its output ports, which also stops it
-                        // feeding any sidechain keyed off it and any send that
-                        // originates from it — so muting the kick to render the
-                        // bass stem produced a stem with NO ducking while the
-                        // full mix ducked, and rendering a return's stem muted
-                        // everything feeding it, giving silence. Excluded
-                        // tracks keep processing and can still key a sidechain;
-                        // they just don't reach master and their sends are
-                        // dropped. This also preserves the user's own mute
-                        // state instead of overwriting it.
-                        for t in proj.tracks.iter_mut() {
-                            t.stem_excluded = t.id != target_id;
-                        }
+                        isolate_for_stem(proj, &target_id);
                         if !respect_mute_solo {
                             for t in proj.tracks.iter_mut() {
                                 t.soloed = false;
@@ -2174,10 +2194,14 @@ mod isolate_tests {
 #[cfg(test)]
 mod stem_and_freeze_tests {
     use super::has_a_stem;
+    use super::isolate_for_stem;
+    use hardwave_engine::{AudioBuffer, DawEngine};
     use hardwave_project::clip::FREEZE_LANE;
     use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+    use hardwave_project::mixer::Send;
     use hardwave_project::Project;
 
+    const SR: u32 = 48_000;
     const LEN_TICKS: u64 = 1920;
 
     fn audio(id: &str, source: &str, frames: u64, track: &str) -> ClipPlacement {
@@ -2224,6 +2248,15 @@ mod stem_and_freeze_tests {
         }
     }
 
+    fn send(target: &str) -> Send {
+        Send {
+            target: target.into(),
+            gain_db: -6.0,
+            pre_fader: false,
+            enabled: true,
+        }
+    }
+
     #[test]
     fn only_tracks_that_play_something_get_a_stem() {
         let mut p = Project::default();
@@ -2261,6 +2294,116 @@ mod stem_and_freeze_tests {
             ["Vox", "Lead", "Layer", "Frozen"],
             "not the master, the 500 empty inserts or the empty bus"
         );
+    }
+
+    #[test]
+    fn a_stem_goes_out_through_its_bus_and_the_returns_it_sends_to() {
+        let mut p = Project::default();
+        let bus = p.add_audio_track("Bus".into());
+        let verb = p.add_audio_track("Verb".into());
+        let lead = p.add_audio_track("Lead".into());
+        let pad = p.add_audio_track("Pad".into());
+        let other = p.add_midi_track("Other".into());
+        for (id, clip) in [(&lead, "l"), (&pad, "p"), (&bus, "b")] {
+            p.track_mut(id)
+                .unwrap()
+                .clips
+                .push(audio(clip, clip, 100, id));
+        }
+        {
+            let t = p.track_mut(&lead).unwrap();
+            t.output_bus = Some(bus.clone());
+            t.sends.push(send(&verb));
+        }
+        p.track_mut(&pad).unwrap().output_bus = Some(bus.clone());
+        p.track_mut(&other).unwrap().midi_route_to.push(bus.clone());
+
+        isolate_for_stem(&mut p, &lead);
+
+        let t = |id: &str| p.track(id).unwrap();
+        assert!(!t(&lead).stem_excluded);
+        assert!(
+            !t(&bus).stem_excluded && !t(&verb).stem_excluded,
+            "the bus and the return carry the lead to the master"
+        );
+        assert!(t(&bus).clips.is_empty(), "with nothing of the bus's own");
+        assert!(t(&pad).stem_excluded, "the pad is not in the lead's stem");
+        assert!(
+            t(&other).midi_route_to.is_empty(),
+            "nor notes another track plays on the bus"
+        );
+    }
+
+    /// The stems, added up, are the mix: each track routed into a bus, one
+    /// of them sending to a return. Both came out silent: the bus was left
+    /// out of each stem and never reached the master.
+    #[test]
+    fn the_stems_add_up_to_the_mix() {
+        let engine = DawEngine::new();
+        let frames = SR as u64;
+        for (source, hz) in [("a", 220.0f32), ("b", 330.0)] {
+            let ch: Vec<f32> = (0..frames)
+                .map(|n| (std::f32::consts::TAU * hz * n as f32 / SR as f32).sin() * 0.3)
+                .collect();
+            engine.audio_pool.insert(
+                source.to_string(),
+                AudioBuffer {
+                    channels: vec![ch.clone(), ch],
+                    sample_rate: SR,
+                    num_frames: frames as usize,
+                },
+            );
+        }
+        let len = {
+            let mut p = engine.project.lock();
+            let bus = p.add_audio_track("Bus".into());
+            let verb = p.add_audio_track("Verb".into());
+            p.track_mut(&bus).unwrap().volume_db = -3.0;
+            for source in ["a", "b"] {
+                let id = p.add_audio_track(source.into());
+                let t = p.track_mut(&id).unwrap();
+                t.clips.push(audio(source, source, frames, &id));
+                t.output_bus = Some(bus.clone());
+                if source == "a" {
+                    t.sends.push(send(&verb));
+                }
+            }
+            p.tempo_map.tick_to_samples(LEN_TICKS, SR as f64)
+        };
+        let render = |prepare: &dyn Fn(&mut Project)| -> Vec<f32> {
+            let mut out = Vec::new();
+            engine
+                .render_offline_with(SR, len, 0, None, prepare, |b| {
+                    out.extend_from_slice(b);
+                    true
+                })
+                .expect("it renders");
+            out
+        };
+        let mix = render(&|_| {});
+        let stems: Vec<String> = {
+            let p = engine.project.lock();
+            p.tracks
+                .iter()
+                .filter(|t| has_a_stem(&p, t))
+                .map(|t| t.id.clone())
+                .collect()
+        };
+        assert_eq!(stems.len(), 2, "a stem for each track that plays");
+        let mut sum = vec![0.0f32; mix.len()];
+        for id in &stems {
+            let stem = render(&|p: &mut Project| isolate_for_stem(p, id));
+            for (s, v) in sum.iter_mut().zip(stem) {
+                *s += v;
+            }
+        }
+        let peak = mix.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let worst = mix
+            .iter()
+            .zip(&sum)
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(peak > 0.05, "the mix plays: {peak}");
+        assert!(worst < 1e-3, "the stems add up to the mix: off by {worst}");
     }
 }
 
