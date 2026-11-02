@@ -30,6 +30,14 @@ Options > Settings > Audio picks the driver, the device, the sample
 rate and the buffer size. A smaller buffer means less delay and more
 load; if the audio crackles, raise it.
 
+After Apply, and after a change of driver or output pair, a soft tone
+plays on the device just opened, first on the left and then on the
+right, and the strip under the device names it with a meter per side.
+Test sound at the bottom plays it again at any time; I hear nothing
+lists what to check. The tone goes straight to the sound card, so a
+muted master cannot hide it, and it never ends up in a recording or an
+export. While a song plays, Apply does not play it over the song.
+
 The Recording page shows the round trip the driver reports and lets you
 add your own offset in milliseconds. What you record lands where you
 played it, not where it arrived.

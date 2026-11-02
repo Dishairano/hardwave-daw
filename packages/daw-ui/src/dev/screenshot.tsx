@@ -568,6 +568,16 @@ function Harness() {
       // SHOT_TAB=midi (?tab=) photographs a specific settings tab.
       const tab = (new URLSearchParams(location.search).get('tab') || 'audio') as SettingsTab
       focusSettingsTab(tab)
+      // ?playing=1: a song plays, so Apply does not play the tone over it.
+      if (new URLSearchParams(location.search).get('playing')) useTransportStore.setState({ playing: true })
+      // ?tone=1: just after Apply, the test tone on the right side.
+      if (new URLSearchParams(location.search).get('tone')) {
+        ;(window as unknown as { __hwToneHold?: boolean }).__hwToneHold = true
+        setTimeout(() => {
+          const button = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('Test sound'))
+          button?.click()
+        }, 500)
+      }
       // A keyboard and a desk plugged in, so the control surface's desk
       // input picker has both to show.
       if (tab === 'midi') {

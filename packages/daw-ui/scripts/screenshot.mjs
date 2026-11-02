@@ -67,6 +67,8 @@ try {
       + (process.env.SHOT_TIMESIG_AT ? `&timesigat=${process.env.SHOT_TIMESIG_AT}` : '')
       // SHOT_STEP=velocity opens the setup wizard on that step.
       + (process.env.SHOT_STEP ? `&step=${process.env.SHOT_STEP}` : '')
+      // SHOT_TONE=1: Settings > Audio just after Apply, the test tone playing.
+      + (process.env.SHOT_TONE ? '&tone=1' : '')
       // SHOT_TAB=midi opens the settings window on that tab.
       + (process.env.SHOT_TAB ? `&tab=${process.env.SHOT_TAB}` : '')
       // SHOT_CC=cc1 opens that controller lane in the piano roll.
