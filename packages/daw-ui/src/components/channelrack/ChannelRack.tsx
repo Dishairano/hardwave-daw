@@ -13,6 +13,7 @@ import type { TrackInfo } from '../../stores/trackStore'
 import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { mixHex } from '../../lib/color'
+import { channelKindShown, type ChannelKindFilter } from '../../lib/channelKindFilter'
 import { t, tf, useLanguage } from '../../i18n'
 
 const STEPS = STEPS_PER_PATTERN
@@ -67,6 +68,7 @@ export function ChannelRack() {
     [allPlugins],
   )
   const [instPickerOpen, setInstPickerOpen] = useState(false)
+  const [kindFilter, setKindFilter] = useState<ChannelKindFilter>('All')
 
   const addInstrumentChannel = useCallback(async (pluginId: string, pluginName: string) => {
     setInstPickerOpen(false)
@@ -248,12 +250,13 @@ export function ChannelRack() {
   for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
   const channels = allChannels.filter(t => {
     const f = folderByTrack.get(t.id)
-    return !(f && f.collapsed)
+    return !(f && f.collapsed) && channelKindShown(kindFilter, t.kind)
   })
   const shownFolderHeaders = new Set<string>()
   const channelRows: Array<{ kind: 'folderHeader'; folder: TrackFolder } | { kind: 'channel'; channelIdx: number }> = []
   let visibleIdx = 0
   allChannels.forEach(t => {
+    if (!channelKindShown(kindFilter, t.kind)) return
     const f = folderByTrack.get(t.id)
     if (f && !shownFolderHeaders.has(f.id)) {
       channelRows.push({ kind: 'folderHeader', folder: f })
@@ -506,12 +509,12 @@ export function ChannelRack() {
         </div>
 
         <div style={{ display: 'flex', gap: 1 }}>
-          {['All', 'Audio', 'MIDI'].map(g => (
-            <button key={g} style={{
+          {(['All', 'Audio', 'MIDI'] as const).map(g => (
+            <button key={g} onClick={() => setKindFilter(g)} style={{
               ...topBtn, width: 'auto', padding: '0 9px',
-              fontSize: 11, color: g === 'All' ? hw.textBright : hw.textMuted,
-              background: g === 'All' ? hw.accentDim : 'transparent',
-              border: `1px solid ${g === 'All' ? hw.accentGlow : 'transparent'}`,
+              fontSize: 11, color: g === kindFilter ? hw.textBright : hw.textMuted,
+              background: g === kindFilter ? hw.accentDim : 'transparent',
+              border: `1px solid ${g === kindFilter ? hw.accentGlow : 'transparent'}`,
             }}>
               {t(g)}
             </button>
