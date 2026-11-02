@@ -1385,15 +1385,19 @@ impl AudioNode for TrackNode {
                 let source_pos = if !clip.warp.is_empty() {
                     warp_source_pos(&clip.warp, into_clip)
                 } else {
-                    let into_src = into_clip as f64 * clip.source_step;
                     if clip.reversed {
-                        let end_frame = clip.source_offset.saturating_add(clip_length);
-                        if end_frame == 0 {
-                            continue;
-                        }
-                        (end_frame as f64 - 1.0) - into_src
+                        // The forward read mirrored: the right edge plays
+                        // the window's start and the left edge its end, the
+                        // window being as many source frames as the clip
+                        // moves through. It was counted in timeline samples,
+                        // so a reversed clip played faster or slower than
+                        // 1:1 (repitched, on a pitched track, or bounced at
+                        // another rate) read the wrong part of the file and
+                        // went silent part of the way through.
+                        let from_end = (clip_length - 1 - into_clip) as f64;
+                        clip.source_offset as f64 + from_end * clip.source_step
                     } else {
-                        clip.source_offset as f64 + into_src
+                        clip.source_offset as f64 + into_clip as f64 * clip.source_step
                     }
                 };
 
@@ -2045,6 +2049,86 @@ mod tests {
             left[10] > 9.5 && right[10] < 0.2,
             "left full and right gone at the start"
         );
+    }
+
+    /// A ramp 0, 1, 2, ... played reversed at `step` source frames per
+    /// sample, from frame 100, for 400 samples: one block, left channel.
+    fn reversed_ramp(step: f64) -> Vec<f32> {
+        let pool = AudioPool::new();
+        let ramp: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        pool.insert(
+            "ramp".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![ramp.clone(), ramp],
+                sample_rate: 48_000,
+                num_frames: 1000,
+            },
+        );
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool, meter);
+        node.set_clips(vec![ClipRegion {
+            source_id: "ramp".into(),
+            timeline_start: 0,
+            timeline_end: 400,
+            source_offset: 100,
+            gain: 1.0,
+            muted: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            reversed: true,
+            source_step: step,
+            warp: Vec::new(),
+            treat: ClipTreat::default(),
+        }]);
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            buffer_size: 512,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            position_ticks: 0,
+            playing: true,
+        };
+        let mut outputs = vec![vec![0.0f32; 512]; 2];
+        let empty: Vec<f32> = vec![0.0; 512];
+        let inputs: Vec<&[f32]> = vec![&empty, &empty];
+        node.process(&inputs, &mut outputs, &[], &mut Vec::new(), &ctx);
+        let g = pan_gain();
+        outputs.swap_remove(0).iter().map(|v| v / g).collect()
+    }
+
+    #[test]
+    fn a_reversed_clip_plays_its_window_backwards_at_any_speed() {
+        // At 1:1 the 400 frames from 100 on, last first.
+        let out = reversed_ramp(1.0);
+        assert!(
+            (out[0] - 499.0).abs() < 1e-2,
+            "starts at the end: {}",
+            out[0]
+        );
+        assert!(
+            (out[399] - 100.0).abs() < 1e-2,
+            "ends at the start: {}",
+            out[399]
+        );
+
+        // An octave up it moves through twice the file: 800 frames from
+        // 100 on, last first, and sounding all the way to its end.
+        let out = reversed_ramp(2.0);
+        assert!(
+            (out[0] - 898.0).abs() < 1e-2,
+            "starts at the end: {}",
+            out[0]
+        );
+        assert!((out[200] - 498.0).abs() < 1e-2, "half way: {}", out[200]);
+        assert!(
+            (out[399] - 100.0).abs() < 1e-2,
+            "ends at the start: {}",
+            out[399]
+        );
+        assert_eq!(out[400], 0.0, "and stops with the clip");
     }
 
     #[test]
