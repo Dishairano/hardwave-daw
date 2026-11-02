@@ -95,6 +95,7 @@ import { useTrackStore } from './stores/trackStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import type { LayoutName, PanelKey } from './lib/workspaceLayout'
 import { TEMPLATE_ROWS, templateRowTargets } from './lib/templateRows'
+import { followSelectionInPianoRoll } from './stores/pianoRollBinding'
 import { usePluginStore } from './stores/pluginStore'
 import { useProjectStore } from './stores/projectStore'
 import { useCollabStore } from './stores/collabStore'
@@ -927,19 +928,11 @@ export function App() {
     return () => { stop = true; window.clearInterval(timer) }
   }, [multilinkActive])
 
-  // When Piano Roll opens with no active clip but a MIDI track is selected,
-  // ensure a default clip exists and bind it.
+  // While the Piano Roll is open with no active clip, the MIDI track
+  // selected (when it opens, or picked later) gets a default clip, bound.
   useEffect(() => {
     if (!showPianoRoll) return
-    const ts = useTrackStore.getState()
-    if (ts.activeMidiClipId) return
-    const trackId = ts.selectedTrackId
-    if (!trackId) return
-    const track = ts.tracks.find(t => t.id === trackId)
-    if (!track || track.kind !== 'Midi') return
-    ts.ensureMidiClipOnTrack(trackId).then(clipId => {
-      if (clipId) ts.setActiveMidiClip(trackId, clipId)
-    }).catch(() => {})
+    return followSelectionInPianoRoll()
   }, [showPianoRoll])
 
   // Play selection: stop the transport when it reaches the end of the range
