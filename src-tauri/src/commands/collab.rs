@@ -316,13 +316,7 @@ fn handle_project(
             }
             match hardwave_project::Project::from_bytes(blob) {
                 Ok(incoming) => {
-                    let engine_guard = engine.lock();
-                    engine_guard.snapshot_before_mutation();
-                    *engine_guard.project.lock() = incoming;
-                    engine_guard.sync_track_meters();
-                    engine_guard.rebuild_graph();
-                    collab.remember_tracks(&engine_guard.project.lock());
-                    drop(engine_guard);
+                    take_room_song(&engine.lock(), collab, incoming);
                     // Its plug-ins too, made where plug-ins are made: the
                     // song arrived without any of them playing.
                     let for_main = app.clone();
@@ -342,6 +336,48 @@ fn handle_project(
         }
         _ => false,
     }
+}
+
+/// Put the song the other side sent in place of the one open here, the
+/// way opening a song does.
+///
+/// It was taken as an edit: an undo step, with the transport left at the
+/// old song's tempo and time signature and the old song's plug-ins left
+/// running on tracks with the same id. The song played at the wrong speed,
+/// and Ctrl+Z brought the old song back, which the room then sent to the
+/// other side as edits: their tracks replaced by these, their tempo and
+/// markers overwritten.
+pub(crate) fn take_room_song(
+    engine: &hardwave_engine::DawEngine,
+    collab: &crate::collab::Collab,
+    incoming: hardwave_project::Project,
+) {
+    let bpm = incoming
+        .tempo_map
+        .entries
+        .first()
+        .map(|e| e.bpm)
+        .unwrap_or(140.0);
+    *engine.project.lock() = incoming;
+    // Same queue as the plug-ins the song brings, so the order holds.
+    engine.clear_live_plugins();
+    engine.transport.bpm.store(bpm, Ordering::Relaxed);
+    engine.send_command(hardwave_engine::TransportCommand::SetBpm(bpm));
+    crate::commands::project::apply_project_time_signature(engine);
+    engine.reset_history();
+    engine.sync_track_meters();
+    engine.rebuild_graph();
+    let master = engine
+        .project
+        .lock()
+        .tracks
+        .iter()
+        .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
+        .map(|t| t.id.clone());
+    if let Some(master) = master {
+        engine.apply_track_mix(&master);
+    }
+    collab.remember_tracks(&engine.project.lock());
 }
 
 /// Apply one message and do what it asks of the transport.
@@ -682,5 +718,35 @@ mod room_tls_tests {
             }
             Err(e) => panic!("TLS or connection failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod room_song_tests {
+    use super::take_room_song;
+    use std::sync::atomic::Ordering;
+
+    /// A song taken from the room plays at its own tempo, and undo cannot
+    /// bring the song this side had before back (the room would send it to
+    /// the other side as edits).
+    #[test]
+    fn a_song_taken_from_the_room_opens_like_a_song_and_is_not_an_undo_step() {
+        let engine = hardwave_engine::DawEngine::new();
+        let collab = crate::collab::Collab::default();
+        // An edit of this side's own, before the song arrives.
+        engine.snapshot_before_mutation();
+        engine.project.lock().tempo_map.entries[0].bpm = 128.0;
+
+        let mut theirs = hardwave_project::Project::default();
+        theirs.tempo_map.entries[0].bpm = 150.0;
+        take_room_song(&engine, &collab, theirs);
+
+        assert_eq!(engine.transport.bpm.load(Ordering::Relaxed), 150.0);
+        assert!(!engine.undo(), "the old song must not come back");
+        assert_eq!(engine.project.lock().tempo_map.entries[0].bpm, 150.0);
+        // What arrived is what the other side has: nothing to send back.
+        let project = engine.project.lock();
+        assert!(collab.song_changes(&project).is_empty());
+        assert!(collab.track_changes(&project).0.is_empty());
     }
 }
