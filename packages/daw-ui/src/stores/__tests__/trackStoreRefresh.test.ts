@@ -65,6 +65,16 @@ describe('refreshTrack', () => {
     expect(useTrackStore.getState().tracks).toHaveLength(1)
   })
 
+  it('reads the whole list for a track it has not seen, so a room partner\'s new track shows', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ ...track('c', 0) })
+      .mockResolvedValueOnce([track('a', 0), track('b', -6), track('c', 0)])
+    await useTrackStore.getState().refreshTrack('c')
+
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'get_tracks_with_clips')
+    expect(useTrackStore.getState().tracks.map(t => t.id)).toEqual(['a', 'b', 'c'])
+  })
+
   it('falls back to a full refresh against a backend without the endpoint', async () => {
     invokeMock
       .mockRejectedValueOnce(new Error('command not found'))

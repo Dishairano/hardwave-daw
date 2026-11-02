@@ -550,6 +550,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
         await get().fetchTracks()
         return
       }
+      if (!get().tracks.some((t) => t.id === id)) {
+        // A track this window has not seen: one the other person added in
+        // a room. Only the whole list says where it goes; updating it by id
+        // alone left it out of the playlist and the mixer.
+        await get().fetchTracks()
+        return
+      }
       const updated: TrackWithClips = { ...payload, clips: payload.clips ?? [] }
       set((s) => ({
         tracks: s.tracks.map((t) => (t.id === id ? updated : t)),
