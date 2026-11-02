@@ -459,9 +459,15 @@ impl Collab {
         self.status.lock().hosting && self.song_consent.load(Ordering::SeqCst)
     }
 
-    /// The room says who is in it now.
+    /// The room says who is in it now. When the other person has left,
+    /// their cursor goes with them: it stayed drawn on the arrangement,
+    /// with their name, where they last were.
     pub fn set_members(&self, names: Vec<String>) {
-        self.status.lock().members = names;
+        let mut status = self.status.lock();
+        if names.len() < 2 {
+            status.peer = None;
+        }
+        status.members = names;
     }
 
     /// The other person moved. With two in a room the other person is
@@ -791,6 +797,19 @@ mod tests {
         let from_guest = guest.collab.song_changes(&guest.project);
         deliver(from_guest, &mut host);
         assert_eq!(host.project.tempo_map.entries[0].bpm, 133.0);
+    }
+
+    /// When the other person leaves, their cursor is no longer drawn.
+    #[test]
+    fn the_other_persons_cursor_goes_when_they_leave() {
+        let collab = Collab::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        collab.begin("r", "CODE", true, tx);
+        collab.set_members(vec!["Host".into(), "Alex".into()]);
+        collab.set_peer(&hardwave_project::multiplayer::Presence::default());
+        assert_eq!(collab.status().peer.unwrap().name, "Alex");
+        collab.set_members(vec!["Host".into()]);
+        assert!(collab.status().peer.is_none());
     }
 
     fn fader() -> SyncKind {
