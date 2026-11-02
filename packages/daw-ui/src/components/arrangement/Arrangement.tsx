@@ -10,7 +10,7 @@ import { StemsDialog } from './StemsDialog'
 import { useCollabStore } from '../../stores/collabStore'
 import { SpectralEditor } from './SpectralEditor'
 import { listen } from '@tauri-apps/api/event'
-import { useTrackStore, ClipInfo, FadeCurveKind, WavePeak } from '../../stores/trackStore'
+import { useTrackStore, ClipInfo, ClipDragEdit, FadeCurveKind, WavePeak } from '../../stores/trackStore'
 import { useSampleWindowStore } from '../../stores/sampleWindowStore'
 import { invoke } from '@tauri-apps/api/core'
 import { sectionAt, sectionMoves } from './sectionMoves'
@@ -103,13 +103,42 @@ interface DragState {
   // gesture has already filled, so dragging back and forth over one slot
   // cannot stack copies. `paintChain` serialises the placements: each one is
   // two IPC calls, and firing them in parallel makes the backend interleave
-  // a duplicate with another slot's move.
+  // a duplicate with another slot's move. Slip, fade and clip drags send
+  // through it too, so their release waits for what is still on the way.
   paintedSlots?: Set<string>
   paintChain?: Promise<void>
   paintStepTicks?: number
   // Slip drag only: how far the audio has been slid so far, in samples. Each
   // move sends only what is new, one after the other through `paintChain`.
   slipSamples?: number
+  /** A clip drag that changed the song while still held (onto another
+   *  track, or a fade) opened an undo step, which the release closes once
+   *  `paintChain` has landed, so the whole drag is one step. */
+  historyGroupOpen?: boolean
+  /** Where the drag has put the dragged clip, its length on a right-edge
+   *  resize, and how far a group moved. The release sends these rather
+   *  than reading the store, which a move to another track refreshes. */
+  lastPositionTicks?: number
+  lastLengthTicks?: number
+  lastDeltaTicks?: number
+  /** The position sent with the last move onto another track. */
+  sentPositionTicks?: number
+  /** The fades last sent during a fade drag, as [in, out]. */
+  fadesSent?: [number, number]
+}
+
+/** Open a clip drag's undo step the first time it changes the song. */
+function openDragStep(drag: DragState) {
+  if (drag.historyGroupOpen) return
+  drag.historyGroupOpen = true
+  void useTrackStore.getState().beginHistoryGroup()
+}
+
+/** Close a clip drag's undo step, if it opened one, once what it sent has
+ *  landed. */
+function closeDragStep(drag: DragState, label: string, after: Promise<unknown>) {
+  if (!drag.historyGroupOpen) return
+  void after.finally(() => useTrackStore.getState().endHistoryGroup(label))
 }
 
 interface ContextMenuState {
@@ -1883,15 +1912,21 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
 
-    if (drag.mode === 'fade-in') {
-      const newFade = Math.max(0, Math.min(drag.originalLengthTicks, drag.originalFadeInTicks + dTicks))
-      setClipFades(drag.trackId, drag.clipId, newFade, drag.originalFadeOutTicks)
-      return
-    }
-    if (drag.mode === 'fade-out') {
+    if (drag.mode === 'fade-in' || drag.mode === 'fade-out') {
       // Dragging left shortens fade-out from the right edge, so invert dx.
-      const newFade = Math.max(0, Math.min(drag.originalLengthTicks, drag.originalFadeOutTicks - dTicks))
-      setClipFades(drag.trackId, drag.clipId, drag.originalFadeInTicks, newFade)
+      const fades: [number, number] = drag.mode === 'fade-in'
+        ? [Math.max(0, Math.min(drag.originalLengthTicks, drag.originalFadeInTicks + dTicks)), drag.originalFadeOutTicks]
+        : [drag.originalFadeInTicks, Math.max(0, Math.min(drag.originalLengthTicks, drag.originalFadeOutTicks - dTicks))]
+      const last = drag.fadesSent ?? [drag.originalFadeInTicks, drag.originalFadeOutTicks]
+      if (fades[0] === last[0] && fades[1] === last[1]) return
+      // Heard while dragging, and one undo step for the drag: every move
+      // used to be a step of its own, dozens for one fade.
+      drag.fadesSent = fades
+      openDragStep(drag)
+      const { trackId, clipId } = drag
+      drag.paintChain = (drag.paintChain ?? Promise.resolve())
+        .then(() => setClipFades(trackId, clipId, fades[0], fades[1]))
+        .catch((err) => console.error('setClipFades failed', err))
       return
     }
     if (drag.mode === 'move') {
@@ -1919,16 +1954,25 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         targetTrack.id !== drag.trackId &&
         targetTrack.kind === sourceTrack.kind
 
+      drag.lastPositionTicks = snapped
+      drag.lastDeltaTicks = effectiveDelta
       if (canMoveAcross) {
         // Cross-track move still goes through the IPC path because it
         // needs to mutate Rust-side track membership, not just a clip
         // position. Rare event (one-off per drag), so the cost is OK.
-        moveClipToTrack(drag.trackId, targetTrack.id, drag.clipId, snapped)
+        // It opens the drag's undo step, so the release joins it.
+        const from = drag.trackId
+        const clipId = drag.clipId
+        openDragStep(drag)
+        drag.paintChain = (drag.paintChain ?? Promise.resolve())
+          .then(() => moveClipToTrack(from, targetTrack.id, clipId, snapped))
+          .catch(err => console.error('moveClipToTrack failed', err))
         // Update the drag ref so subsequent mousemoves treat the new
         // track as the source (otherwise the clip would teleport back
         // every frame).
         drag.trackId = targetTrack.id
         drag.crossedTracks = true
+        drag.sentPositionTicks = snapped
       } else {
         // Hot path — fires every mousemove. Local-only update keeps the
         // 60fps drag fluid even with 500 pre-allocated tracks. The
@@ -1948,7 +1992,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const end = e.altKey
         ? start + newLen
         : magnetEdge(start + newLen, start + applySnap(newLen), edgeTargets(), reach)
-      resizeClipLocal(drag.trackId, drag.clipId, Math.max(minLen, end - start))
+      drag.lastLengthTicks = Math.max(minLen, end - start)
+      resizeClipLocal(drag.trackId, drag.clipId, drag.lastLengthTicks)
     } else if (drag.mode === 'resize-left') {
       // Keep the right edge anchored; shift position and shrink length.
       const rightEdge = drag.originalPositionTicks + drag.originalLengthTicks
@@ -2045,6 +2090,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           return { selectedClipIds: next, selectedClipId: picked[0] }
         })
       }
+    } else if (drag && (drag.mode === 'fade-in' || drag.mode === 'fade-out')) {
+      // Every fade sent on the way is in the drag's one undo step.
+      closeDragStep(drag, 'Edit clip fades', drag.paintChain ?? Promise.resolve())
     } else if (drag && (drag.mode === 'move' || drag.mode === 'resize-right' || drag.mode === 'resize-left')) {
       // Flush the drag's optimistic local state to the backend in one
       // shot. We've been updating the store in-memory during mousemove
@@ -2052,9 +2100,12 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // final position/length so save/load + audio engine see it.
       const liveTrack = useTrackStore.getState().tracks.find(t => t.id === drag.trackId)
       const liveClip = liveTrack?.clips?.find(c => c.id === drag.clipId)
-      if (liveClip && drag.mode === 'resize-left') {
-        commitClipTrimStart(drag.trackId, drag.clipId, liveClip.position_ticks)
-          .catch(err => console.error('commitClipTrimStart failed', err))
+      if (drag.mode === 'resize-left') {
+        // A click on the edge that moved nothing is no edit.
+        if (liveClip && liveClip.position_ticks !== drag.originalPositionTicks) {
+          commitClipTrimStart(drag.trackId, drag.clipId, liveClip.position_ticks)
+            .catch(err => console.error('commitClipTrimStart failed', err))
+        }
       } else if (liveClip && drag.mode === 'move' && !drag.crossedTracks
         && usePlaylistToolStore.getState().ripple
         && liveClip.position_ticks !== drag.originalPositionTicks) {
@@ -2065,21 +2116,35 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         dragRef.current = null
         forceRender(n => n + 1)
         return
-      } else if (liveClip) {
-        const lengthArg = drag.mode === 'move' ? undefined : liveClip.length_ticks
-        commitClipDrag(drag.trackId, drag.clipId, liveClip.position_ticks, lengthArg)
-          .catch(err => console.error('commitClipDrag failed', err))
-      }
-      // Group-move members each need their own commit too.
-      if (drag.groupMoveOriginals) {
-        for (const m of drag.groupMoveOriginals) {
-          const t = useTrackStore.getState().tracks.find(tt => tt.id === m.trackId)
-          const c = t?.clips?.find(cc => cc.id === m.clipId)
-          if (c) {
-            commitClipDrag(m.trackId, m.clipId, c.position_ticks)
-              .catch(err => console.error('commitClipDrag (group) failed', err))
-          }
+      } else {
+        // The dragged clip and its group, where the drag put them, as one
+        // undo step with whatever the drag already sent (a move onto
+        // another track). Nothing is sent for a click that moved nothing.
+        const delta = drag.lastDeltaTicks ?? 0
+        const edits: ClipDragEdit[] = [{
+          trackId: drag.trackId,
+          clipId: drag.clipId,
+          fromPositionTicks: drag.sentPositionTicks ?? drag.originalPositionTicks,
+          positionTicks: drag.lastPositionTicks ?? drag.originalPositionTicks,
+          ...(drag.mode === 'resize-right'
+            ? { fromLengthTicks: drag.originalLengthTicks, lengthTicks: drag.lastLengthTicks ?? drag.originalLengthTicks }
+            : {}),
+        }]
+        for (const m of drag.groupMoveOriginals ?? []) {
+          edits.push({
+            trackId: m.trackId,
+            clipId: m.clipId,
+            fromPositionTicks: m.origPos,
+            positionTicks: Math.max(0, m.origPos + delta),
+          })
         }
+        const label = drag.mode === 'resize-right' ? 'Resize clip'
+          : drag.crossedTracks ? 'Move clip to track'
+            : edits.length === 1 ? 'Move clip' : `Move ${edits.length} clips`
+        const done = (drag.paintChain ?? Promise.resolve())
+          .then(() => commitClipDrag(edits, label))
+          .catch(err => console.error('commitClipDrag failed', err))
+        closeDragStep(drag, label, done)
       }
     }
     dragRef.current = null
