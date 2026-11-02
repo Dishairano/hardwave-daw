@@ -2612,6 +2612,7 @@ impl DawEngine {
                 Arc::new(Mutex::new(pool)),
             ),
             buffer_size,
+            output_gain: 1.0,
         }
     }
 
@@ -2941,9 +2942,28 @@ impl AudioSourceLoader {
 pub struct OfflineRender {
     callback: EngineCallback,
     buffer_size: usize,
+    /// Put on every frame handed out; see [`Self::for_a_track`].
+    output_gain: f32,
 }
 
 impl OfflineRender {
+    /// Make this a render whose audio goes back onto a track: a bounce, a
+    /// freeze, a consolidate. That audio plays through a centred pan and the
+    /// master fader again, so the render leaves both out: the master fader
+    /// stands at 0 dB, and the level a centred pan takes off (3 dB with the
+    /// usual law) is given back. Without this a bounced, frozen or
+    /// consolidated part came back 3 dB quieter than the part it replaced,
+    /// and lower again by wherever the master fader sat.
+    pub fn for_a_track(mut self) -> Self {
+        self.callback
+            .transport
+            .master_volume_db
+            .store(0.0, std::sync::atomic::Ordering::Relaxed);
+        let (centre, _) = crate::pan::gains(0.0, self.callback.audio_prefs.pan_law());
+        self.output_gain = if centre > 1e-6 { 1.0 / centre } else { 1.0 };
+        self
+    }
+
     /// Render `total_samples` frames of the song from where the render was
     /// prepared, handing each interleaved stereo block to `on_block`; it
     /// returns false to stop early.
@@ -2983,7 +3003,13 @@ impl OfflineRender {
             if kept == 0 {
                 continue;
             }
-            if !on_block(&slice[dropped * 2..(dropped + kept) * 2]) {
+            let out = &mut slice[dropped * 2..(dropped + kept) * 2];
+            if self.output_gain != 1.0 {
+                for s in out.iter_mut() {
+                    *s *= self.output_gain;
+                }
+            }
+            if !on_block(out) {
                 break;
             }
             remaining -= kept as u64;
@@ -8697,6 +8723,186 @@ mod monitoring_tests {
         assert!(
             in_mix > 0.01,
             "without a pair of its own the click is in the mix"
+        );
+    }
+}
+
+#[cfg(test)]
+mod track_render_tests {
+    //! Renders whose audio goes back onto a track (a bounce, a freeze, a
+    //! consolidate), played back the way the app places them.
+    use super::*;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, FadeCurve};
+
+    const SR: u32 = 48_000;
+    /// Two beats at the default 140 BPM.
+    const LEN_TICKS: u64 = 1920;
+
+    fn clip(id: &str, source: &str, frames: u64, track_id: &str) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: id.into(),
+                name: id.into(),
+                source_path: source.into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: frames,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: FadeCurve::Linear,
+                fade_out_curve: FadeCurve::Linear,
+                source_file: String::new(),
+                treatment: Default::default(),
+            }),
+            track_id: track_id.into(),
+            position_ticks: 0,
+            length_ticks: LEN_TICKS,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    /// A song with one track playing a sine, a different one on each side,
+    /// and the track's id.
+    fn sine_song() -> (DawEngine, String, u64) {
+        let engine = DawEngine::new();
+        let frames = SR as u64;
+        let sine = |hz: f32| -> Vec<f32> {
+            (0..frames)
+                .map(|n| (std::f32::consts::TAU * hz * n as f32 / SR as f32).sin() * 0.5)
+                .collect()
+        };
+        engine.audio_pool.insert(
+            "sine".to_string(),
+            crate::AudioBuffer {
+                channels: vec![sine(220.0), sine(330.0)],
+                sample_rate: SR,
+                num_frames: frames as usize,
+            },
+        );
+        let id = {
+            let mut project = engine.project.lock();
+            let id = project.add_audio_track("Sine".into());
+            let placed = clip("c", "sine", frames, &id);
+            project.track_mut(&id).unwrap().clips.push(placed);
+            id
+        };
+        let len = engine
+            .project
+            .lock()
+            .tempo_map
+            .tick_to_samples(LEN_TICKS, SR as f64);
+        (engine, id, len)
+    }
+
+    fn render(engine: &DawEngine, len: u64, prepare: impl FnOnce(&mut Project)) -> Vec<f32> {
+        let mut out = Vec::new();
+        engine
+            .render_offline_with(SR, len, 0, None, prepare, |b| {
+                out.extend_from_slice(b);
+                true
+            })
+            .expect("it renders");
+        out
+    }
+
+    /// The track alone, as the app narrows a render for a bounce, with
+    /// `change` made to the render's copy of the song.
+    fn render_for_a_track(
+        engine: &DawEngine,
+        target: &str,
+        len: u64,
+        change: impl FnOnce(&mut Project),
+    ) -> Vec<f32> {
+        let target = target.to_string();
+        let mut out = Vec::new();
+        engine
+            .prepare_offline_render(SR, 0, None, move |p: &mut Project| {
+                for t in p.tracks.iter_mut() {
+                    t.stem_excluded = t.id != target;
+                }
+                change(p);
+            })
+            .for_a_track()
+            .run(len, |b| {
+                out.extend_from_slice(b);
+                true
+            });
+        out
+    }
+
+    /// An interleaved render in the audio pool under `source`, and how many
+    /// frames it has.
+    fn pool_render(engine: &DawEngine, source: &str, rendered: &[f32]) -> u64 {
+        let frames = rendered.len() / 2;
+        let left: Vec<f32> = rendered.iter().step_by(2).copied().collect();
+        let right: Vec<f32> = rendered.iter().skip(1).step_by(2).copied().collect();
+        engine.audio_pool.insert(
+            source.to_string(),
+            crate::AudioBuffer {
+                channels: vec![left, right],
+                sample_rate: SR,
+                num_frames: frames,
+            },
+        );
+        frames as u64
+    }
+
+    /// Place an interleaved render on a new track, as a bounce does, and
+    /// mute the original.
+    fn place_bounce(engine: &DawEngine, original: &str, rendered: &[f32]) {
+        let frames = pool_render(engine, "bounce", rendered);
+        let mut project = engine.project.lock();
+        let id = project.add_audio_track("Bounced".into());
+        let placed = clip("b", "bounce", frames, &id);
+        project.track_mut(&id).unwrap().clips.push(placed);
+        project.track_mut(original).unwrap().muted = true;
+    }
+
+    /// The loudest difference between two renders, away from the first and
+    /// last few milliseconds where each clip's own declick fades sit.
+    fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
+        let edge = (SR as usize / 50) * 2;
+        a.iter()
+            .zip(b)
+            .skip(edge)
+            .take(a.len().min(b.len()).saturating_sub(2 * edge))
+            .fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+    }
+
+    fn peak(s: &[f32]) -> f32 {
+        s.iter().fold(0.0f32, |m, &v| m.max(v.abs()))
+    }
+
+    /// A bounced part plays back as loud as the part it replaced. It came
+    /// back 3 dB down (the centred pan, once in the render and again on the
+    /// new track) and lower again by the master fader, which the render
+    /// went through and the new track plays through again.
+    #[test]
+    fn a_bounce_plays_back_as_loud_as_the_part_it_replaced() {
+        let (engine, id, len) = sine_song();
+        engine
+            .transport
+            .master_volume_db
+            .store(-6.0, std::sync::atomic::Ordering::Relaxed);
+        let heard = render(&engine, len, |_| {});
+        assert!(peak(&heard) > 0.1, "the song plays: {}", peak(&heard));
+
+        let bounced = render_for_a_track(&engine, &id, len, |_| {});
+        place_bounce(&engine, &id, &bounced);
+        let played = render(&engine, len, |_| {});
+        let diff = worst_difference(&heard, &played);
+        assert!(
+            diff < 1e-3,
+            "the bounce plays as the part did: worst difference {diff}, peaks {} and {}",
+            peak(&heard),
+            peak(&played)
         );
     }
 }
