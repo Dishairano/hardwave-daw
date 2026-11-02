@@ -191,6 +191,23 @@ function emptyTimeline(): TimelineState {
   return { markers: [], punch: { enabled: false, inTicks: null, outTicks: null }, folders: [] }
 }
 
+/**
+ * Read the markers back from the song after the engine moved them: insert
+ * or delete time, and a section moved or repeated, shift every marker after
+ * the edit in the song. The screen kept the old ones, and the next marker
+ * edit sent those back, so the shift was lost as well.
+ */
+export async function reloadTimelineState(): Promise<void> {
+  let json: string | null
+  try {
+    json = await invoke<string | null>('get_timeline_state')
+  } catch {
+    return
+  }
+  const state = parseTimelineState(json)
+  if (state) applyTimelineState(state)
+}
+
 export function resetTimelineState() {
   applyTimelineState(emptyTimeline())
   void pushTimelineState()

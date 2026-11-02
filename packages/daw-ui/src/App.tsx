@@ -90,7 +90,7 @@ const DevPanel = DEV_TOOLS
   ? React.lazy(() => import('./dev/DevPanel').then(m => ({ default: m.DevPanel })))
   : null
 import { useTransportStore } from './stores/transportStore'
-import { startTimelineSync } from './stores/timelineState'
+import { reloadTimelineState, startTimelineSync } from './stores/timelineState'
 import { useTrackStore } from './stores/trackStore'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import type { LayoutName, PanelKey } from './lib/workspaceLayout'
@@ -430,6 +430,7 @@ export function App() {
     try {
       const copied = await invoke<number>('duplicate_section', { id: chosen.id })
       useProjectStore.getState().markDirty()
+      await reloadTimelineState()
       await useTrackStore.getState().fetchTracks()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
       useNotificationStore.getState().push('info', `Repeated "${chosen.name}"`, {
@@ -517,6 +518,7 @@ export function App() {
     try {
       await invoke('move_section', { id: chosen.id, before: before ? before.id : null })
       useProjectStore.getState().markDirty()
+      await reloadTimelineState()
       await useTrackStore.getState().fetchTracks()
       window.dispatchEvent(new CustomEvent('daw:sectionsChanged'))
       useNotificationStore.getState().push('info', `Moved "${chosen.name}"`, {
@@ -538,6 +540,7 @@ export function App() {
     try {
       await invoke('insert_time', { atTicks: range.at, lengthTicks: range.length })
       useProjectStore.getState().markDirty()
+      await reloadTimelineState()
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info', 'Made room for the loop range')
     } catch (e) {
@@ -556,6 +559,7 @@ export function App() {
     try {
       await invoke('delete_time', { atTicks: range.at, lengthTicks: range.length })
       useProjectStore.getState().markDirty()
+      await reloadTimelineState()
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info', 'Removed the loop range', {
         detail: 'Clips that only overlapped the edge were moved, not cut.',
