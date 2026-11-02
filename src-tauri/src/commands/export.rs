@@ -1264,6 +1264,7 @@ pub async fn export_project_wav(
             _ => (0, body_samples),
         };
         let total_samples = body_len + tail_samples;
+        let range_end = (render_start + body_len < body_samples).then_some(render_start + body_len);
 
         let mut last_pct: i32 = -1;
         let app_for_progress = app.clone();
@@ -1288,7 +1289,11 @@ pub async fn export_project_wav(
                 }
             },
             false,
-            |_| {},
+            |proj: &mut Project| {
+                if let Some(end) = range_end {
+                    end_the_song_at(proj, end, sample_rate);
+                }
+            },
         )?;
         let completed = loudness.is_some();
 
@@ -1330,6 +1335,45 @@ fn sanitize_filename(name: &str) -> String {
         "track".into()
     } else {
         trimmed.to_string()
+    }
+}
+
+/// End the song at the end of an exported range, so the tail rendered after
+/// it is only what was still sounding there: a reverb, a delay, notes
+/// letting go. The tail used to play on into the song, so a loop exported
+/// with the usual two seconds of tail carried the first beats of the next
+/// bar. A clip running past the end is cut there, its notes let go there.
+fn end_the_song_at(proj: &mut Project, end_samples: u64, sample_rate: u32) {
+    use hardwave_project::clip::ClipContent;
+    let end = proj
+        .tempo_map
+        .samples_to_tick(end_samples, sample_rate as f64);
+    for t in proj.tracks.iter_mut() {
+        t.clips.retain(|c| c.position_ticks < end);
+        for c in t.clips.iter_mut() {
+            let keep = end - c.position_ticks;
+            if c.length_ticks <= keep {
+                continue;
+            }
+            match &mut c.content {
+                // A reversed clip plays from its end backwards, so a shorter
+                // one would play other audio inside the range. It rings on.
+                ClipContent::Audio(a) if a.reversed => continue,
+                // Cut with the clip's short declick rather than a fade-out
+                // that would now start inside the range.
+                ClipContent::Audio(a) => a.fade_out_ticks = 0,
+                // Notes drawn past a clip's end can still play, so the
+                // cut is made on the notes themselves.
+                ClipContent::Midi(m) => {
+                    m.clip.notes.retain(|n| n.start_tick < keep);
+                    for n in m.clip.notes.iter_mut() {
+                        n.duration_ticks = n.duration_ticks.min(keep - n.start_tick);
+                    }
+                    m.clip.controls.retain(|k| k.tick < keep);
+                }
+            }
+            c.length_ticks = keep;
+        }
     }
 }
 
@@ -1718,6 +1762,8 @@ pub async fn export_project_stems(
                 _ => (0, body_samples),
             };
             let total_samples = body_len + tail_samples;
+            let range_end =
+                (render_start + body_len < body_samples).then_some(render_start + body_len);
 
             let folder = PathBuf::from(&folder_path);
             fs::create_dir_all(&folder).map_err(|e| format!("create folder: {e}"))?;
@@ -1793,6 +1839,9 @@ pub async fn export_project_stems(
                                 t.muted = false;
                             }
                         }
+                        if let Some(end) = range_end {
+                            end_the_song_at(proj, end, sample_rate);
+                        }
                     },
                 )?;
 
@@ -1837,6 +1886,9 @@ pub async fn export_project_stems(
                     },
                     false,
                     |proj: &mut Project| {
+                        if let Some(end) = range_end {
+                            end_the_song_at(proj, end, sample_rate);
+                        }
                         if !respect_mute_solo {
                             for t in proj.tracks.iter_mut() {
                                 t.muted = false;
@@ -2450,6 +2502,70 @@ mod stem_and_freeze_tests {
             .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
         assert!(peak > 0.05, "the mix plays: {peak}");
         assert!(worst < 1e-3, "the stems add up to the mix: off by {worst}");
+    }
+
+    /// A range export ends the song where the range does, so its tail is
+    /// what was still sounding and not the next bar.
+    #[test]
+    fn a_range_export_s_tail_has_nothing_from_after_the_range() {
+        let mut p = Project::default();
+        let id = p.add_midi_track("Lead".into());
+        let bar = 4 * hardwave_midi::PPQ;
+        {
+            let t = p.track_mut(&id).unwrap();
+            let mut across = midi("across", &id);
+            across.length_ticks = 2 * bar;
+            if let ClipContent::Midi(m) = &mut across.content {
+                m.clip.length_ticks = 2 * bar;
+                for (start, len) in [(0, bar / 4), (bar - bar / 4, bar / 2), (bar + 10, 10)] {
+                    m.clip.notes.push(hardwave_midi::MidiNote {
+                        start_tick: start,
+                        duration_ticks: len,
+                        pitch: 60,
+                        velocity: 0.8,
+                        ..Default::default()
+                    });
+                }
+            }
+            t.clips.push(across);
+            let mut after = audio("after", "after", 100, &id);
+            after.position_ticks = bar;
+            t.clips.push(after);
+            let mut faded = audio("faded", "faded", 100, &id);
+            faded.length_ticks = 2 * bar;
+            if let ClipContent::Audio(a) = &mut faded.content {
+                a.fade_out_ticks = bar / 2;
+            }
+            t.clips.push(faded);
+        }
+        let end = p.tempo_map.tick_to_samples(bar, SR as f64);
+
+        super::end_the_song_at(&mut p, end, SR);
+
+        let t = p.track(&id).unwrap();
+        assert_eq!(t.clips.len(), 2, "the clip after the range is gone");
+        assert!(
+            t.clips.iter().all(|c| c.length_ticks == bar),
+            "cut at the end"
+        );
+        let ClipContent::Midi(m) = &t.clips[0].content else {
+            panic!("the MIDI clip first");
+        };
+        let notes: Vec<(u64, u64)> = m
+            .clip
+            .notes
+            .iter()
+            .map(|n| (n.start_tick, n.duration_ticks))
+            .collect();
+        assert_eq!(
+            notes,
+            [(0, bar / 4), (bar - bar / 4, bar / 4)],
+            "a note held over the end is let go there, one after it is gone"
+        );
+        let ClipContent::Audio(a) = &t.clips[1].content else {
+            panic!("the audio clip second");
+        };
+        assert_eq!(a.fade_out_ticks, 0, "no fade-out moved into the range");
     }
 
     /// A muted track, or one silenced by a solo elsewhere, renders as it
