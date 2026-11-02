@@ -59,6 +59,25 @@ pub fn feeds(tracks: &[crate::track::Track], from: &str, to: &str) -> bool {
     false
 }
 
+/// Solo one track alone (ctrl-click on Solo): it is soloed and no other
+/// is. On a track that is already the only one soloed it clears the solo,
+/// so the same click goes back. With several soloed, it used to clear them
+/// all, the one clicked included, instead of keeping just that one.
+pub fn solo_exclusively(tracks: &mut [crate::track::Track], id: &str) {
+    use crate::track::TrackKind;
+    let only_this = tracks.iter().any(|t| t.id == id && t.soloed)
+        && tracks
+            .iter()
+            .filter(|t| !matches!(t.kind, TrackKind::Master))
+            .all(|t| !t.soloed || t.id == id);
+    for t in tracks.iter_mut() {
+        if matches!(t.kind, TrackKind::Master) {
+            continue;
+        }
+        t.soloed = t.id == id && !only_this;
+    }
+}
+
 /// The tracks that stay audible while some are soloed, or None when none
 /// is. A soloed track is heard through everything its sound passes on its
 /// way out (its bus, that bus's bus, the tracks it sends to), and a soloed
@@ -169,6 +188,31 @@ mod tests {
         assert!(feeds(&tracks, "kick", "reverb"), "as a key, then onward");
         assert!(!feeds(&tracks, "reverb", "vox"));
         assert!(!feeds(&tracks, "lead", "bus"));
+    }
+
+    fn soloed(tracks: &[Track]) -> Vec<&str> {
+        tracks
+            .iter()
+            .filter(|t| t.soloed)
+            .map(|t| t.id.as_str())
+            .collect()
+    }
+
+    /// Ctrl-click on Solo with two tracks soloed keeps the one clicked and
+    /// clears the other; a second ctrl-click clears it too.
+    #[test]
+    fn solo_exclusively_keeps_only_the_track_clicked() {
+        let mut tracks = [
+            track("kick", None, true),
+            track("bass", None, true),
+            track("lead", None, false),
+        ];
+        solo_exclusively(&mut tracks, "kick");
+        assert_eq!(soloed(&tracks), vec!["kick"]);
+        solo_exclusively(&mut tracks, "lead");
+        assert_eq!(soloed(&tracks), vec!["lead"]);
+        solo_exclusively(&mut tracks, "lead");
+        assert!(soloed(&tracks).is_empty());
     }
 
     #[test]

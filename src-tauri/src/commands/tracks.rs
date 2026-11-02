@@ -1053,26 +1053,14 @@ pub fn delete_mixer_snapshot(state: State<AppState>, name: String) -> Result<(),
     Ok(())
 }
 
-/// Exclusive solo: solo only this track, unsolo all others./// Exclusive solo: solo only this track, unsolo all others.
+/// Exclusive solo: solo only this track, unsolo all others.
 #[tauri::command]
 pub fn set_exclusive_solo(state: State<AppState>, track_id: String) {
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
     {
         let mut project = engine.project.lock();
-        let target_currently_soloed = project.track(&track_id).map(|t| t.soloed).unwrap_or(false);
-
-        for track in &mut project.tracks {
-            if matches!(track.kind, hardwave_project::track::TrackKind::Master) {
-                continue;
-            }
-            if track.id == track_id {
-                // If already the only soloed track, unsolo it (toggle off).
-                track.soloed = !target_currently_soloed;
-            } else {
-                track.soloed = false;
-            }
-        }
+        hardwave_project::mixer::solo_exclusively(&mut project.tracks, &track_id);
     }
     engine.rebuild_graph();
 }
