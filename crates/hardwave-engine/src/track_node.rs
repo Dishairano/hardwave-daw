@@ -638,6 +638,9 @@ pub struct TrackNode {
     /// (see `AudioNode::set_mod_mix`).
     mod_gain: f32,
     mod_pan: f32,
+    /// Playing a freeze render, which already went through this track's
+    /// delay, swap, polarity, width and filter as well as its plug-ins.
+    frozen: bool,
 }
 
 const TRACK_DELAY_CAPACITY: usize = 4800; // 100 ms at 48 kHz, both directions
@@ -801,7 +804,15 @@ impl TrackNode {
             static_pan: 0.0,
             mod_gain: 1.0,
             mod_pan: 0.0,
+            frozen: false,
         }
+    }
+
+    /// Play a freeze render: the channel's delay, swap, polarity, width
+    /// and filter are already in it, so they are not run again. Its fader,
+    /// pan and sends still are.
+    pub fn set_frozen(&mut self, frozen: bool) {
+        self.frozen = frozen;
     }
 
     /// Configure the per-channel filter (see [`ChannelUtility::set_filter`]).
@@ -1472,14 +1483,16 @@ impl AudioNode for TrackNode {
         // --- Pre-fader utility chain: delay → swap → phase → stereo separation.
         // Order is deliberate: delay first so the shifted signal feeds the rest of
         // the chain, then L/R swap, then polarity flip, then M/S separation.
-
-        {
+        // A freeze render went through all of it, and through the filter
+        // below: run again, a flipped polarity flipped back and the filter
+        // cut twice as steep.
+        if !self.frozen {
             let (out_left, out_rest) = outputs.split_at_mut(1);
             self.utility
                 .process_pre(&mut out_left[0][..buf_size], &mut out_rest[0][..buf_size]);
         }
 
-        {
+        if !self.frozen {
             let start = self.width_applied;
             let end = self.stereo_separation;
             self.width_applied = end;
@@ -1494,7 +1507,7 @@ impl AudioNode for TrackNode {
 
         // Per-channel biquad filter stage. Applied pre-fader so metering and
         // sends see the filtered signal. `Off` skips the inner loop.
-        {
+        if !self.frozen {
             let (out_left, out_rest) = outputs.split_at_mut(1);
             self.utility
                 .process_filter(&mut out_left[0][..buf_size], &mut out_rest[0][..buf_size]);

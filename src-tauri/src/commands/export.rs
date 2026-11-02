@@ -64,8 +64,43 @@ fn isolate_track_for_render(
             t.sends.clear();
             t.volume_db = 0.0;
             t.pan = 0.0;
+            // The channel's delay, swap, polarity, width and filter, which
+            // the glued clip plays through on the track as well.
+            t.phase_invert = false;
+            t.swap_lr = false;
+            t.delay_samples = 0;
+            t.stereo_separation = 1.0;
+            t.filter_type = "off".into();
         }
     }
+}
+
+/// Narrow a freeze or consolidate render further, to the track before its
+/// fader. A frozen track, and a glued clip on its track, still play through
+/// the fader and pan, their automation, the track's VCA groups and anything
+/// modulating its level or pan; left in the render as well, they applied
+/// twice: a track at -6 dB came back at -12 dB, panned twice as far.
+fn leave_the_fader_out(proj: &mut Project, target: &str) {
+    use hardwave_project::automation::AutomationTarget;
+    use hardwave_project::modulation::ModTarget;
+    let mix = |t: &AutomationTarget| {
+        matches!(
+            t,
+            AutomationTarget::TrackVolume | AutomationTarget::TrackPan
+        )
+    };
+    if let Some(t) = proj.track_mut(target) {
+        t.volume_db = 0.0;
+        t.pan = 0.0;
+        t.automation_lanes.retain(|l| !mix(&l.target));
+        t.automation_clips.retain(|c| !mix(&c.target));
+    }
+    for vca in proj.vcas.iter_mut() {
+        vca.members.retain(|m| m != target);
+    }
+    proj.modulations.retain(|r| {
+        !(r.track_id == target && matches!(r.target, ModTarget::TrackVolume | ModTarget::TrackPan))
+    });
 }
 
 /// The ids of the plug-ins that make sound from notes, as the scanner knows
@@ -1290,7 +1325,8 @@ pub async fn consolidate_track_range(
                 // and fader and on to the master: the render has none of
                 // them, only the instrument that plays its notes.
                 move |proj: &mut Project| {
-                    isolate_track_for_render(proj, &target, false, &|id| instruments.contains(id))
+                    isolate_track_for_render(proj, &target, false, &|id| instruments.contains(id));
+                    leave_the_fader_out(proj, &target);
                 },
             )?;
             if !completed {
@@ -1774,8 +1810,12 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
             |_, _| {},
             true,
             // Through its own effects, which rest while it is frozen, and
-            // not through its bus or the master, which it still plays into.
-            move |proj: &mut Project| isolate_track_for_render(proj, &target, true, &|_| true),
+            // not through its fader, its bus or the master, which it still
+            // plays through.
+            move |proj: &mut Project| {
+                isolate_track_for_render(proj, &target, true, &|_| true);
+                leave_the_fader_out(proj, &target);
+            },
         )?;
         if !completed {
             let _ = fs::remove_file(&out_path);
@@ -1895,11 +1935,31 @@ mod isolate_tests {
     #[test]
     fn a_consolidate_keeps_only_the_instrument_and_plays_straight_into_a_bare_master() {
         let (mut p, id) = song();
+        {
+            let t = p.track_mut(&id).expect("the kick");
+            t.phase_invert = true;
+            t.swap_lr = true;
+            t.delay_samples = 64;
+            t.stereo_separation = 0.5;
+            t.filter_type = "lp".into();
+        }
         isolate_track_for_render(&mut p, &id, false, &|pid| pid.starts_with("synth."));
+        super::leave_the_fader_out(&mut p, &id);
         let t = p.track(&id).expect("the kick");
         let kept: Vec<&str> = t.inserts.iter().map(|s| s.plugin_id.as_str()).collect();
         assert_eq!(kept, ["synth.kick"]);
         assert_eq!((t.volume_db, t.pan, t.output_bus.clone()), (0.0, 0.0, None));
+        assert_eq!(
+            (
+                t.phase_invert,
+                t.swap_lr,
+                t.delay_samples,
+                t.stereo_separation,
+                t.filter_type.as_str()
+            ),
+            (false, false, 0, 1.0, "off"),
+            "the glued clip plays through the channel's own settings on the track"
+        );
         assert!(!t.stem_excluded);
         assert!(master(&p).inserts.is_empty());
         assert_eq!(master(&p).volume_db, 0.0);
@@ -1923,6 +1983,73 @@ mod isolate_tests {
             (-6.0, 0.3, None)
         );
         assert!(master(&p).inserts.is_empty());
+    }
+
+    #[test]
+    fn a_freeze_keeps_the_effects_and_leaves_the_fader_and_pan_to_the_frozen_track() {
+        use hardwave_project::automation::{AutomationLane, AutomationTarget};
+        use hardwave_project::modulation::{ModRoute, ModSource, ModTarget};
+        use hardwave_project::vca::Vca;
+        let (mut p, id) = song();
+        let lane = |target: AutomationTarget| AutomationLane {
+            id: format!("{target:?}"),
+            target,
+            points: Vec::new(),
+            visible: true,
+        };
+        let t = p.track_mut(&id).expect("the kick");
+        t.automation_lanes = vec![
+            lane(AutomationTarget::TrackVolume),
+            lane(AutomationTarget::TrackPan),
+            lane(AutomationTarget::TrackMute),
+            lane(AutomationTarget::PluginParam {
+                slot_id: "fx.eq".into(),
+                param_id: 0,
+            }),
+        ];
+        let mut group = Vca::new("v".into(), "Drums".into());
+        group.gain_db = -4.0;
+        group.members = vec![id.clone(), "insert-002".into()];
+        p.vcas.push(group);
+        let route = |target: ModTarget| ModRoute {
+            id: "r".into(),
+            name: "r".into(),
+            enabled: true,
+            source: ModSource::MidiCc { cc: 1 },
+            track_id: id.clone(),
+            target,
+            center: 0.5,
+            depth: 0.5,
+        };
+        p.modulations = vec![
+            route(ModTarget::TrackVolume),
+            route(ModTarget::PluginParam {
+                slot_id: "fx.eq".into(),
+                param_id: 0,
+            }),
+        ];
+
+        isolate_track_for_render(&mut p, &id, true, &|_| false);
+        super::leave_the_fader_out(&mut p, &id);
+
+        let t = p.track(&id).expect("the kick");
+        assert_eq!(t.inserts.len(), 2, "the effects are in the render");
+        assert_eq!((t.volume_db, t.pan), (0.0, 0.0));
+        let lanes: Vec<&str> = t.automation_lanes.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(
+            lanes,
+            [
+                "TrackMute",
+                "PluginParam { slot_id: \"fx.eq\", param_id: 0 }"
+            ],
+            "the plug-in's automation stays in the render, the fader's and pan's do not"
+        );
+        assert_eq!(p.vcas[0].members, ["insert-002".to_string()]);
+        assert_eq!(p.modulations.len(), 1);
+        assert!(matches!(
+            p.modulations[0].target,
+            ModTarget::PluginParam { .. }
+        ));
     }
 }
 
