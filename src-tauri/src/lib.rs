@@ -327,6 +327,9 @@ pub fn run() {
         control_surface: {
             let surface = crate::control_surface::ControlSurface::new();
             surface.set_protocol(prefs.control_surface_protocol);
+            // No input is open yet; the dispatcher finds a desk by its
+            // name once one is.
+            surface.set_desk_input(prefs.control_surface_input.clone(), &[]);
             surface.enabled.store(
                 prefs.control_surface_enabled,
                 std::sync::atomic::Ordering::Relaxed,
@@ -472,6 +475,7 @@ pub fn run() {
             commands::midi_input::set_control_surface_enabled,
             commands::midi_input::set_control_surface_bank,
             commands::midi_input::set_control_surface_protocol,
+            commands::midi_input::set_control_surface_input,
             commands::history::get_undo_history,
             commands::history::label_undo_step,
             commands::history::clear_undo_history,
@@ -912,14 +916,15 @@ pub fn run() {
             // mapped values to the live engine state. Also handles learn-mode
             // capture in the same loop so there's no race with the main
             // meter/transport broadcast thread.
-            // While a control surface is on, what it reads (its buttons are
-            // notes, its faders pitch bends) goes to it alone, not to an armed
-            // instrument as well.
+            // While a control surface is on, what it reads from the desk's
+            // input (its buttons are notes, its faders pitch bends) goes to
+            // it alone, not to an armed instrument as well. Every other
+            // input plays as it always did.
             {
                 let surface = Arc::clone(&state.control_surface);
                 state.midi_input.lock().set_claim(Some(Arc::new(
-                    move |event: &hardwave_midi::MidiEvent| {
-                        surface.is_enabled() && control_surface::claims(surface.protocol(), event)
+                    move |port: &str, event: &hardwave_midi::MidiEvent| {
+                        surface.claims_from(port, event)
                     },
                 )));
             }

@@ -17,7 +17,7 @@ pub use generators::{
     note_repeat, snap_to_scale, strum, ArpDirection, ArpSettings, HumanizeSettings, Scale,
     StrumDirection,
 };
-pub use input::{ClockSyncSnapshot, MidiInputManager, ReconcileReport};
+pub use input::{ClockSyncSnapshot, ControlEvent, MidiInputManager, ReconcileReport};
 pub use osc::{OscArg, OscError, OscMessage};
 pub use output::{MidiOutputManager, MIDI_CLOCK_TICK, MIDI_CONTINUE, MIDI_START, MIDI_STOP};
 pub use recording::{
