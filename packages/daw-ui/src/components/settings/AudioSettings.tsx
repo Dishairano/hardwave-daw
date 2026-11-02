@@ -18,6 +18,10 @@ import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
 import { useSetupWizardStore } from '../../stores/setupWizardStore'
 import { usePluginStore } from '../../stores/pluginStore'
+import {
+  deskInputOptions, PROTOCOL_OPTIONS, SURFACE_CAPTIONS, SURFACE_OFF,
+  type ControlSurfaceStatus, type DeskProtocol,
+} from './controlSurface'
 
 interface AudioDevice {
   name: string
@@ -156,10 +160,14 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   // Which pair of a multi-channel interface is used. Zero is the first
   // pair, which is what every interface calls its main in and out.
   const [inputOffset, setInputOffset] = useState(0)
-  // A control surface, if one is being listened to.
-  const [surface, setSurface] = useState<{ enabled: boolean; bank: number; bankCount: number }>({
-    enabled: false, bank: 0, bankCount: 1,
-  })
+  // A control surface, if one is being listened to: its protocol, and
+  // which MIDI input is the desk.
+  const [surface, setSurface] = useState<ControlSurfaceStatus>(SURFACE_OFF)
+  const refreshSurface = () => {
+    invoke<Partial<ControlSurfaceStatus>>('get_control_surface')
+      .then(s => setSurface(prev => ({ ...prev, ...s })))
+      .catch(() => { /* older build or no engine */ })
+  }
   // How many threads share the audio work.
   const [workers, setWorkers] = useState<{ threads: number; suggested: number; cores: number }>({
     threads: 0, suggested: 0, cores: 1,
@@ -236,9 +244,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       invoke<{ threads: number; suggested: number; cores: number }>('get_worker_threads')
         .then(setWorkers)
         .catch(() => { /* older build or no engine */ })
-      invoke<{ enabled: boolean; bank: number; bankCount: number }>('get_control_surface')
-        .then(setSurface)
-        .catch(() => { /* older build or no engine */ })
+      refreshSurface()
       invoke<{ input: number; output: number }>('get_channel_offsets')
         .then(o => { setInputOffset(o.input); setOutputOffset(o.output) })
         .catch(() => { /* older build or no engine */ })
@@ -373,6 +379,8 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
         await useSetupWizardStore.getState().setMidiInputEnabled(port, true)
         setMidiOpen(list => [...list, port])
       }
+      // A desk opened with no input chosen is found by its name.
+      refreshSurface()
     } catch (e: any) {
       setError(String(e))
     }
@@ -1004,9 +1012,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
             </SettingRow>
 
             {/* A desk speaks a fixed language rather than whatever a
-                knob was learned to, so it is a switch, not a mapping. */}
+                knob was learned to, so it is a switch, not a mapping.
+                With it on: which language, and which MIDI input is the
+                desk, so a keyboard beside it keeps its notes. */}
             <SettingRow label="Control surface">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <button
                   onClick={() => {
                     const next = !surface.enabled
@@ -1022,23 +1032,50 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   }}
                 >{surface.enabled ? tr('On') : tr('Off')}</button>
                 {surface.enabled && (
-                  <Select
-                    value={String(surface.bank)}
-                    onChange={v => {
-                      const bank = Number(v)
-                      setSurface(s => ({ ...s, bank }))
-                      invoke('set_control_surface_bank', { bank }).catch(() => {})
-                    }}
-                    options={Array.from({ length: Math.max(1, surface.bankCount) }, (_, i) => ({
-                      value: String(i),
-                      label: `${tr('Tracks')} ${i * 8 + 1}-${i * 8 + 8}`,
-                    }))}
-                  />
+                  <>
+                    <Select
+                      width={170}
+                      ariaLabel={tr('Desk protocol')}
+                      value={surface.protocol}
+                      onChange={v => {
+                        const protocol = v as DeskProtocol
+                        setSurface(s => ({ ...s, protocol }))
+                        invoke('set_control_surface_protocol', { protocol }).catch(() => {})
+                      }}
+                      options={PROTOCOL_OPTIONS}
+                    />
+                    <Select
+                      width={170}
+                      ariaLabel={tr('Desk input')}
+                      value={surface.input ?? ''}
+                      onChange={v => {
+                        const input = v === '' ? null : v
+                        setSurface(s => ({ ...s, input, found: false }))
+                        invoke('set_control_surface_input', { input })
+                          .then(refreshSurface)
+                          .catch(() => {})
+                      }}
+                      options={deskInputOptions(midiOpen, surface.input, surface.found)}
+                    />
+                    <Select
+                      width={170}
+                      value={String(surface.bank)}
+                      onChange={v => {
+                        const bank = Number(v)
+                        setSurface(s => ({ ...s, bank }))
+                        invoke('set_control_surface_bank', { bank }).catch(() => {})
+                      }}
+                      options={Array.from({ length: Math.max(1, surface.bankCount) }, (_, i) => ({
+                        value: String(i),
+                        label: `${tr('Tracks')} ${i * 8 + 1}-${i * 8 + 8}`,
+                      }))}
+                    />
+                  </>
                 )}
               </div>
             </SettingRow>
-            <div style={{ fontSize: 10, color: hw.textFaint, margin: '-4px 0 12px' }}>
-              {tr('Mackie Control (MCU): eight faders with mute, solo and arm, the V-pots for pan, the transport keys, and bank left and right. The motor faders, lights, LED rings and scribble strips (name and level) follow the mix.')}
+            <div data-testid="surface-caption" style={{ fontSize: 10, color: hw.textFaint, margin: '-4px 0 12px' }}>
+              {tr(SURFACE_CAPTIONS[surface.protocol] ?? SURFACE_CAPTIONS.mackie)}
             </div>
 
             {/* MIDI Inputs */}
@@ -1741,17 +1778,20 @@ function SettingRow({ label, children }: { label: string; children: React.ReactN
   )
 }
 
-function Select({ value, onChange, options }: {
+function Select({ value, onChange, options, width = 260, ariaLabel }: {
   value: string
   onChange: (v: string) => void
   options: { value: string; label: string }[]
+  width?: number
+  ariaLabel?: string
 }) {
   return (
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
+      aria-label={ariaLabel}
       style={{
-        width: 260, padding: '5px 8px',
+        width, padding: '5px 8px',
         background: hw.bgInput, color: hw.textPrimary,
         border: `1px solid ${hw.border}`, borderRadius: hw.radius.sm,
         fontSize: 12, fontFamily: 'inherit', outline: 'none',
