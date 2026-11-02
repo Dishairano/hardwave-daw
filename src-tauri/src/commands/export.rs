@@ -110,6 +110,34 @@ fn leave_the_fader_out(proj: &mut Project, target: &str) {
     });
 }
 
+/// Whether a clip lies wholly inside a consolidated range: the clips the
+/// glued clip is made of and replaces.
+fn inside_range(
+    clip: &hardwave_project::clip::ClipPlacement,
+    start_ticks: u64,
+    end_ticks: u64,
+) -> bool {
+    clip.position_ticks >= start_ticks && clip.position_ticks + clip.length_ticks <= end_ticks
+}
+
+/// Narrow a consolidate render to what the glued clip replaces: the track's
+/// clips inside the range, before its effects and fader. A clip across an
+/// edge of the range stays where it is, and it was rendered into the glued
+/// clip as well, so the part of it inside the range played twice.
+fn prepare_consolidate_render(
+    proj: &mut Project,
+    target: &str,
+    start_ticks: u64,
+    end_ticks: u64,
+    is_instrument: &dyn Fn(&str) -> bool,
+) {
+    isolate_track_for_render(proj, target, false, is_instrument);
+    leave_the_fader_out(proj, target);
+    if let Some(t) = proj.track_mut(target) {
+        t.clips.retain(|c| inside_range(c, start_ticks, end_ticks));
+    }
+}
+
 /// The ids of the plug-ins that make sound from notes, as the scanner knows
 /// them: what a consolidated pattern clip keeps.
 fn instrument_ids(engine: &DawEngine) -> std::collections::HashSet<String> {
@@ -1597,8 +1625,9 @@ pub async fn consolidate_track_range(
                 // and fader and on to the master: the render has none of
                 // them, only the instrument that plays its notes.
                 move |proj: &mut Project| {
-                    isolate_track_for_render(proj, &target, false, &|id| instruments.contains(id));
-                    leave_the_fader_out(proj, &target);
+                    prepare_consolidate_render(proj, &target, start_ticks, end_ticks, &|id| {
+                        instruments.contains(id)
+                    });
                 },
             )?;
             if !completed {
@@ -1636,11 +1665,11 @@ fn place_consolidated(
         let mut project = engine.project.lock();
         if let Some(track) = project.track_mut(track_id) {
             // Only what lies inside the range goes: a clip that merely
-            // overlaps the edge is left alone rather than silently cut.
-            track.clips.retain(|c| {
-                let clip_end = c.position_ticks + c.length_ticks;
-                !(c.position_ticks >= start_ticks && clip_end <= end_ticks)
-            });
+            // overlaps the edge is left alone rather than silently cut, and
+            // left out of the render.
+            track
+                .clips
+                .retain(|c| !inside_range(c, start_ticks, end_ticks));
         }
     }
     let clip = crate::commands::audio::place_audio_file(
@@ -2906,6 +2935,35 @@ mod placing_tests {
                 ClipContent::Midi(m) => m.id.clone(),
             })
             .collect()
+    }
+
+    /// A consolidate renders only the clips it replaces. A clip across an
+    /// edge of the range stays in place and was rendered into the glued
+    /// clip too, so its part inside the range was heard twice.
+    #[test]
+    fn a_consolidate_renders_only_the_clips_it_replaces() {
+        let mut p = hardwave_project::Project::default();
+        let id = p.add_audio_track("Vox".into());
+        {
+            let t = p.track_mut(&id).unwrap();
+            t.clips.push(clip("inside", &id, 960, 960));
+            t.clips.push(clip("across the start", &id, 480, 960));
+            t.clips.push(clip("across the end", &id, 1440, 960));
+            t.clips.push(clip("after", &id, 3000, 960));
+        }
+        let mut render = p.clone();
+        super::prepare_consolidate_render(&mut render, &id, 960, 1920, &|_| false);
+        let rendered: Vec<&str> = render
+            .track(&id)
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Audio(a) => a.id.as_str(),
+                ClipContent::Midi(m) => m.id.as_str(),
+            })
+            .collect();
+        assert_eq!(rendered, ["inside"], "only what the glued clip replaces");
     }
 
     /// Bouncing, freezing and consolidating are one undo step each. Each
