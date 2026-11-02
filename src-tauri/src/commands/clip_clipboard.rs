@@ -30,8 +30,8 @@ pub struct PasteOutcome {
     /// Ids of the new clips, to select them.
     pub pasted: Vec<String>,
     /// Clips that had no fitting track there: an audio clip goes on an
-    /// audio track, a MIDI clip on a MIDI track, and nothing goes past the
-    /// last track.
+    /// audio track or a MIDI channel, a MIDI clip on a MIDI channel, and
+    /// nothing goes past the last track.
     pub skipped: usize,
 }
 
@@ -69,13 +69,6 @@ fn copy_from(project: &Project, clip_ids: &[String]) -> Vec<Copied> {
     out
 }
 
-fn fits(kind: &TrackKind, content: &ClipContent) -> bool {
-    match content {
-        ClipContent::Audio(_) => matches!(kind, TrackKind::Audio),
-        ClipContent::Midi(_) => matches!(kind, TrackKind::Midi),
-    }
-}
-
 /// Put copies of `copied` into the song: the earliest at `position_ticks`
 /// and the rest as far after it as they were, the top one on
 /// `target_track_id` (or on its own track when there is none) and the rest
@@ -106,7 +99,7 @@ fn paste_into(
             continue;
         };
         let track = &mut project.tracks[index];
-        if !fits(&track.kind, &c.placement.content) {
+        if !track.kind.holds(&c.placement.content) {
             outcome.skipped += 1;
             continue;
         }
@@ -332,6 +325,29 @@ mod tests {
         );
         let copied = copy_from(&p, &["a".into(), "b".into()]);
         let out = paste_into(&mut p, &copied, Some(&ids[3]), 0, counter());
-        assert_eq!(out.skipped, 2, "a MIDI track, then nothing below it");
+        assert_eq!(out.pasted.len(), 1, "audio onto the MIDI channel");
+        assert_eq!(out.skipped, 1, "and nothing below it");
+    }
+
+    #[test]
+    fn an_audio_clip_on_a_midi_channel_pastes_back_onto_it() {
+        // A consolidated part or a sample dropped on a channel is an audio
+        // clip on a MIDI track, and the engine plays it there. Copy and
+        // paste skipped it, as if a channel could not hold audio.
+        let (mut p, ids) = song();
+        p.track_mut(&ids[3])
+            .unwrap()
+            .clips
+            .push(audio("part", 3840));
+        let copied = copy_from(&p, &["part".into()]);
+        let out = paste_into(&mut p, &copied, None, 7680, counter());
+        assert_eq!(
+            out,
+            PasteOutcome {
+                pasted: vec!["new-1".into()],
+                skipped: 0
+            }
+        );
+        assert_eq!(clips_on(&p, &ids[3]).last(), Some(&("new-1".into(), 7680)));
     }
 }
