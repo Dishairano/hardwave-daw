@@ -614,7 +614,7 @@ impl Project {
     /// room on its own (`song_section`): sent as one, a marker moved on
     /// one side and a tempo changed on the other at the same moment
     /// overwrote each other, and both sides kept a different song.
-    pub const SONG_SECTIONS: [&'static str; 7] = [
+    pub const SONG_SECTIONS: [&'static str; 9] = [
         "tempo",
         "rack",
         "timeline",
@@ -622,7 +622,65 @@ impl Project {
         "macros",
         "vcas",
         "modulations",
+        "rows",
+        "rack_groups",
     ];
+
+    /// Not a part of the song: each side of a room sends its project format
+    /// under this name on joining, so two builds that would drop each
+    /// other's fields do not work on one song. It travels as a song part
+    /// so the room service, which only passes parts on, needs no change.
+    pub const FORMAT_SECTION: &'static str = "format";
+
+    /// What this build sends as `FORMAT_SECTION`.
+    pub fn format_section() -> Vec<u8> {
+        rmp_serde::to_vec(&FORMAT_VERSION).unwrap_or_default()
+    }
+
+    /// The format another build sent as `FORMAT_SECTION`.
+    pub fn read_format_section(blob: &[u8]) -> Option<u32> {
+        rmp_serde::from_slice(blob).ok()
+    }
+
+    /// Whether a track a room sent came from a build that keeps where
+    /// things show in FL's three lists (format 3 on). A build from before
+    /// them writes a track without its mixer number; taking its tracks
+    /// would lose every clip's row on this side.
+    pub fn track_blob_knows_layout(blob: &[u8]) -> bool {
+        #[derive(Deserialize)]
+        struct Probe {
+            #[serde(default)]
+            mixer_number: Present,
+        }
+        rmp_serde::from_slice::<Probe>(blob).is_ok_and(|p| p.mixer_number.0)
+    }
+
+    /// The arrangements part from a build that keeps rows (format 3 on):
+    /// each arrangement carries its rows. True when there is none to say.
+    pub fn arrangements_section_knows_layout(blob: &[u8]) -> bool {
+        #[derive(Deserialize)]
+        struct One {
+            #[serde(default)]
+            rows: Present,
+        }
+        #[derive(Deserialize)]
+        struct Probe {
+            arrangements: Vec<One>,
+        }
+        rmp_serde::from_slice::<Probe>(blob).is_ok_and(|p| p.arrangements.iter().all(|a| a.rows.0))
+    }
+
+    /// This track as a build from before format 3 sent it to a room: none
+    /// of the fields FL's three lists added. For tests.
+    #[doc(hidden)]
+    pub fn older_track_blob(track: &crate::track::Track) -> Vec<u8> {
+        let mut value = serde_json::to_value(track).unwrap_or_default();
+        if let Some(map) = value.as_object_mut() {
+            map.remove("mixer_number");
+            map.remove("rack_group");
+        }
+        rmp_serde::to_vec_named(&value).unwrap_or_default()
+    }
 
     /// One part of the song (see `SONG_SECTIONS`) as bytes for a room:
     /// MessagePack with field names. None for a name that is not one.
@@ -643,6 +701,8 @@ impl Project {
             "macros" => rmp_serde::to_vec_named(&self.macros),
             "vcas" => rmp_serde::to_vec_named(&self.vcas),
             "modulations" => rmp_serde::to_vec_named(&self.modulations),
+            "rows" => rmp_serde::to_vec_named(&self.rows),
+            "rack_groups" => rmp_serde::to_vec_named(&self.rack_groups),
             _ => return None,
         };
         Some(bytes.unwrap_or_default())
@@ -677,6 +737,21 @@ impl Project {
             "macros" => self.macros = rmp_serde::from_slice(blob).map_err(err)?,
             "vcas" => self.vcas = rmp_serde::from_slice(blob).map_err(err)?,
             "modulations" => self.modulations = rmp_serde::from_slice(blob).map_err(err)?,
+            "rows" => {
+                let rows: Vec<crate::layout::PlaylistRow> =
+                    rmp_serde::from_slice(blob).map_err(err)?;
+                if rows.len() > crate::sanitize::MAX_ROWS {
+                    return Err("more playlist rows than any song has".into());
+                }
+                self.rows = rows;
+            }
+            "rack_groups" => {
+                let groups: Vec<String> = rmp_serde::from_slice(blob).map_err(err)?;
+                if groups.len() > crate::sanitize::MAX_RACK_GROUPS {
+                    return Err("more channel rack groups than any song has".into());
+                }
+                self.rack_groups = groups;
+            }
             _ => return Err(format!("not a part of the song: {name}")),
         }
         Ok(())
@@ -896,6 +971,18 @@ impl Project {
     }
 }
 
+/// A field that is in a map, whatever its value: tells a build that
+/// writes it from one that does not.
+#[derive(Default)]
+struct Present(bool);
+
+impl<'de> Deserialize<'de> for Present {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(d)?;
+        Ok(Present(true))
+    }
+}
+
 /// The largest .hwp opened at all.
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 /// The most a project may expand to when it is unpacked. A few
@@ -986,6 +1073,74 @@ mod tests {
         assert!(theirs.track(&t).is_some(), "their tracks stay");
         assert!(theirs.put_song_section("tempo", b"nonsense").is_err());
         assert!(theirs.put_song_section("tracks", b"").is_err());
+    }
+
+    /// The playlist rows and the rack groups go to the other side as parts
+    /// of their own, and an arrangement's rows go with it.
+    #[test]
+    fn rows_and_rack_groups_go_to_a_room_as_parts_of_the_song() {
+        let mut ours = Project::default();
+        ours.rows[3].name = "Drums".into();
+        ours.rows[3].muted = true;
+        ours.rack_groups.push("Audio".into());
+        ours.ensure_arrangements();
+        let mut theirs = Project::default();
+        for name in ["rows", "rack_groups", "arrangements"] {
+            let blob = ours.song_section(name).unwrap();
+            theirs.put_song_section(name, &blob).unwrap();
+        }
+        assert_eq!(theirs.rows[3].name, "Drums");
+        assert!(theirs.rows[3].muted);
+        assert_eq!(theirs.rack_groups, ["Unsorted", "Audio"]);
+        assert_eq!(theirs.arrangements[0].rows[3].name, "Drums");
+        assert!(Project::arrangements_section_knows_layout(
+            &ours.song_section("arrangements").unwrap()
+        ));
+        let too_many = vec![crate::layout::PlaylistRow::default(); crate::sanitize::MAX_ROWS + 1];
+        assert!(theirs
+            .put_song_section("rows", &rmp_serde::to_vec_named(&too_many).unwrap())
+            .is_err());
+        assert_eq!(theirs.rows[3].name, "Drums", "kept what it had");
+    }
+
+    /// Each side says its project format; a track from a build that does
+    /// not keep the three lists' fields is told apart from one that does.
+    #[test]
+    fn a_room_partner_from_before_the_three_lists_is_recognised() {
+        assert_eq!(
+            Project::read_format_section(&Project::format_section()),
+            Some(FORMAT_VERSION)
+        );
+        assert_eq!(Project::read_format_section(b"\xc0"), None);
+        let track = Track::new_audio("a".into(), "A".into());
+        assert!(Project::track_blob_knows_layout(&Project::track_blob(
+            &track
+        )));
+        let older = Project::older_track_blob(&track);
+        assert!(!Project::track_blob_knows_layout(&older));
+        // The older track still reads, with nothing where the fields are.
+        let back: Track = rmp_serde::from_slice(&older).unwrap();
+        assert_eq!(back.mixer_number, None);
+        // An arrangements part from before rows were kept.
+        #[derive(Serialize)]
+        struct OldArrangement {
+            id: String,
+            name: String,
+        }
+        #[derive(Serialize)]
+        struct OldPart {
+            arrangements: Vec<OldArrangement>,
+            active_arrangement: String,
+        }
+        let old = rmp_serde::to_vec_named(&OldPart {
+            arrangements: vec![OldArrangement {
+                id: "a".into(),
+                name: "A".into(),
+            }],
+            active_arrangement: "a".into(),
+        })
+        .unwrap();
+        assert!(!Project::arrangements_section_knows_layout(&old));
     }
 
     /// A room partner cannot stop the transport with a tempo of 0 or NaN.
