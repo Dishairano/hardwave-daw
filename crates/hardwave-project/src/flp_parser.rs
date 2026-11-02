@@ -88,9 +88,12 @@ const CH_FADE_OUT: u8 = WORD + 11; // 75
 const CH_FADE_IN: u8 = WORD + 12; // 76
 const CH_ROOT_NOTE: u8 = DWORD + 7; // 135
 /// The sample settings block: polarity at byte 81, then from byte 96 the
-/// time stretching section (TIME as a float in the file's ticks, PITCH in
-/// cents, MUL as a power of two in ten-thousandths, the mode).
+/// time stretching section (TIME, PITCH in cents, MUL as a power of two in
+/// ten-thousandths, the mode).
 const CH_PARAMETERS: u8 = TEXT + 23; // 215
+/// FL counts the TIME knob at 192 a beat (768 a bar), whatever resolution
+/// the file itself is saved at.
+const STRETCH_TIME_PER_BEAT: f64 = 192.0;
 /// Pan, volume and pitch, four bytes each.
 const CH_LEVELS: u8 = TEXT + 27; // 219
 /// The arrangement starts: no channel event comes after it, while the
@@ -314,8 +317,6 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
 
     let mut current_channel: Option<usize> = None;
     let mut current_track: Option<u32> = None;
-    // Stretch times are floats in the file's ticks.
-    let scale_f = |ticks: f64| -> f64 { ticks * hardwave_midi::PPQ as f64 / ppq as f64 };
     // Playlist items naming a channel. Made into clips at the end, once
     // every channel's kind and sample is known.
     let mut channel_items: Vec<ChannelItem> = Vec::new();
@@ -520,7 +521,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
             | CH_PARAMETERS | CH_LEVELS | CH_PING_PONG | CH_CUT_GROUP | CH_SAMPLER_FLAGS
             | CH_ENVELOPE | CH_POLYPHONY => {
                 if let Some(channel) = current_channel.and_then(|i| project.channels.get_mut(i)) {
-                    read_channel_setting(&mut channel.settings, event.id, event.data, &scale_f);
+                    read_channel_setting(&mut channel.settings, event.id, event.data);
                 }
             }
             PLUGIN_DATA => {
@@ -944,12 +945,7 @@ struct ChannelItem {
 }
 
 /// One of a channel's settings events, read into its settings.
-fn read_channel_setting(
-    settings: &mut FlChannelSettings,
-    id: u8,
-    data: &[u8],
-    scale: &dyn Fn(f64) -> f64,
-) {
+fn read_channel_setting(settings: &mut FlChannelSettings, id: u8, data: &[u8]) {
     let byte = data.first().copied().unwrap_or(0);
     match id {
         CH_ENABLED => settings.enabled = byte != 0,
@@ -1022,9 +1018,12 @@ fn read_channel_setting(
             sampler.start = log_normal(133);
             sampler.length = log_normal(141);
             if data.len() >= 112 {
+                // At FL's own 192 a beat, not the file's resolution: read
+                // as the file's 96, a sample set to last four bars lasted
+                // eight, and played at half speed.
                 let time = f32_at(data, 96) as f64;
                 settings.stretch.time_ticks = if time.is_finite() && time > 0.0 {
-                    scale(time)
+                    time * hardwave_midi::PPQ as f64 / STRETCH_TIME_PER_BEAT
                 } else {
                     0.0
                 };
@@ -1663,11 +1662,38 @@ mod tests {
         assert_eq!(s.mixer_insert, 16);
         assert_eq!((s.pan, s.volume, s.pitch_cents), (9_600, 7_456, -250));
         assert_eq!(s.root_note, 72);
-        // Two bars at FL's 96 a beat, in our ticks.
-        assert_eq!(s.stretch.time_ticks, 8.0 * hardwave_midi::PPQ as f64);
+        // A bar at FL's 192 a beat, in our ticks.
+        assert_eq!(s.stretch.time_ticks, 4.0 * hardwave_midi::PPQ as f64);
         assert_eq!(s.stretch.pitch_cents, 224);
         assert_eq!(s.stretch.multiplier, 2.0);
         assert!(!s.stretch.is_resample());
+    }
+
+    /// From a real FL 26 project saved at 96 a beat: a 126 BPM kick loop of
+    /// 9.02 seconds set to last 16 beats of the song at 130 BPM (7.38 s).
+    /// FL writes TIME as 3072.0, which is 16 beats at 192 a beat; read at
+    /// the file's 96 it was 32 beats, and the loop played at half speed.
+    #[test]
+    fn the_time_knob_counts_at_fl_s_own_192_a_beat_whatever_the_file_s_resolution() {
+        for ppq in [96u16, 960] {
+            let mut writer = Writer::new();
+            writer.event(CH_NEW, &0u16.to_le_bytes());
+            writer.event(CH_TYPE, &[4]);
+            let mut params = vec![0u8; 168];
+            params[96..112].copy_from_slice(&[
+                0x00, 0x00, 0x40, 0x45, 0, 0, 0, 0, 0, 0, 0, 0, 0x05, 0, 0, 0,
+            ]);
+            writer.event(CH_PARAMETERS, &params);
+
+            let project = parse(&writer.finish(ppq)).expect("it should read");
+            let stretch = project.channels[0].settings.stretch;
+            assert_eq!(
+                stretch.time_ticks,
+                16.0 * hardwave_midi::PPQ as f64,
+                "16 beats in a file at {ppq} a beat"
+            );
+            assert_eq!(stretch.mode, 5);
+        }
     }
 
     #[test]
