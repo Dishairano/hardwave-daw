@@ -1,3 +1,4 @@
+pub mod account;
 pub mod arrangements;
 pub mod audio;
 pub mod automation;
