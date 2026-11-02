@@ -1,6 +1,7 @@
 use crate::AppState;
+use hardwave_project::Project;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 
@@ -24,6 +25,29 @@ pub struct AutosaveInfo {
     modified_unix: u64,
 }
 
+/// The song as an auto-save writes it: what Save would write, with every
+/// sample the song names relative to its own folder (`song_dir`) written
+/// as a full path.
+///
+/// The auto-save used to be the bare song model. Plug-in settings and MIDI
+/// Learn only reach the model when the song is saved, so a song recovered
+/// after a crash came back with every synth and effect as it was at the
+/// last Save. And an auto-save lives in the app's cache folder, where a
+/// collected song's "Song Samples/kick.wav" points at nothing, so its
+/// samples all came back missing.
+fn autosave_copy(
+    project: &Project,
+    live: crate::commands::project::LiveState,
+    song_dir: Option<&Path>,
+) -> Project {
+    let mut copy = project.clone();
+    live.write_into(&mut copy);
+    if let Some(dir) = song_dir {
+        copy.anchor_sample_files(dir);
+    }
+    copy
+}
+
 /// Write an auto-save into the cache dir and prune older snapshots beyond MAX_AUTOSAVES.
 #[tauri::command]
 pub fn autosave_save(app: AppHandle, state: State<AppState>) -> Result<String, String> {
@@ -35,13 +59,14 @@ pub fn autosave_save(app: AppHandle, state: State<AppState>) -> Result<String, S
     let name = format!("autosave-{}.hwp", ts);
     let path = dir.join(&name);
 
-    {
+    let live = crate::commands::project::live_state(&state);
+    let copy = {
         let engine = state.engine.lock();
         let project = engine.project.lock();
-        project
-            .save(&path)
-            .map_err(|e| format!("save autosave: {}", e))?;
-    }
+        autosave_copy(&project, live, engine.project_dir().as_deref())
+    };
+    copy.save(&path)
+        .map_err(|e| format!("save autosave: {}", e))?;
 
     // Prune oldest beyond MAX_AUTOSAVES.
     let mut entries: Vec<(PathBuf, u64)> = std::fs::read_dir(&dir)
@@ -162,4 +187,81 @@ pub fn autosave_detect_crash(app: AppHandle) -> Result<bool, String> {
         let _ = std::fs::remove_file(marker);
     }
     Ok(crashed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::project::LiveState;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+
+    fn collected_clip(file: &str) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: "clip-1".into(),
+                name: "kick".into(),
+                source_path: "9f2c".into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: 48_000,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                warp_markers: Vec::new(),
+                source_file: file.into(),
+                treatment: Default::default(),
+            }),
+            track_id: "insert-001".into(),
+            position_ticks: 0,
+            length_ticks: 3840,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    #[test]
+    fn an_autosave_holds_the_plug_ins_as_they_play_and_finds_collected_samples() {
+        let song_dir = std::env::temp_dir().join("Anthem");
+        let mut song = Project::default();
+        // The synth as it was at the last Save.
+        song.set_plugin_state("slot-synth", "unknown", vec![1]);
+        song.track_mut("insert-001")
+            .unwrap()
+            .clips
+            .push(collected_clip("Anthem Samples/kick.wav"));
+
+        // Turned since: what the audio thread reports now.
+        let live = LiveState::for_test(
+            [(
+                ("insert-001".to_string(), "slot-synth".to_string()),
+                vec![9],
+            )]
+            .into_iter()
+            .collect(),
+            Some("[]".into()),
+        );
+        let copy = autosave_copy(&song, live, Some(&song_dir));
+
+        assert_eq!(copy.plugin_state("slot-synth").unwrap().chunk, vec![9]);
+        assert_eq!(copy.midi_mappings.as_deref(), Some("[]"));
+        let ClipContent::Audio(kick) = &copy.track("insert-001").unwrap().clips[0].content else {
+            panic!("an audio clip");
+        };
+        assert_eq!(
+            kick.source_file,
+            song_dir
+                .join("Anthem Samples/kick.wav")
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert_eq!(kick.source_path, "9f2c", "the pool id is kept");
+        // The open song itself is left alone: its folder is still its own.
+        assert_eq!(song.plugin_state("slot-synth").unwrap().chunk, vec![1]);
+    }
 }
