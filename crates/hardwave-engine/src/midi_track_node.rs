@@ -1030,6 +1030,9 @@ impl AudioNode for MidiTrackNode {
             // unmuting with nobody holding it: the releases are kept and
             // sent when the track plays again.
             self.live_fx.owe_releases(&self.live_events);
+            // And silence on the meter, which otherwise held the last
+            // level heard before the mute until the song stopped.
+            self.meter.park();
             return;
         }
 
@@ -2144,6 +2147,33 @@ mod tests {
         assert!(peak(&out[0]) < 1e-6, "the fader is down");
         assert!(peak(&out[2]) > 0.01 && peak(&out[3]) > 0.01);
         assert!(node.meter.pre_fader_peak_db.load(Ordering::Relaxed) > -60.0);
+    }
+
+    /// Muted while it plays, an instrument track's meter falls to silence
+    /// instead of holding the last level it showed.
+    #[test]
+    fn a_muted_instrument_track_meters_silence() {
+        let mut node = make_node();
+        let ctx = ctx_at(48_000.0, 256, 0, false);
+        let inputs: [&[f32]; 0] = [];
+        let events = vec![MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 69,
+            velocity: 0.9,
+        }];
+        node.process(
+            &inputs,
+            &mut block_outputs(256),
+            &events,
+            &mut Vec::new(),
+            &ctx,
+        );
+        assert!(node.meter.peak_db_l.load(Ordering::Relaxed) > -60.0);
+        node.set_muted(true);
+        node.process(&inputs, &mut block_outputs(256), &[], &mut Vec::new(), &ctx);
+        assert_eq!(node.meter.peak_db_l.load(Ordering::Relaxed), -120.0);
+        assert_eq!(node.meter.rms_db.load(Ordering::Relaxed), -120.0);
     }
 
     /// A chord held on the keyboard when another track is picked: the
