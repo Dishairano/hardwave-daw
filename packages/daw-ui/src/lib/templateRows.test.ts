@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TEMPLATE_ROWS, insertRowId, templateRowTargets } from './templateRows'
+import { TEMPLATE_ROWS, insertRowId, mixingTemplateSends, templateRowTargets } from './templateRows'
 
 const freshProject = () => [
   { id: 'master' },
@@ -26,5 +26,20 @@ describe('a template puts its tracks where they are seen', () => {
       { trackId: 'insert-001', name: 'Vocal' },
     ])
     expect(templateRowTargets([{ id: 'master' }], TEMPLATE_ROWS.vocal)).toEqual([])
+  })
+})
+
+describe('the Mixing template is routed as it says', () => {
+  it('sends each of the eight tracks to Bus A and Bus B', () => {
+    const ids = TEMPLATE_ROWS.mixing.map((_, i) => insertRowId(i + 1))
+    const sends = mixingTemplateSends(ids)
+    expect(sends).toHaveLength(16)
+    expect(sends[0]).toEqual({ from: 'insert-001', to: 'insert-009' })
+    expect(sends[1]).toEqual({ from: 'insert-001', to: 'insert-010' })
+    expect(sends.some((s) => s.from === 'insert-009' || s.from === 'insert-010')).toBe(false)
+  })
+
+  it('sets up none without both buses', () => {
+    expect(mixingTemplateSends(['a', 'b'])).toEqual([])
   })
 })
