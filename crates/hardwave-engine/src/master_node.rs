@@ -107,9 +107,19 @@ impl AudioNode for MasterNode {
     ) {
         use crate::insert_chain::InsertCommand;
         match cmd {
+            // A slot already on the master is replaced in its place, as on a
+            // track. The master only appended, so each audio restart that
+            // loaded the song's plug-ins again put a second limiter after
+            // the first.
             InsertCommand::Add { slot, .. } => {
-                if let Err(e) = self.chain.push_slot(slot, sample_rate, max_block_size) {
-                    log::warn!("master insert add failed: {e}");
+                match self.chain.add_or_replace(slot, sample_rate, max_block_size) {
+                    Ok(Some(old)) => {
+                        if let Err(old) = graveyard.try_bury(old) {
+                            std::mem::forget(old);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => log::warn!("master insert add failed: {e}"),
                 }
             }
             InsertCommand::Remove { slot_id, .. } => {
@@ -305,5 +315,58 @@ impl AudioNode for MasterNode {
                 *sample *= gain;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::insert_chain::{graveyard_channel, tests::make_gain_slot, InsertCommand};
+
+    fn ctx(frames: u32) -> ProcessContext {
+        ProcessContext {
+            sample_rate: 48_000.0,
+            buffer_size: frames,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: 0,
+            position_ticks: 0,
+            playing: true,
+        }
+    }
+
+    /// The song's plug-ins loaded twice (two audio restarts close together)
+    /// leave one limiter on the master, not two in a row.
+    #[test]
+    fn a_master_plug_in_loaded_again_is_one_slot() {
+        let mut node = MasterNode::new(Arc::new(AtomicF64::new(0.0)), Some("master".into()));
+        let (mut graveyard, mut buried) = graveyard_channel(8);
+        for _ in 0..2 {
+            let (slot, _) = make_gain_slot("limiter", 2.0, true);
+            node.apply_insert_command(
+                InsertCommand::Add {
+                    track_id: "master".into(),
+                    slot,
+                },
+                &mut graveyard,
+                48_000.0,
+                256,
+            );
+        }
+        assert_eq!(node.chain.slots.len(), 1);
+        assert_eq!(
+            buried.drain_and_drop(),
+            1,
+            "the old one is let go off this thread"
+        );
+
+        let input = vec![0.25_f32; 64];
+        let inputs: [&[f32]; 2] = [&input, &input];
+        let mut outputs = vec![vec![0.0_f32; 64]; 4];
+        node.process(&inputs, &mut outputs, &[], &mut Vec::new(), &ctx(64));
+        assert!(
+            outputs[0].iter().all(|&s| (s - 0.5).abs() < 1e-6),
+            "doubled once, not twice"
+        );
     }
 }
