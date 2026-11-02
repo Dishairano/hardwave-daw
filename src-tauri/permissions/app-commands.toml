@@ -167,6 +167,8 @@ permissions = [
   "allow-align-track-to",
   "allow-audio-clip-to-midi",
   "allow-tune-audio-clip",
+  "allow-find-clip-notes",
+  "allow-set-clip-notes",
   "allow-clip-spectrogram",
   "allow-erase-from-clip",
   "allow-get-reference",

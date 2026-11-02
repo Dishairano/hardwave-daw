@@ -683,6 +683,40 @@ function Harness() {
         </div>
       )
     }
+    case 'tunenotes': {
+      // The sample window's NOTES view on a vocal take, as the mockup draws
+      // it; scripts/screenshot.mjs opens the view and drags a note.
+      const st = useTrackStore.getState()
+      const track = st.tracks.find((t) => t.clips.some((c) => c.kind.toLowerCase() === 'audio'))
+      const clip = track?.clips.find((c) => c.kind.toLowerCase() === 'audio')
+      if (track && clip && !useSampleWindowStore.getState().target) {
+        useTransportStore.setState({ bpm: 150 })
+        useTrackStore.setState({
+          tracks: st.tracks.map((t) => t.id !== track.id ? t : {
+            ...t,
+            name: 'Vocal',
+            clips: t.clips.map((c) => c.id !== clip.id ? c : {
+              ...c,
+              name: 'Vocal chop 150',
+              sourceFrames: Math.round(4.8 * 48000),
+              sourceRate: 48000,
+              sourceFile: 'C:\\Vocals\\Vocal chop 150.wav',
+            }),
+          }),
+        })
+        useSampleWindowStore.getState().open(track.id, clip.id)
+        ;(window as unknown as { __hwMockTracks?: unknown }).__hwMockTracks = useTrackStore.getState().tracks
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
+          <Arrangement onSetHint={noop} />
+          <SampleWindow />
+        </div>
+      )
+    }
     case 'samplewindow': {
       // The sample window on the playlist's first audio clip, set up as an
       // imported FL sample would be: quieter, a fade out, its DC taken off.

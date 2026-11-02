@@ -15,7 +15,28 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account', 'tunenotes']
+/** What to do on a panel before it is photographed, as a person would. */
+const ACTIONS = {
+  // Open NOTES, choose "go", and hold it mid-drag a semitone and a half up,
+  // as the mockup draws it.
+  tunenotes: async (page) => {
+    await page.getByRole('tab', { name: 'NOTES' }).click()
+    await sleep(600)
+    const box = await page.locator('[data-note="2"] rect').first().boundingBox()
+    if (!box) return
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    const row = Number(await page.locator('[data-row-height]').first().getAttribute('data-row-height')) || 12
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    for (let i = 1; i <= 8; i++) {
+      await page.mouse.move(x, y - (row * 1.7 * i) / 8)
+      await sleep(30)
+    }
+    await sleep(300)
+  },
+}
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
 const panels = single ? [arg] : ALL
@@ -88,6 +109,7 @@ try {
       + (process.env.SHOT_OPEN ? '&open=1' : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
+    if (ACTIONS[panel]) await ACTIONS[panel](page)
     await page.screenshot({ path: out, scale: 'device' })
     console.log(`screenshot → ${out}${errors.length ? `  (${errors.length} page errors)` : ''}`)
     if (process.env.SHOT_ERRORS) for (const e of errors) console.log('  page error: ' + e.slice(0, 300))

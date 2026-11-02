@@ -29,6 +29,7 @@ import { FlatBox, FlatCheck, FlatKnob, FlatPanel, FlatSelect, FlatSwitch } from 
 import type { PluginParam } from '../plugins/pluginDraw'
 import { rgbColour } from '../../lib/waveformColour'
 import { t, tf, useLanguage } from '../../i18n'
+import { NotesView, ViewSwitch } from './NotesView'
 import './sampleWindow.css'
 
 // ------------------------------------------------------------------ shared
@@ -391,6 +392,8 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
   const [v, setV] = useState<Values | null>(() => (clip ? valuesOf(clip) : null))
   const [range, setRange] = useState(() => Math.max(2, Math.ceil(Math.abs(clip?.pitchSemitones ?? 0))))
   const [page, setPage] = useState<Page>('sample')
+  // The bottom view: the waveform, or the take as notes to tune by hand.
+  const [notesView, setNotesView] = useState(false)
   const gesture = useRef(false)
   // What arrives from the store wins, except in the middle of a gesture.
   useEffect(() => {
@@ -601,13 +604,20 @@ function ClipWindow({ trackId, clipId }: { trackId: string; clipId: string }) {
         </div>
       </div>
 
-      <SampleView
-        peaks={peaks} seconds={seconds} bpm={bpm} region={region} loop={null}
-        markers={visibleMarkers(markers, v.loadRegions, v.loadSlices)}
-        window={{ start: v.start * seconds, end: (v.start + v.length * (1 - v.start)) * seconds }}
-        fadeIn={v.fadeInMs / 1000 / Math.max(0.01, timeFactor(v))} fadeOut={v.fadeOutMs / 1000 / Math.max(0.01, timeFactor(v))}
-        reversed={v.reversed}
-      />
+      {notesView ? (
+        <NotesView trackId={trackId} clip={clip} bpm={bpm} onWave={() => setNotesView(false)} />
+      ) : (
+        <>
+          <ViewSwitch notes={false} onPick={setNotesView} />
+          <SampleView
+            peaks={peaks} seconds={seconds} bpm={bpm} region={region} loop={null}
+            markers={visibleMarkers(markers, v.loadRegions, v.loadSlices)}
+            window={{ start: v.start * seconds, end: (v.start + v.length * (1 - v.start)) * seconds }}
+            fadeIn={v.fadeInMs / 1000 / Math.max(0.01, timeFactor(v))} fadeOut={v.fadeOutMs / 1000 / Math.max(0.01, timeFactor(v))}
+            reversed={v.reversed}
+          />
+        </>
+      )}
     </Frame>
   )
 }

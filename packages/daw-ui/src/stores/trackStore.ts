@@ -140,6 +140,9 @@ export interface ClipInfo {
     loadRegions?: boolean
     loadSlices?: boolean
   }
+  /** A fingerprint of the notes tuned by hand in the sample window's NOTES
+   *  view; absent when none are. It changes when an undo changes them. */
+  tuneKey?: string
   /** Where the file is on disk. */
   sourceFile?: string
   /** The fades in time, at the tempo where the clip sits. */

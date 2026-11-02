@@ -183,6 +183,36 @@ const mockInputKind = (port: string) =>
     : /\b(x-?touch|mcu|mackie|icon|platform|fader ?port|uf8|hui)\b/i.test(port) ? 'desk'
       : 'keyboard'
 
+
+/** A sung take as `find_clip_notes` returns it: the mockup's six notes, a
+ *  pitch line with vibrato and a slide into each note. */
+function mockClipNotes() {
+  const beat = 60 / 150
+  const sung = [
+    { b: 0.0, l: 1.4, p: 65.08 },
+    { b: 1.6, l: 1.2, p: 67.31 },
+    { b: 4.0, l: 1.8, p: 63.38 },
+    { b: 6.1, l: 0.8, p: 68.05 },
+    { b: 7.0, l: 1.0, p: 67.9 },
+    { b: 8.2, l: 2.6, p: 70.27 },
+  ]
+  const step = 0.01
+  const seconds = 12 * beat
+  const curve: (number | null)[] = Array.from({ length: Math.round(seconds / step) }, (_, i) => {
+    const s = i * step
+    const n = sung.find((m) => s >= m.b * beat && s <= (m.b + m.l) * beat)
+    if (!n) return null
+    const t = (s - n.b * beat) / (n.l * beat)
+    const slide = t < 0.12 ? (0.12 - t) * -2.2 : 0
+    return n.p + Math.sin(t * 18 + n.b) * 0.12 * Math.min(1, t * 3) + slide
+  })
+  const notes = sung.map((n, i) => ({
+    start: n.b * beat, end: (n.b + n.l) * beat, sung: n.p, pitch: n.p,
+    drift: i === 2 ? 0.4 : 1, newStart: n.b * beat, newEnd: (n.b + n.l) * beat, formants: true,
+  }))
+  return { seconds, notes, curveStart: 0, curveStep: step, curve, keyRoot: 5, keyMinor: true, tuneKey: '' }
+}
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   unregisterCallback: () => {},
@@ -201,6 +231,12 @@ const mock: TauriInternals = {
         return synthPeaks(n, (args?.first as number) ?? 0, (args?.count as number) ?? n)
       }
       // A sampler channel's sample: a short kick, named after its file.
+      // The NOTES view on the mockup's vocal take (daw-tune-notes-mockup):
+      // six sung notes at 150 BPM, "go" sung D#4 +38 and moved to F4.
+      case 'find_clip_notes':
+        return mockClipNotes()
+      case 'set_clip_notes':
+        return 1
       case 'get_sampler_sample':
         return {
           path: 'D:\\Kicks\\Induskick4.wav', frames: Math.round(0.62 * 48000), sampleRate: 48000, channels: 1, root: 60,

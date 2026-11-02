@@ -42,5 +42,6 @@ pub mod templates;
 pub mod timeline_edit;
 pub mod tracks;
 pub mod transport;
+pub mod tune_notes;
 pub mod vcas;
 pub mod windows;

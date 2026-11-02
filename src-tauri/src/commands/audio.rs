@@ -303,6 +303,7 @@ pub(crate) fn track_clips_to_info(
                     source_frames,
                     source_rate,
                     treatment: TreatmentInfo::from(&ac.treatment),
+                    tune_key: crate::commands::tune_notes::tune_key(&ac.tuned_notes),
                     source_file: ac.source_file.clone(),
                     fade_in_ms: fade_ms(tempo, clip.position_ticks, ac.fade_in_ticks, true),
                     fade_out_ms: fade_ms(
@@ -338,6 +339,7 @@ pub(crate) fn track_clips_to_info(
                 source_frames: 0,
                 source_rate: 0,
                 treatment: TreatmentInfo::default(),
+                tune_key: String::new(),
                 source_file: String::new(),
                 fade_in_ms: 0.0,
                 fade_out_ms: 0.0,
@@ -632,6 +634,11 @@ pub struct ClipInfo {
     source_rate: u32,
     /// Pan, polarity, swap, normalise, DC and resample, for the sample window.
     treatment: TreatmentInfo,
+    /// A fingerprint of the notes tuned by hand in the sample window's
+    /// NOTES view, empty when none are: the view reads the notes again
+    /// when it changes under it (an undo).
+    #[serde(rename = "tuneKey", skip_serializing_if = "String::is_empty")]
+    tune_key: String,
     /// Where the file is, for the sample window to name it.
     #[serde(rename = "sourceFile")]
     source_file: String,
@@ -1089,6 +1096,7 @@ mod tests {
             warp_markers: Vec::new(),
             source_file: String::new(),
             treatment: Default::default(),
+            tuned_notes: Vec::new(),
         }
     }
 
@@ -1096,7 +1104,6 @@ mod tests {
     fn a_sample_s_settings_reach_every_clip_of_it_and_no_other() {
         use hardwave_project::clip::{ClipContent, ClipPlacement};
         let mut project = hardwave_project::Project::default();
-            tuned_notes: Vec::new(),
         let beat = hardwave_midi::PPQ;
         let place = |track: &str, clip: hardwave_project::clip::AudioClip, at: u64| ClipPlacement {
             content: ClipContent::Audio(clip),
@@ -2618,6 +2625,9 @@ pub fn tune_audio_clip(
                 if ac.id == clip_id {
                     ac.source_path = path_text.clone();
                     ac.source_start = 0;
+                    // Notes moved by hand were moved from where the old take
+                    // sang them; on the tuned take they would move again.
+                    ac.tuned_notes.clear();
                 }
             }
         }

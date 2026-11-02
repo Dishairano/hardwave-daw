@@ -544,6 +544,8 @@ pub fn run() {
             commands::audio::align_track_to,
             commands::audio::audio_clip_to_midi,
             commands::audio::tune_audio_clip,
+            commands::tune_notes::find_clip_notes,
+            commands::tune_notes::set_clip_notes,
             commands::audio::clip_spectrogram,
             commands::audio::erase_from_clip,
             commands::reference::get_reference,
