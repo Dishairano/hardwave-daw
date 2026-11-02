@@ -99,6 +99,15 @@ impl LiveState {
         // from the slot's descriptor when the plug-in is made.
         if let Some(map) = self.plugin_states {
             for ((_, slot_id), bytes) in map {
+                // A VST3 or CLAP that fails to hand over its state answers
+                // with nothing. Written over the settings it had, the next
+                // open gave it nothing to load and the patch was gone.
+                let had_some = project
+                    .plugin_state(&slot_id)
+                    .is_some_and(|saved| !saved.chunk.is_empty());
+                if bytes.is_empty() && had_some {
+                    continue;
+                }
                 project.set_plugin_state(slot_id, "unknown", bytes);
             }
         }
@@ -913,5 +922,41 @@ mod save_folder_tests {
         // A song never saved has no folder its samples could be relative to.
         follow_to_folder(&mut song, None, Some(&home));
         assert_eq!(kick_file(&song), "Anthem Samples/kick.wav");
+    }
+}
+
+#[cfg(test)]
+mod live_state_tests {
+    use super::LiveState;
+    use hardwave_project::Project;
+
+    #[test]
+    fn a_plug_in_that_hands_over_nothing_keeps_the_settings_it_had() {
+        let mut song = Project::default();
+        song.set_plugin_state("slot-synth", "unknown", vec![1, 2, 3]);
+        song.set_plugin_state("slot-eq", "unknown", vec![4]);
+        let live = LiveState::for_test(
+            [
+                (
+                    ("insert-001".to_string(), "slot-synth".to_string()),
+                    Vec::new(),
+                ),
+                (("insert-001".to_string(), "slot-eq".to_string()), vec![5]),
+                (
+                    ("insert-002".to_string(), "slot-new".to_string()),
+                    Vec::new(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            None,
+        );
+        live.write_into(&mut song);
+        assert_eq!(
+            song.plugin_state("slot-synth").unwrap().chunk,
+            vec![1, 2, 3]
+        );
+        assert_eq!(song.plugin_state("slot-eq").unwrap().chunk, vec![5]);
+        assert!(song.plugin_state("slot-new").unwrap().chunk.is_empty());
     }
 }
