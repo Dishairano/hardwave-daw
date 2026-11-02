@@ -1326,6 +1326,28 @@ fn sanitize_filename(name: &str) -> String {
     }
 }
 
+/// Whether a track gets a stem: it plays something of its own, from its
+/// clips or from notes another track routes to it. Every track used to get
+/// one, so a new song's 500 empty inserts and the master track each took a
+/// full-length render, and the folder filled with hundreds of silent files.
+/// The master has a stem of its own to tick.
+fn has_a_stem(project: &Project, track: &hardwave_project::track::Track) -> bool {
+    use hardwave_project::clip::FREEZE_LANE;
+    if !track.kind.is_audio_bearing() {
+        return false;
+    }
+    // A frozen track plays its render and nothing else; a live one plays
+    // everything but the render.
+    let plays = |t: &hardwave_project::track::Track| {
+        t.clips.iter().any(|c| (c.lane == FREEZE_LANE) == t.frozen)
+    };
+    plays(track)
+        || project
+            .tracks
+            .iter()
+            .any(|s| s.id != track.id && s.midi_route_to.contains(&track.id) && plays(s))
+}
+
 /// Glue a track's clips between two points into one audio clip.
 ///
 /// Several takes, chopped and rearranged, are fine to work with and awkward
@@ -1665,6 +1687,7 @@ pub async fn export_project_stems(
                 project
                     .tracks
                     .iter()
+                    .filter(|t| has_a_stem(&project, t))
                     .map(|t| (t.id.clone(), t.name.clone()))
                     .collect()
             };
@@ -2145,6 +2168,99 @@ mod isolate_tests {
             p.modulations[0].target,
             ModTarget::PluginParam { .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod stem_and_freeze_tests {
+    use super::has_a_stem;
+    use hardwave_project::clip::FREEZE_LANE;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+    use hardwave_project::Project;
+
+    const LEN_TICKS: u64 = 1920;
+
+    fn audio(id: &str, source: &str, frames: u64, track: &str) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: id.into(),
+                name: id.into(),
+                source_path: source.into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: frames,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: String::new(),
+                treatment: Default::default(),
+            }),
+            track_id: track.into(),
+            position_ticks: 0,
+            length_ticks: LEN_TICKS,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    fn midi(id: &str, track: &str) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Midi(hardwave_project::clip::MidiClipRef {
+                id: id.into(),
+                clip: hardwave_midi::MidiClip::new(id.into(), id.into(), LEN_TICKS),
+            }),
+            track_id: track.into(),
+            position_ticks: 0,
+            length_ticks: LEN_TICKS,
+            lane: 0,
+            color: None,
+        }
+    }
+
+    #[test]
+    fn only_tracks_that_play_something_get_a_stem() {
+        let mut p = Project::default();
+        let vox = p.add_audio_track("Vox".into());
+        p.track_mut(&vox)
+            .unwrap()
+            .clips
+            .push(audio("v", "v", 100, &vox));
+        let lead = p.add_midi_track("Lead".into());
+        let layer = p.add_midi_track("Layer".into());
+        {
+            let t = p.track_mut(&lead).unwrap();
+            t.clips.push(midi("m", &lead));
+            t.midi_route_to.push(layer.clone());
+        }
+        let frozen = p.add_audio_track("Frozen".into());
+        {
+            let t = p.track_mut(&frozen).unwrap();
+            let mut render = audio("r", "r", 100, &frozen);
+            render.lane = FREEZE_LANE;
+            t.clips.push(render);
+            t.frozen = true;
+        }
+        let bus = p.add_audio_track("Bus".into());
+        p.track_mut(&vox).unwrap().output_bus = Some(bus.clone());
+
+        let stems: Vec<&str> = p
+            .tracks
+            .iter()
+            .filter(|t| has_a_stem(&p, t))
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(
+            stems,
+            ["Vox", "Lead", "Layer", "Frozen"],
+            "not the master, the 500 empty inserts or the empty bus"
+        );
     }
 }
 
