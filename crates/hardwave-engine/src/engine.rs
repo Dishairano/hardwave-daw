@@ -24,6 +24,45 @@ pub type OfflineInsertFactory<'a> =
 /// file paths or import hashes and never contain it.
 const STRETCH_KEY_MARKER: &str = "#hw-stretch:";
 const WARP_KEY_MARKER: &str = "#hw-warp:";
+const TUNE_KEY_MARKER: &str = "#hw-tune:";
+
+/// Pool id for a take played with its notes tuned by hand (the sample
+/// window's NOTES view): the source and a fingerprint of its notes. The
+/// clip's stretch and warp are baked from this, as from the file.
+pub(crate) fn tune_cache_key(
+    source_id: &str,
+    notes: &[hardwave_project::clip::TunedNote],
+) -> String {
+    format!(
+        "{source_id}{TUNE_KEY_MARKER}{:016x}",
+        hardwave_project::clip::tuned_notes_hash(notes)
+    )
+}
+
+/// What a clip plays from before its stretch: its take with the notes
+/// tuned by hand when it has any, else the file.
+pub(crate) fn playing_source(audio_clip: &hardwave_project::clip::AudioClip) -> String {
+    if audio_clip.has_tuned_notes() {
+        tune_cache_key(&audio_clip.source_path, &audio_clip.tuned_notes)
+    } else {
+        audio_clip.source_path.clone()
+    }
+}
+
+/// The tuned-take id a pool id was made from (itself, or a stretch or
+/// warp of it), or None when it was not made from one.
+fn tuned_take_of(id: &str) -> Option<&str> {
+    let at = id.find(TUNE_KEY_MARKER)?;
+    id.get(..at + TUNE_KEY_MARKER.len() + 16)
+}
+
+/// One take with notes tuned by hand, to bake.
+#[derive(Debug, Clone)]
+struct TuneBake {
+    key: String,
+    source_id: String,
+    notes: Vec<hardwave_project::clip::TunedNote>,
+}
 
 /// Pool id for a warped clip rendered with its pitch kept: the source, how
 /// its markers cut it, its transpose, and the rate it was rendered at (an
@@ -1455,6 +1494,118 @@ impl DawEngine {
         let _ = self.command_tx.try_send(EngineCommand::RebuildGraph);
     }
 
+    /// The takes with notes tuned by hand this project's clips play.
+    fn tune_bake_plan(&self) -> Vec<TuneBake> {
+        use hardwave_project::clip::ClipContent;
+        let project = self.project.lock();
+        let mut acc: Vec<TuneBake> = Vec::new();
+        for track in &project.tracks {
+            for clip in &track.clips {
+                let ClipContent::Audio(audio_clip) = &clip.content else {
+                    continue;
+                };
+                if !audio_clip.has_tuned_notes() {
+                    continue;
+                }
+                let key = tune_cache_key(&audio_clip.source_path, &audio_clip.tuned_notes);
+                if !acc.iter().any(|b| b.key == key) {
+                    acc.push(TuneBake {
+                        key,
+                        source_id: audio_clip.source_path.clone(),
+                        notes: audio_clip.tuned_notes.clone(),
+                    });
+                }
+            }
+        }
+        acc
+    }
+
+    /// Render one take with its notes tuned into the pool, outside the
+    /// pool's lock like a stretch. The take's notes and periods are worked
+    /// out once per file and kept, so moving a note again only renders.
+    fn bake_tune_variant(pool: &AudioPool, bake: &TuneBake) {
+        if pool.contains(&bake.key) {
+            return;
+        }
+        let Some(src) = pool.get(&bake.source_id) else {
+            return;
+        };
+        let Some(take) = pool.take_analysis(&bake.source_id, &mut |_| {}) else {
+            return;
+        };
+        let rate = src.sample_rate as f64;
+        let moves: Vec<hardwave_dsp::note_tune::NoteMove> = bake
+            .notes
+            .iter()
+            .map(|n| hardwave_dsp::note_tune::NoteMove {
+                start: n.start * rate,
+                end: n.end * rate,
+                sung: n.sung,
+                pitch: n.pitch,
+                drift: n.drift,
+                new_start: n.new_start * rate,
+                new_end: n.new_end * rate,
+                formants: n.formants,
+            })
+            .collect();
+        let channels = hardwave_dsp::note_tune::render(&src.channels, &take, &moves);
+        let num_frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return;
+        }
+        pool.insert(
+            bake.key.clone(),
+            AudioBuffer {
+                channels,
+                sample_rate: src.sample_rate,
+                num_frames,
+            },
+        );
+    }
+
+    /// Take the tuned takes no clip plays any more out of the pool, with
+    /// everything stretched or warped from them, and hand them back. Only
+    /// for a file whose current tuning is already baked, so a clip never
+    /// drops back to the untuned take while its new one is on the way.
+    /// Handed back rather than dropped: the audio thread may hold one
+    /// until its next rebuild, and the last reference should not be let
+    /// go there.
+    fn evict_stale_tunes(pool: &AudioPool, project: &Mutex<Project>) -> Vec<Arc<AudioBuffer>> {
+        use hardwave_project::clip::ClipContent;
+        let live: std::collections::HashSet<String> = {
+            let project = project.lock();
+            project
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .filter_map(|c| match &c.content {
+                    ClipContent::Audio(a) if a.has_tuned_notes() => {
+                        Some(tune_cache_key(&a.source_path, &a.tuned_notes))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // Whether every tuning of a file the song plays is in the pool.
+        let ready = |source: &str| {
+            live.iter()
+                .filter(|key| {
+                    key.strip_prefix(source).is_some_and(|rest| {
+                        rest.starts_with(TUNE_KEY_MARKER)
+                            && rest.len() == TUNE_KEY_MARKER.len() + 16
+                    })
+                })
+                .all(|key| pool.contains(key))
+        };
+        pool.remove_where(|id| match tuned_take_of(id) {
+            Some(take) if !live.contains(take) => {
+                let source = &take[..take.len() - TUNE_KEY_MARKER.len() - 16];
+                ready(source)
+            }
+            _ => false,
+        })
+    }
+
     /// The (source, stretch, semitones) variants this project's clips need.
     fn stretch_bake_plan(&self) -> Vec<(String, f64, f64)> {
         use hardwave_project::clip::ClipContent;
@@ -1464,7 +1615,7 @@ impl DawEngine {
             for clip in &track.clips {
                 if let ClipContent::Audio(audio_clip) = &clip.content {
                     if let Some((stretch, semis)) = bake_params(audio_clip) {
-                        let entry = (audio_clip.source_path.clone(), stretch, semis);
+                        let entry = (playing_source(audio_clip), stretch, semis);
                         if !acc.contains(&entry) {
                             acc.push(entry);
                         }
@@ -1541,16 +1692,13 @@ impl DawEngine {
                     1.0
                 };
                 let pieces = warp_pieces(clip, audio_clip, &project.tempo_map, sample_rate, unity);
-                let key = warp_cache_key(
-                    &audio_clip.source_path,
-                    &pieces,
-                    audio_clip.pitch_semitones,
-                    sample_rate,
-                );
+                let source_id = playing_source(audio_clip);
+                let key =
+                    warp_cache_key(&source_id, &pieces, audio_clip.pitch_semitones, sample_rate);
                 if !acc.iter().any(|b| b.key == key) {
                     acc.push(WarpBake {
                         key,
-                        source_id: audio_clip.source_path.clone(),
+                        source_id,
                         pieces,
                         semitones: audio_clip.pitch_semitones,
                     });
@@ -1609,6 +1757,10 @@ impl DawEngine {
     /// render varispeed and not match playback. Never call it from the audio
     /// thread — see [`Self::prebake_stretch_sources_async`] for the UI path.
     pub fn prebake_stretch_sources(&self) {
+        // Tuned takes first: a clip's stretch is baked from its tuned take.
+        for bake in self.tune_bake_plan() {
+            Self::bake_tune_variant(&self.audio_pool, &bake);
+        }
         for (source_id, stretch, semitones) in self.stretch_bake_plan() {
             Self::bake_stretch_variant(&self.audio_pool, &source_id, stretch, semitones);
         }
@@ -1623,8 +1775,14 @@ impl DawEngine {
     /// dragging a stretch control doesn't spawn a bake per frame.
     pub fn prebake_stretch_sources_async(&self) {
         let sample_rate = self.current_sample_rate() as f64;
-        let (todo, warps): (Vec<(String, f64, f64)>, Vec<WarpBake>) = {
+        type Plans = (Vec<TuneBake>, Vec<(String, f64, f64)>, Vec<WarpBake>);
+        let (tunes, todo, warps): Plans = {
             let mut inflight = self.stretch_inflight.lock();
+            let tunes = self
+                .tune_bake_plan()
+                .into_iter()
+                .filter(|b| !self.audio_pool.contains(&b.key) && inflight.insert(b.key.clone()))
+                .collect();
             let todo = self
                 .stretch_bake_plan()
                 .into_iter()
@@ -1638,37 +1796,90 @@ impl DawEngine {
                 .into_iter()
                 .filter(|b| !self.audio_pool.contains(&b.key) && inflight.insert(b.key.clone()))
                 .collect();
-            (todo, warps)
+            (tunes, todo, warps)
         };
-        if todo.is_empty() && warps.is_empty() {
+        if tunes.is_empty() && todo.is_empty() && warps.is_empty() {
             return;
         }
         let pool = self.audio_pool.clone();
         let tx = self.command_tx.clone();
         let inflight = Arc::clone(&self.stretch_inflight);
+        let project = Arc::clone(&self.project);
         std::thread::spawn(move || {
-            // Release the in-flight keys on the way out whatever happens. If a
-            // bake panicked and left them claimed, that source could never be
-            // retried and the clip would stay varispeed for the rest of the
-            // session with nothing to indicate why.
-            let _release = InflightRelease {
-                set: &inflight,
-                keys: todo
+            let stale = {
+                // Release the in-flight keys on the way out whatever happens. If a
+                // bake panicked and left them claimed, that source could never be
+                // retried and the clip would stay varispeed for the rest of the
+                // session with nothing to indicate why.
+                let _release = InflightRelease {
+                    set: &inflight,
+                    keys: tunes
+                        .iter()
+                        .map(|b| b.key.clone())
+                        .chain(
+                            todo.iter()
+                                .map(|(s, st, se)| stretch_cache_key(s, *st, *se)),
+                        )
+                        .chain(warps.iter().map(|b| b.key.clone()))
+                        .collect(),
+                };
+                // A tuned take plays as the file until its render lands.
+                for bake in &tunes {
+                    Self::bake_tune_variant(&pool, bake);
+                }
+                // A stretch or warp is made from the tuned take, which another
+                // bake may still be making.
+                let ours = |id: &str| tunes.iter().any(|b| b.key == id);
+                for id in todo
                     .iter()
-                    .map(|(s, st, se)| stretch_cache_key(s, *st, *se))
-                    .chain(warps.iter().map(|b| b.key.clone()))
-                    .collect(),
+                    .map(|t| t.0.as_str())
+                    .chain(warps.iter().map(|b| b.source_id.as_str()))
+                {
+                    if !ours(id) {
+                        Self::wait_for_tuned_take(&pool, &inflight, id);
+                    }
+                }
+                for (source_id, stretch, semitones) in &todo {
+                    Self::bake_stretch_variant(&pool, source_id, *stretch, *semitones);
+                }
+                // A warped clip plays like a tape until its render lands.
+                for bake in &warps {
+                    Self::bake_warp_variant(&pool, bake, sample_rate);
+                }
+                if tunes.is_empty() {
+                    Vec::new()
+                } else {
+                    Self::evict_stale_tunes(&pool, &project)
+                }
             };
-            for (source_id, stretch, semitones) in &todo {
-                Self::bake_stretch_variant(&pool, source_id, *stretch, *semitones);
-            }
-            // A warped clip plays like a tape until its render lands.
-            for bake in &warps {
-                Self::bake_warp_variant(&pool, bake, sample_rate);
-            }
             // Ask the audio thread to rebuild so the fresh bakes are picked up.
             let _ = tx.try_send(EngineCommand::RebuildGraph);
+            // The tunings nothing plays any more are let go here, once the
+            // audio thread has moved on to the new ones, not there.
+            if !stale.is_empty() {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                drop(stale);
+            }
         });
+    }
+
+    /// Wait while another bake is still making a tuned take this one is
+    /// made from. A long take's first tuning works out its notes first,
+    /// which takes a few seconds; anything but a tuned take returns at once.
+    fn wait_for_tuned_take(
+        pool: &AudioPool,
+        inflight: &Mutex<std::collections::HashSet<String>>,
+        id: &str,
+    ) {
+        if tuned_take_of(id) != Some(id) {
+            return;
+        }
+        for _ in 0..3000 {
+            if pool.contains(id) || !inflight.lock().contains(id) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     /// Audition a file on the engine's own output device.
@@ -3636,6 +3847,20 @@ impl EngineCallback {
         self.audio_pool.contains(&key).then_some(key)
     }
 
+    /// The pool id a clip plays from before its stretch: its take with the
+    /// notes tuned by hand once that render is in the pool, else the file.
+    /// LOOKUP ONLY, like `stretched_source`: the render is baked off this
+    /// thread.
+    fn tuned_source(&self, audio_clip: &hardwave_project::clip::AudioClip) -> String {
+        if audio_clip.has_tuned_notes() {
+            let key = tune_cache_key(&audio_clip.source_path, &audio_clip.tuned_notes);
+            if self.audio_pool.contains(&key) {
+                return key;
+            }
+        }
+        audio_clip.source_path.clone()
+    }
+
     /// Populate every track's insert chain from the project's saved
     /// `inserts` metadata, for offline render. The live path builds chains
     /// via the `InsertCommand` queue / `hydrate_chains_from_project`, but a
@@ -3991,6 +4216,10 @@ impl EngineCallback {
                     // A warped clip rendered with its pitch kept (see
                     // `warp_bake_plan`), when the render has landed: played
                     // straight through, its markers already in it.
+                    // A take with notes tuned by hand plays its tuned render
+                    // once that has landed (see `tune_bake_plan`); until
+                    // then, the file. Its stretch and warp are made from it.
+                    let base = self.tuned_source(audio_clip);
                     let warp_baked = if audio_clip.warp_markers.is_empty() || treatment.resample {
                         None
                     } else {
@@ -4006,7 +4235,7 @@ impl EngineCallback {
                                 let pieces =
                                     warp_pieces(clip, audio_clip, tempo_map, sample_rate, unity);
                                 let key = warp_cache_key(
-                                    &audio_clip.source_path,
+                                    &base,
                                     &pieces,
                                     audio_clip.pitch_semitones,
                                     sample_rate,
@@ -4019,11 +4248,7 @@ impl EngineCallback {
                         && ((stretch - 1.0).abs() > 1e-4
                             || audio_clip.pitch_semitones.abs() > 1e-4);
                     let baked = if needs_bake {
-                        self.stretched_source(
-                            &audio_clip.source_path,
-                            stretch,
-                            audio_clip.pitch_semitones,
-                        )
+                        self.stretched_source(&base, stretch, audio_clip.pitch_semitones)
                     } else {
                         None
                     };
@@ -4037,11 +4262,7 @@ impl EngineCallback {
                                 (audio_clip.source_start as f64 * stretch) as u64,
                                 track_pitch_factor,
                             ),
-                            (None, None) => (
-                                audio_clip.source_path.clone(),
-                                audio_clip.source_start,
-                                pitch_factor / stretch,
-                            ),
+                            (None, None) => (base, audio_clip.source_start, pitch_factor / stretch),
                         };
                     // Rate-match the source to the rate we're rendering at.
                     // Pool buffers are normalised to the *device* rate on
@@ -6195,6 +6416,7 @@ mod offline_insert_tests {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
@@ -6330,6 +6552,7 @@ mod offline_insert_tests {
                         fade_out_curve: FadeCurve::Linear,
                         source_file: String::new(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: id.clone(),
                     position_ticks: 0,
@@ -6512,7 +6735,6 @@ mod offline_insert_tests {
                 t.clips.push(ClipPlacement {
                     content: ClipContent::Midi(MidiClipRef {
                         id: "c".into(),
-                    tuned_notes: Vec::new(),
                         clip,
                     }),
                     track_id: id.clone(),
@@ -6648,7 +6870,6 @@ mod offline_insert_tests {
                     true
                 },
             )
-                        tuned_notes: Vec::new(),
             .expect("it renders");
         let first = out.iter().position(|v| v.abs() > 0.02).map(|i| i / 2);
         assert!(
@@ -6795,6 +7016,7 @@ mod offline_insert_tests {
             fade_out_curve: FadeCurve::Linear,
             source_file: String::new(),
             treatment: Default::default(),
+            tuned_notes: Vec::new(),
         };
         assert_eq!(bake_params(&clip), Some((2.0, 0.0)), "stretched: baked");
         clip.treatment.resample = true;
@@ -6887,6 +7109,7 @@ mod offline_insert_tests {
                         fade_out_curve: FadeCurve::Linear,
                         source_file: wav.to_string_lossy().into_owned(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: track.clone(),
                     position_ticks: 0,
@@ -6975,6 +7198,7 @@ mod offline_insert_tests {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
@@ -7016,7 +7240,6 @@ mod offline_insert_tests {
             missing.is_empty(),
             "unexpected missing sources: {missing:?}"
         );
-            tuned_notes: Vec::new(),
         let buf = engine
             .audio_pool
             .get(&source_id)
@@ -7049,6 +7272,7 @@ mod offline_insert_tests {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: id2.clone(),
                 position_ticks: 0,
@@ -7109,7 +7333,6 @@ mod offline_insert_tests {
             peak_with < 1e-6,
             "insert chain must apply offline; silencer should zero output, got peak={peak_with}"
         );
-                        tuned_notes: Vec::new(),
         // Without a factory (old behavior), the insert is skipped and the
         // kick is audible — confirming the difference is the hydration.
         let peak_without = render_peak(&engine, None);
@@ -7276,7 +7499,6 @@ fn moved_to(before: Option<String>, now: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod device_restart_tests {
     use super::moved_to;
-                    tuned_notes: Vec::new(),
 
     /// After a sound card would not open, picking another tries to start
     /// audio; it only stored the choice. The outputs asked for here exist
@@ -7366,7 +7588,6 @@ mod rt_safety_tests {
             // One thread: these tests are about the callback, not about
             // sharing the work.
             Arc::new(Mutex::new(None)),
-                    tuned_notes: Vec::new(),
             Arc::new(Mutex::new(None)),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
             Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -8533,6 +8754,7 @@ mod monitoring_tests {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "beat".into(),
             position_ticks: 0,
@@ -8754,7 +8976,6 @@ mod monitoring_tests {
         r.cb.process(&mut out, 256, 2);
         r.cb.transport.set_position(1_900);
         r.cb.process(&mut out, 256, 2);
-                tuned_notes: Vec::new(),
         assert_eq!(
             r.cb.transport.position(),
             1_000 + 156,
