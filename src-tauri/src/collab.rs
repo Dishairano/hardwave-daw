@@ -535,7 +535,12 @@ pub fn service_url() -> String {
 /// token nor the invite code is in it: addresses end up in logs, so
 /// both go in headers.
 pub fn join_url(room: &str, since: u64) -> String {
-    let mut url = format!("{}?since={}", service_url(), since);
+    let mut url = format!(
+        "{}?since={}&wire={}",
+        service_url(),
+        since,
+        hardwave_project::multiplayer::WIRE_VERSION
+    );
     if !room.is_empty() {
         url.push_str(&format!("&room={}", urlencode(room)));
     }
@@ -622,6 +627,10 @@ pub enum Hello {
         missed: Vec<SyncMessage>,
         #[serde(default)]
         caught_up: bool,
+        /// The wire version the service reads; a service from before
+        /// says none, and is sent bytes as lists of numbers.
+        #[serde(default)]
+        wire: u32,
     },
     Refused {
         reason: String,

@@ -120,7 +120,7 @@ pub async fn start_collab(
             .map_err(|_| "the host did not answer".to_string())??;
         collab.set_waiting(false);
     }
-    let (room_id, invite_code, missed, caught_up) = match first {
+    let (room_id, invite_code, missed, caught_up, wire) = match first {
         crate::collab::Hello::Refused { reason } => return Err(reason),
         crate::collab::Hello::Waiting => return Err("the room service lost track of you".into()),
         crate::collab::Hello::Joined {
@@ -128,7 +128,8 @@ pub async fn start_collab(
             invite_code,
             missed,
             caught_up,
-        } => (room_id, invite_code, missed, caught_up),
+            wire,
+        } => (room_id, invite_code, missed, caught_up, wire),
     };
 
     let (outbox, mut to_send) = mpsc::unbounded_channel::<SyncMessage>();
@@ -142,11 +143,13 @@ pub async fn start_collab(
         apply_one(&app, &engine, &collab, message, generation);
     }
 
-    // Out: what this person does.
+    // Out: what this person does, with its bytes as base64 when the room
+    // service reads that.
+    let base64 = wire >= hardwave_project::multiplayer::WIRE_VERSION;
     let collab_for_writer = Arc::clone(&collab);
     collab.hold(tokio::spawn(async move {
         while let Some(message) = to_send.recv().await {
-            let Ok(text) = serde_json::to_string(&message) else {
+            let Ok(text) = hardwave_project::multiplayer::to_wire_json(&message, base64) else {
                 continue;
             };
             if writer
