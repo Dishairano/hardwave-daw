@@ -40,6 +40,7 @@ import { SpectrumAnalyzer } from './components/SpectrumAnalyzer'
 import { VirtualKeyboard } from './components/transport/VirtualKeyboard'
 import './components/transport/VirtualKeyboard.css'
 import { FirstRunFlow } from './components/firstrun/FirstRunFlow'
+import { templateForChoice } from './components/firstrun/firstRunSteps'
 import { startMidiHotplug } from './lib/midiHotplug'
 import { ProjectInfoDialog } from './components/ProjectInfoDialog'
 import { TempoTapper } from './components/TempoTapper'
@@ -1652,7 +1653,7 @@ export function App() {
    *  same as picking it in File > New, so it is the same song. */
   const startSongAfterSetup = useCallback(async (choice: 'empty' | `starter:${StarterId}`) => {
     if (!(await confirmDiscardIfDirty('Save changes before starting a new song'))) return
-    await handlePickTemplate(choice === 'empty' ? 'blank' : choice)
+    await handlePickTemplate(templateForChoice(choice))
   }, [confirmDiscardIfDirty, handlePickTemplate])
 
   // Missing plugins surface as a PERSISTENT banner (MissingPluginsBanner)
