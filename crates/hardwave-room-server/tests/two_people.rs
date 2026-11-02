@@ -482,3 +482,62 @@ async fn past_its_connection_limit_the_service_says_so() {
         "a third connection was let in past the limit"
     );
 }
+
+/// The next text that is not the room saying who is in it.
+async fn next_edit_text(socket: &mut Socket) -> String {
+    loop {
+        let frame = tokio::time::timeout(WAIT, socket.next())
+            .await
+            .expect("a message in time")
+            .expect("the connection open")
+            .unwrap();
+        let Message::Text(text) = frame else { continue };
+        if !text.contains("MembersChanged") {
+            return text.to_string();
+        }
+    }
+}
+
+/// A DAW that reads base64 is sent bytes as base64, one from before it is
+/// sent the list of numbers it reads, and the service reads either.
+#[tokio::test]
+async fn bytes_go_as_base64_only_to_a_daw_that_reads_it() {
+    use hardwave_project::multiplayer::{to_wire_json, WIRE_VERSION};
+    let service = start_service(fake_site(true).await).await;
+    let (mut host, hello) = connect(service, Some("host-1"), &format!("wire={WIRE_VERSION}")).await;
+    assert_eq!(hello["wire"], WIRE_VERSION, "{hello}");
+    let room = hello["room_id"].as_str().unwrap().to_string();
+    let code = hello["invite_code"].as_str().unwrap().to_string();
+    // The guest's DAW is from before: no wire version in its address.
+    let (mut guest, joined) = knock(service, &mut host, "guest-1", &room, &code, true).await;
+    assert_eq!(joined["type"], "joined", "{joined}");
+
+    let track = |blob: Vec<u8>| SyncMessage {
+        sender_user_id: "whoever".into(),
+        logical_clock: 1,
+        kind: SyncKind::TrackState {
+            track_id: "t".into(),
+            index: 1,
+            blob,
+        },
+    };
+    let blob: Vec<u8> = (0..=255u8).cycle().take(5000).collect();
+
+    // Host to guest: sent as base64, arrives as numbers.
+    host.send(Message::text(
+        to_wire_json(&track(blob.clone()), true).unwrap(),
+    ))
+    .await
+    .unwrap();
+    let text = next_edit_text(&mut guest).await;
+    assert!(text.contains("\"blob\":["), "numbers for the older DAW");
+    let got: SyncMessage = serde_json::from_str(&text).unwrap();
+    assert_eq!(got.kind, track(blob.clone()).kind);
+
+    // Guest to host: sent as numbers, arrives as base64.
+    guest.send(send(track(blob.clone()).kind)).await.unwrap();
+    let text = next_edit_text(&mut host).await;
+    assert!(text.contains("\"blob\":\""), "base64 for the newer DAW");
+    let got: SyncMessage = serde_json::from_str(&text).unwrap();
+    assert_eq!(got.kind, track(blob).kind);
+}

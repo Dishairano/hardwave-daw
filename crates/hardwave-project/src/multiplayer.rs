@@ -215,7 +215,11 @@ pub enum SyncKind {
     /// The song itself, as the bytes a .hwp file holds. The one
     /// moment the whole project crosses the network rather than one
     /// edit at a time.
-    ProjectOffer { name: String, blob: Vec<u8> },
+    ProjectOffer {
+        name: String,
+        #[serde(deserialize_with = "bytes_or_base64")]
+        blob: Vec<u8>,
+    },
     /// Who is in the room now, sent by the service whenever someone
     /// arrives or leaves. Without it the person who opened the room
     /// cannot tell whether the other one has actually come in.
@@ -238,6 +242,7 @@ pub enum SyncKind {
     TrackState {
         track_id: String,
         index: usize,
+        #[serde(deserialize_with = "bytes_or_base64")]
         blob: Vec<u8>,
     },
     /// A track was deleted.
@@ -251,6 +256,7 @@ pub enum SyncKind {
         /// editing it at once end with the same one on both sides.
         version: u64,
         author: u64,
+        #[serde(deserialize_with = "bytes_or_base64")]
         blob: Vec<u8>,
     },
     /// A plug-in knob moved (live, so not yet in the track's saved state).
@@ -260,6 +266,119 @@ pub enum SyncKind {
         param_id: u32,
         value: f64,
     },
+}
+
+/// The wire version a peer or the room service speaks. From 2 on, the
+/// bytes of a song, a track or a song part may travel as base64 text
+/// instead of a list of numbers: a list spends about 3.6 characters on a
+/// byte, so a song of more than about 4.5 MB went over a room's message
+/// size and the room closed. Base64 spends 1.33. Both sides say which
+/// they read (the DAW in its address, the room in its hello), and each
+/// side still reads either.
+pub const WIRE_VERSION: u32 = 2;
+
+/// A message as text for a room: the bytes inside as base64 when the
+/// other end reads it (`base64`), else as the list of numbers every
+/// version reads.
+pub fn to_wire_json(message: &SyncMessage, base64: bool) -> serde_json::Result<String> {
+    #[derive(Serialize)]
+    struct Wire<'a> {
+        sender_user_id: &'a str,
+        logical_clock: u64,
+        kind: WireKind<'a>,
+    }
+    // The same variant and field names as `SyncKind`, so it reads back as one.
+    #[derive(Serialize)]
+    enum WireKind<'a> {
+        ProjectOffer {
+            name: &'a str,
+            blob: Base64<'a>,
+        },
+        TrackState {
+            track_id: &'a str,
+            index: usize,
+            blob: Base64<'a>,
+        },
+        SongState {
+            section: &'a str,
+            version: u64,
+            author: u64,
+            blob: Base64<'a>,
+        },
+    }
+    struct Base64<'a>(&'a [u8]);
+    impl Serialize for Base64<'_> {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            use base64::Engine;
+            s.serialize_str(&base64::engine::general_purpose::STANDARD.encode(self.0))
+        }
+    }
+    let kind = match (&message.kind, base64) {
+        (SyncKind::ProjectOffer { name, blob }, true) => WireKind::ProjectOffer {
+            name,
+            blob: Base64(blob),
+        },
+        (
+            SyncKind::TrackState {
+                track_id,
+                index,
+                blob,
+            },
+            true,
+        ) => WireKind::TrackState {
+            track_id,
+            index: *index,
+            blob: Base64(blob),
+        },
+        (
+            SyncKind::SongState {
+                section,
+                version,
+                author,
+                blob,
+            },
+            true,
+        ) => WireKind::SongState {
+            section,
+            version: *version,
+            author: *author,
+            blob: Base64(blob),
+        },
+        _ => return serde_json::to_string(message),
+    };
+    serde_json::to_string(&Wire {
+        sender_user_id: &message.sender_user_id,
+        logical_clock: message.logical_clock,
+        kind,
+    })
+}
+
+/// Bytes as either form a room carries: a list of numbers or base64 text.
+fn bytes_or_base64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+    struct Bytes;
+    impl<'de> serde::de::Visitor<'de> for Bytes {
+        type Value = Vec<u8>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("bytes as a list of numbers or as base64")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<u8>, A::Error> {
+            let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(1 << 20));
+            while let Some(byte) = seq.next_element::<u8>()? {
+                out.push(byte);
+            }
+            Ok(out)
+        }
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Vec<u8>, E> {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(text)
+                .map_err(E::custom)
+        }
+        fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Vec<u8>, E> {
+            Ok(bytes.to_vec())
+        }
+    }
+    d.deserialize_any(Bytes)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -443,6 +562,61 @@ impl SessionHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_blob(kind: fn(Vec<u8>) -> SyncKind) -> SyncMessage {
+        SyncMessage {
+            sender_user_id: "u".into(),
+            logical_clock: 9,
+            kind: kind((0..=255u8).cycle().take(3000).collect()),
+        }
+    }
+
+    /// A song, a track and a song part go as base64 to a side that reads
+    /// it, read back the same, and take far less room than a number list.
+    #[test]
+    fn bytes_travel_as_base64_and_read_back_the_same() {
+        let messages = [
+            with_blob(|blob| SyncKind::ProjectOffer {
+                name: "Song".into(),
+                blob,
+            }),
+            with_blob(|blob| SyncKind::TrackState {
+                track_id: "t".into(),
+                index: 3,
+                blob,
+            }),
+            with_blob(|blob| SyncKind::SongState {
+                section: "tempo".into(),
+                version: 4,
+                author: u64::MAX,
+                blob,
+            }),
+        ];
+        for message in messages {
+            let old = to_wire_json(&message, false).unwrap();
+            assert_eq!(old, serde_json::to_string(&message).unwrap());
+            let new = to_wire_json(&message, true).unwrap();
+            assert!(new.len() * 2 < old.len(), "{} vs {}", new.len(), old.len());
+            for text in [old, new] {
+                let back: SyncMessage = serde_json::from_str(&text).unwrap();
+                assert_eq!(back, message);
+            }
+        }
+    }
+
+    /// Messages without bytes are written as they always were.
+    #[test]
+    fn other_messages_are_written_as_before() {
+        let message = SyncMessage {
+            sender_user_id: String::new(),
+            logical_clock: 1,
+            kind: SyncKind::Heartbeat,
+        };
+        assert_eq!(
+            to_wire_json(&message, true).unwrap(),
+            serde_json::to_string(&message).unwrap()
+        );
+    }
 
     fn member(id: &str, perm: Permission) -> RoomMember {
         RoomMember {

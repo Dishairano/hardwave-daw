@@ -16,3 +16,4 @@ thiserror.workspace = true
 dirs.workspace = true
 hardwave-midi = { path = "../hardwave-midi" }
 quick-xml = "0.41"
+base64 = "0.22"

@@ -27,7 +27,7 @@ use axum::routing::get;
 use axum::Router;
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
-use hardwave_project::multiplayer::{SyncKind, SyncMessage};
+use hardwave_project::multiplayer::{to_wire_json, SyncKind, SyncMessage, WIRE_VERSION};
 use hardwave_room::{JoinRefusal, Knock, LiveRoom};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,10 @@ struct JoinQuery {
     /// What this peer last saw, so it can be caught up.
     #[serde(default)]
     since: u64,
+    /// The wire version this peer reads (see WIRE_VERSION); 0 for a DAW
+    /// from before it, which is sent bytes as lists of numbers.
+    #[serde(default)]
+    wire: u32,
 }
 
 /// What the service says before anything else.
@@ -97,6 +101,9 @@ enum Hello {
         /// False when you have fallen too far behind and should ask
         /// the other side for the project again.
         caught_up: bool,
+        /// The wire version this service reads: from 2, bytes may come
+        /// as base64.
+        wire: u32,
     },
     /// The code was right; the host is being asked.
     Waiting,
@@ -267,6 +274,7 @@ async fn handle(
             invite_code: guard.live.invite_code.clone(),
             caught_up: missed.is_some(),
             missed: missed.unwrap_or_default(),
+            wire: WIRE_VERSION,
         };
         let inbox = guard.chatter.subscribe();
         announce_members(&guard);
@@ -277,8 +285,10 @@ async fn handle(
         return;
     }
 
-    // Out: everything the other person says, and what the room says.
+    // Out: everything the other person says, and what the room says, in
+    // the form this peer reads.
     let me = who.user_id.clone();
+    let base64 = query.wire >= WIRE_VERSION;
     let mut to_peer = tokio::spawn(async move {
         loop {
             match inbox.recv().await {
@@ -286,7 +296,7 @@ async fn handle(
                     if from == me {
                         continue;
                     }
-                    let Ok(text) = serde_json::to_string(&message) else {
+                    let Ok(text) = to_wire_json(&message, base64) else {
                         continue;
                     };
                     if sender.send(Message::Text(text.into())).await.is_err() {
