@@ -4162,13 +4162,28 @@ impl EngineCallback {
                 .cloned()
                 .collect::<Vec<_>>()
         };
+        // Automation clips that move another track's knob (FL's automation
+        // clip channels), gathered once the way MIDI routes are: the target
+        // track's node plays them as its own. A clip with no target moves
+        // the track it sits on, as every clip did before.
+        let mut handed: HashMap<&str, Vec<&hardwave_project::automation_clip::AutomationClip>> =
+            HashMap::new();
+        for source in &project.tracks {
+            for clip in &source.automation_clips {
+                if let Some(target) = clip.target_track.as_deref() {
+                    if target != source.id && !silent_rows.has(clip.row) {
+                        handed.entry(target).or_default().push(clip);
+                    }
+                }
+            }
+        }
         let audible_automation_clips = |track: &hardwave_project::track::Track| {
-            track
-                .automation_clips
-                .iter()
-                .filter(|clip| !silent_rows.has(clip.row))
-                .cloned()
-                .collect::<Vec<_>>()
+            let own = track.automation_clips.iter().filter(|clip| {
+                clip.target_track.as_deref().is_none_or(|t| t == track.id)
+                    && !silent_rows.has(clip.row)
+            });
+            let theirs = handed.get(track.id.as_str()).into_iter().flatten().copied();
+            own.chain(theirs).cloned().collect::<Vec<_>>()
         };
 
         // Reconcile the per-track meter map with the current tracks: reuse existing
