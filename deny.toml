@@ -34,6 +34,14 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "SUID/SGID bits kept on extract: Unix only; the updater unpacks our own signed archive on Windows" },
     { id = "RUSTSEC-2026-0368", reason = "symlinks outside the destination on extract: the updater unpacks our own signed archive" },
     { id = "RUSTSEC-2026-0369", reason = "Unix permissions applied through symlinks on extract: Unix only; our own signed archive" },
+    # Published 2 Nov (it stopped v0.266.35); accepted by the founder on 2 Nov:
+    # ZipArchive::extract aborts the process on a symlink entry with a huge
+    # declared size. Our own code never calls extract (FL packages, sample
+    # packs and DAWproject files are read entry by entry with our own size
+    # caps, and links are refused); the only caller is the updater, on our own
+    # signed archive. Our direct use moves to zip 9 separately; remove this
+    # when the updater moves too.
+    { id = "RUSTSEC-2026-0429", reason = "abort on a crafted symlink entry in extract: we never call extract; the updater unpacks our own signed archive (founder accepted 2 Nov)" },
 ]
 
 [licenses]
