@@ -161,8 +161,9 @@ pub struct SamplerSample {
 pub struct AudioFixup {
     pub track_id: String,
     pub clip_id: String,
-    /// Where the clip starts in its sample as FL plays it (after any stretch
-    /// and reverse), in milliseconds; FL's -1 means "from the start".
+    /// Where the clip starts in its file, in the file's own milliseconds
+    /// however the sample is stretched or pitched (for a reversed sample,
+    /// counted from the file's end); FL's -1 means "from the start".
     pub start_ms: f32,
     /// The clip's length on the timeline, in seconds.
     pub length_seconds: f64,
@@ -199,26 +200,30 @@ impl AudioFixup {
         clip.treatment.resample = self.resample;
         let stretch = clip.time_factor();
 
-        // In the sample as played (stretched), in its frames.
-        let played_frames = frames as f64 * stretch;
+        // FL keeps a clip's start in the file's own time, whatever the
+        // stretch: a loop trimmed two of its bars in starts two of the
+        // file's bars in. Read as a place in the stretched sample and
+        // divided by the stretch, every trimmed clip of a stretched loop
+        // started early or late in it.
         let start = if self.start_ms > 0.0 {
             self.start_ms as f64 / 1000.0 * rate as f64
         } else {
             0.0
         };
+        // The clip's length on the timeline, in the file's frames.
+        let span = self.length_seconds * rate as f64 / stretch;
         // The engine reads a reversed clip backwards from the end of its
         // window, where FL reverses the whole sample and starts the clip
         // `start` into that: the same sound when the window ends `start`
         // before the end of the file.
         let from = if self.reversed {
-            (played_frames - start - self.length_seconds * rate as f64).max(0.0)
+            (frames as f64 - start - span).max(0.0)
         } else {
             start
         };
         // Offsets count in the file's own frames; the engine scales them.
-        let to = from + self.length_seconds * rate as f64;
-        clip.source_start = ((from / stretch).round() as u64).min(frames);
-        clip.source_end = ((to / stretch).round() as u64).clamp(clip.source_start, frames);
+        clip.source_start = (from.round() as u64).min(frames);
+        clip.source_end = ((from + span).round() as u64).clamp(clip.source_start, frames);
     }
 }
 
@@ -2013,8 +2018,9 @@ mod tests {
 
     #[test]
     fn offsets_count_in_the_file_however_it_is_stretched() {
-        // FL's offset is in the sample as played: one second into a sample
-        // stretched to twice its length is half a second into the file.
+        // FL's offset is in the file's own time: one second in is one second
+        // into the file, however long the sample is stretched to last. At
+        // twice its length a second of timeline is half a second of file.
         let mut clip = blank_clip();
         AudioFixup {
             start_ms: 1_000.0,
@@ -2022,14 +2028,41 @@ mod tests {
             ..fixup()
         }
         .apply(&mut clip, 96_000, 48_000);
-        assert_eq!(clip.source_start, 24_000);
-        assert_eq!(clip.source_end, 48_000, "one second of timeline later");
+        assert_eq!(clip.source_start, 48_000);
+        assert_eq!(clip.source_end, 72_000, "one second of timeline later");
+    }
+
+    /// From a real FL 26 project at 130 BPM: a 126 BPM loop of 7.62 s
+    /// (336,000 frames at 44.1 kHz) set to last 16 beats (7.38 s), placed
+    /// for one bar from half way through. FL wrote the clip's start as
+    /// 3809.52 ms and its end as 5714.27 ms: half the file and three
+    /// quarters of it, in the file's own time. Read as time in the
+    /// stretched sample, the clip started 121 ms (about a sixteenth) late.
+    #[test]
+    fn a_trimmed_clip_of_a_stretched_loop_plays_the_part_fl_plays() {
+        let beat = 60.0 / 130.0;
+        let mut clip = blank_clip();
+        AudioFixup {
+            start_ms: 3_809.523_7,
+            length_seconds: 4.0 * beat,
+            fit_seconds: Some(16.0 * beat),
+            ..fixup()
+        }
+        .apply(&mut clip, 336_000, 44_100);
+        assert_eq!(clip.source_start, 168_000, "half way into the file");
+        let fl_end = (5_714.274 / 1000.0 * 44_100.0) as i64;
+        assert!(
+            (clip.source_end as i64 - fl_end).abs() <= 1,
+            "ends where FL says: {} against {fl_end}",
+            clip.source_end
+        );
     }
 
     #[test]
-    fn a_tape_s_offsets_count_in_the_file_at_its_speed() {
-        // Up an octave in Resample the sample plays twice as fast: a
-        // quarter second into it is half a second into the file.
+    fn a_tape_s_start_counts_in_the_file_too() {
+        // Up an octave in Resample the sample plays twice as fast: a quarter
+        // second into the file is still a quarter second into the file, and
+        // a second of timeline takes two of the file.
         let mut clip = blank_clip();
         AudioFixup {
             start_ms: 250.0,
@@ -2038,7 +2071,7 @@ mod tests {
             ..fixup()
         }
         .apply(&mut clip, 96_000, 48_000);
-        assert_eq!(clip.source_start, 24_000);
+        assert_eq!(clip.source_start, 12_000);
         assert_eq!(clip.source_end, 96_000, "the rest of the file");
     }
 
