@@ -334,8 +334,29 @@ impl InsertChain {
         midi_in: &[MidiEvent],
         sidechain: Option<(&[f32], &[f32])>,
     ) {
+        let all = 0..self.slots.len();
+        self.process_slots(all, left, right, num_samples, scratch, midi_in, sidechain);
+    }
+
+    /// As [`InsertChain::process`], through only the slots in `range`, in
+    /// order. An instrument track runs the slots up to its instrument
+    /// plug-in, adds its audio clips, then runs the rest. A range past the
+    /// end of the chain is cut to it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_slots(
+        &mut self,
+        range: std::ops::Range<usize>,
+        left: &mut [f32],
+        right: &mut [f32],
+        num_samples: usize,
+        scratch: &mut Scratch,
+        midi_in: &[MidiEvent],
+        sidechain: Option<(&[f32], &[f32])>,
+    ) {
         let n = num_samples.min(left.len()).min(right.len());
-        if n == 0 {
+        let end = range.end.min(self.slots.len());
+        let start = range.start.min(end);
+        if n == 0 || start == end {
             return;
         }
         // A sidechain bus is only usable if both channels cover the full
@@ -349,7 +370,7 @@ impl InsertChain {
         // generators) can chain — that lands as a follow-up; for the
         // initial wiring we just give every slot the external events
         // so a synth plug-in becomes audible from a hardware controller.
-        for slot in self.slots.iter_mut() {
+        for slot in self.slots[start..end].iter_mut() {
             if !slot.enabled || slot.wet <= 0.0 {
                 continue;
             }
