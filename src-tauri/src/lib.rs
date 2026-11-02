@@ -495,6 +495,11 @@ pub fn run() {
             commands::cloud::save_to_workspace,
             commands::cloud::list_workspace_songs,
             commands::cloud::open_from_workspace,
+            // The Hardwave account: signing in and out, and what it has.
+            commands::account::account_status,
+            commands::account::account_sign_in,
+            commands::account::account_sign_out,
+            commands::account::account_open_page,
             commands::collab::start_collab,
             commands::collab::stop_collab,
             commands::collab::collab_status,

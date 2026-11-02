@@ -7,9 +7,27 @@ license.workspace = true
 
 # Who a token belongs to and whether they have Pro, asked of the site.
 # Shared by the services the DAW talks to, so every one of them checks
-# an account the same way.
+# an account the same way; and the DAW's own sign-in, which keeps the
+# token in the file every Hardwave program on the computer shares.
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+dirs = { workspace = true }
+
+# The shared token file is restricted to the user with an access list
+# of one entry on Windows (shared_token.rs), the same list the Suite
+# writes.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+axum = "0.8"

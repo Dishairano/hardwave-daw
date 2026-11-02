@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-open-page"
+description = "Enables the account_open_page command without any pre-configured scope."
+commands.allow = ["account_open_page"]
+
+[[permission]]
+identifier = "deny-account-open-page"
+description = "Denies the account_open_page command without any pre-configured scope."
+commands.deny = ["account_open_page"]

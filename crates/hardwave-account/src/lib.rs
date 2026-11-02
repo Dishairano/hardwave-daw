@@ -6,9 +6,15 @@
 //! itself. Nothing the client says about itself is believed.
 //!
 //! Every service the DAW talks to checks an account through here: the
-//! room two producers meet in, and the stem separation queue.
+//! room two producers meet in, and the stem separation queue. The DAW
+//! itself signs in, signs out and shows the account through `client`,
+//! keeping the token in the file every Hardwave program shares
+//! (`shared_token`).
 
 use serde::Deserialize;
+
+pub mod client;
+pub mod shared_token;
 
 pub struct Who {
     pub user_id: String,
@@ -52,8 +58,16 @@ impl Id {
     }
 }
 
-/// Read /api/auth/me: (account id, name to show, is staff).
-fn read_me(body: &[u8]) -> Result<(String, String, bool), String> {
+/// What /api/auth/me says about an account.
+pub(crate) struct MeReply {
+    pub user_id: String,
+    pub display_name: Option<String>,
+    pub email: Option<String>,
+    pub is_admin: bool,
+}
+
+/// Read /api/auth/me.
+pub(crate) fn parse_me(body: &[u8]) -> Result<MeReply, String> {
     let me: Me = serde_json::from_slice(body)
         .map_err(|_| "the site answered something we could not read".to_string())?;
     let user_id = me
@@ -62,13 +76,24 @@ fn read_me(body: &[u8]) -> Result<(String, String, bool), String> {
         .map(Id::into_string)
         .or_else(|| me.email.clone())
         .ok_or_else(|| "the site did not say who you are".to_string())?;
+    Ok(MeReply {
+        user_id,
+        display_name: me.display_name,
+        email: me.email,
+        is_admin: me.is_admin,
+    })
+}
+
+/// Read /api/auth/me: (account id, name to show, is staff).
+fn read_me(body: &[u8]) -> Result<(String, String, bool), String> {
+    let me = parse_me(body)?;
     // Never the email address: the name is shown to the other person in
     // a room, and an address is not theirs to see.
     let name = me
         .display_name
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| "A producer".into());
-    Ok((user_id, name, me.is_admin))
+    Ok((me.user_id, name, me.is_admin))
 }
 
 #[derive(Deserialize)]
