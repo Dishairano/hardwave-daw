@@ -12,3 +12,9 @@ hound.workspace = true
 serde.workspace = true
 log.workspace = true
 thiserror.workspace = true
+
+[[example]]
+name = "make_drum_kit"
+# Its tests check the drum one-shots the DAW ships with (envelopes,
+# spectra, size), so they run with the crate's own tests.
+test = true
