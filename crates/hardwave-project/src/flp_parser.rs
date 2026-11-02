@@ -1021,7 +1021,7 @@ fn read_channel_setting(settings: &mut FlChannelSettings, id: u8, data: &[u8]) {
                 // At FL's own 192 a beat, not the file's resolution: read
                 // as the file's 96, a sample set to last four bars lasted
                 // eight, and played at half speed.
-                let time = f32_at(data, 96) as f64;
+                let time = stretch_time(u32_at(data, 96));
                 settings.stretch.time_ticks = if time.is_finite() && time > 0.0 {
                     time * hardwave_midi::PPQ as f64 / STRETCH_TIME_PER_BEAT
                 } else {
@@ -1035,6 +1035,20 @@ fn read_channel_setting(settings: &mut FlChannelSettings, id: u8, data: &[u8]) {
             }
         }
         _ => {}
+    }
+}
+
+/// The TIME knob's four bytes, at 192 a beat. FL 26 writes a float, FL 20 a
+/// whole number. A whole number's bits read as a float are vanishingly
+/// small (3072, four bars, reads as 4e-42), and the sample was squeezed to
+/// a tenth of its length, as short as a clip goes; a float's bits read as a
+/// whole number are millions of beats. So the tiny floats are whole numbers.
+fn stretch_time(bits: u32) -> f64 {
+    let float = f32::from_bits(bits);
+    if float.is_subnormal() {
+        bits as f64
+    } else {
+        float as f64
     }
 }
 
@@ -1694,6 +1708,28 @@ mod tests {
             );
             assert_eq!(stretch.mode, 5);
         }
+    }
+
+    /// FL 20.8 writes the TIME knob as a whole number: these are the
+    /// stretch bytes of a channel preset it saved (from PyFLP's tests, where
+    /// it reads as four bars, PITCH +1200, MUL 0.25, E3 Generic).
+    #[test]
+    fn a_time_knob_written_as_a_whole_number_reads_as_one() {
+        let mut writer = Writer::new();
+        writer.event(CH_NEW, &0u16.to_le_bytes());
+        writer.event(CH_TYPE, &[0]);
+        let mut params = vec![0u8; 158];
+        params[96..112].copy_from_slice(&[
+            0x00, 0x0c, 0x00, 0x00, 0xb0, 0x04, 0x00, 0x00, 0xe0, 0xb1, 0xff, 0xff, 0x01, 0, 0, 0,
+        ]);
+        writer.event(CH_PARAMETERS, &params);
+
+        let project = parse(&writer.finish(96)).expect("it should read");
+        let stretch = project.channels[0].settings.stretch;
+        assert_eq!(stretch.time_ticks, 16.0 * hardwave_midi::PPQ as f64);
+        assert_eq!(stretch.pitch_cents, 1200);
+        assert_eq!(stretch.multiplier, 0.25);
+        assert_eq!(stretch.mode, 1);
     }
 
     #[test]
