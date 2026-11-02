@@ -5184,9 +5184,26 @@ impl EngineCallback {
                 c.fill(0.0);
                 c
             });
-            self.process_block(&mut output[done * 2..(done + n) * 2], piece, n);
+            let block = &mut output[done * 2..(done + n) * 2];
+            self.process_block(block, piece, n);
+            self.render_auditions(block, n);
             done += n;
         }
+    }
+
+    /// What is played straight to the sound card on top of the song: the
+    /// browser's auditions. After the master, its tap and the capture path,
+    /// so none of it prints into a recording or a bounce, and on every block,
+    /// the stopped and the counting-in ones too: an audition is mostly
+    /// listened to with the song stopped.
+    fn render_auditions(&mut self, block: &mut [f32], num_frames: usize) {
+        self.preview
+            .render(block, num_frames, &self.audio_pool, self.sample_rate as f64);
+        // The last thing before the sound card: nothing broken reaches the
+        // speakers, whatever produced it (a plug-in, a script, a value from
+        // a file or the network).
+        let written = (num_frames * 2).min(block.len());
+        guard_output(&mut block[..written]);
     }
 }
 
@@ -5811,21 +5828,9 @@ impl EngineCallback {
             );
         }
 
-        // Browser auditions, alongside the click and for the same reason:
-        // after the tap and the capture path, so listening to a sample in the
-        // browser cannot print itself into a recording or a bounce.
-        self.preview.render(
-            output,
-            num_frames,
-            &self.audio_pool,
-            self.sample_rate as f64,
-        );
-
-        // The last thing before the sound card: nothing broken reaches the
-        // speakers, whatever produced it (a plug-in, a script, a value from
-        // a file or the network).
-        let written = (num_frames * 2).min(output.len());
-        guard_output(&mut output[..written]);
+        // Browser auditions and the output guard follow in `run`, for every
+        // block: the stopped-song shortcut above returned before them, so a
+        // sample clicked in the browser was silent with the song stopped.
 
         // Advance transport only when playing — input-monitoring alone must
         // not move the playhead.
@@ -7230,6 +7235,32 @@ mod rt_safety_tests {
             Arc::new(crate::session::SessionState::new()),
         );
         (cb, cmd_tx)
+    }
+
+    /// A sample clicked in the browser is heard with the song stopped. The
+    /// stopped-song shortcut sent silence and returned before the audition
+    /// was mixed in, so a preview was only heard while the song played.
+    #[test]
+    fn a_browser_preview_plays_while_the_song_is_stopped() {
+        let (mut cb, _cmd_tx) = make_callback(Arc::new(Mutex::new(Project::default())));
+        let request = crate::preview_player::PreviewRequest::new();
+        cb.preview = crate::preview_player::PreviewPlayer::new(request.clone());
+        cb.audio_pool.insert(
+            "kick".into(),
+            AudioBuffer {
+                channels: vec![vec![0.5; 4_800]; 2],
+                sample_rate: 48_000,
+                num_frames: 4_800,
+            },
+        );
+        assert!(!cb.transport.is_playing());
+        request.play("kick");
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        assert!(
+            out.iter().any(|s| s.abs() > 0.1),
+            "the audition is heard with the song stopped"
+        );
     }
 
     #[test]
