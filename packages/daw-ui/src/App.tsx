@@ -1257,13 +1257,19 @@ export function App() {
     const intervalMs = frequencyIntervalMs(autosaveFrequency)
     if (intervalMs <= 0) return // 'never' — no timer
     const id = setInterval(() => {
-      const { dirty } = useProjectStore.getState()
-      if (dirty) {
-        invoke('autosave_save').catch(() => {})
-      }
+      void useProjectStore.getState().refreshDirty().then(dirty => {
+        if (dirty) invoke('autosave_save').catch(() => {})
+      })
     }, intervalMs)
     return () => clearInterval(id)
   }, [autosaveFrequency])
+
+  // The song shows as changed (title, save button) after any edit, also one
+  // made where nothing marks it, such as a new tempo or an added plug-in.
+  useEffect(() => {
+    const id = setInterval(() => { void useProjectStore.getState().refreshDirty() }, 3000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -1312,8 +1318,15 @@ export function App() {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window')
         const win = getCurrentWindow()
+        // Set once the choice is made: the close below comes back through
+        // this handler, and the backend still counts the discarded edits.
+        let decided = false
         const unlisten = await win.onCloseRequested(async (event) => {
-          if (!useProjectStore.getState().dirty) return
+          if (decided) return
+          // The handler is awaited before the window goes, so the backend
+          // can be asked whether an edit the window never saw changed the
+          // song.
+          if (!(await useProjectStore.getState().refreshDirty())) return
           // Pause the native close until the user picks an action.
           event.preventDefault()
           // Use the same styled SaveChangesDialog flow as the
@@ -1339,6 +1352,7 @@ export function App() {
             }
           }
           useProjectStore.setState({ dirty: false })
+          decided = true
           await win.close()
         })
         cleanupTauri = unlisten
@@ -1411,8 +1425,7 @@ export function App() {
   const [showTemplateDialog, setShowTemplateDialog] = useState(false)
 
   const confirmDiscardIfDirty = useCallback(async (action: string): Promise<boolean> => {
-    const { dirty } = useProjectStore.getState()
-    if (!dirty) return true
+    if (!(await useProjectStore.getState().refreshDirty())) return true
     const choice = await new Promise<SaveChangesChoice>(resolve => {
       savePromptResolver.current = resolve
       setSavePromptAction(action)

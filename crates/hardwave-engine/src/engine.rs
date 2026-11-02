@@ -165,6 +165,11 @@ pub struct History {
     /// Steps were dropped off the bottom (past the cap), so the oldest
     /// one kept is not the song as it was opened.
     trimmed: bool,
+    /// Every edit, undo and redo counts one, so the song can tell whether
+    /// it changed since it was last saved or opened.
+    edits: u64,
+    /// `edits` when the song was last saved or opened.
+    saved_at: u64,
 }
 
 /// One edit: a song it can be undone or redone to, and what the edit was.
@@ -245,10 +250,13 @@ impl History {
             undo: Vec::new(),
             redo: Vec::new(),
             trimmed: false,
+            edits: 0,
+            saved_at: 0,
         }
     }
 
     pub fn push(&mut self, snapshot: Project) {
+        self.note_edit();
         self.undo.push(Step::new(snapshot));
         if self.undo.len() > HISTORY_CAP {
             self.undo.remove(0);
@@ -257,14 +265,38 @@ impl History {
         self.redo.clear();
     }
 
+    /// Forget every step. Whether the song changed since it was saved is
+    /// left as it is: clearing the list is not saving the song.
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.trimmed = false;
     }
 
+    /// The song changed without a step of its own: a later move of a
+    /// gesture whose first move took the step.
+    pub fn note_edit(&mut self) {
+        self.edits += 1;
+    }
+
+    /// The song is now what is on disk: it was just saved or opened.
+    pub fn mark_saved(&mut self) {
+        self.saved_at = self.edits;
+    }
+
+    /// Whether the song changed since it was last saved or opened.
+    ///
+    /// The window kept its own "changed" flag, set by some edits and not
+    /// others: a new tempo, an added plug-in or an automation point left
+    /// it clean, so closing the DAW did not ask to save and autosave never
+    /// ran. Every edit that can be undone passes through here.
+    pub fn has_unsaved_edits(&self) -> bool {
+        self.edits != self.saved_at
+    }
+
     pub fn undo(&mut self, current: Project) -> Option<Project> {
         let (project, step) = self.undo.pop()?.swap(current);
+        self.note_edit();
         self.redo.push(step);
         if self.redo.len() > HISTORY_CAP {
             self.redo.remove(0);
@@ -274,6 +306,7 @@ impl History {
 
     pub fn redo(&mut self, current: Project) -> Option<Project> {
         let (project, step) = self.redo.pop()?.swap(current);
+        self.note_edit();
         self.undo.push(step);
         if self.undo.len() > HISTORY_CAP {
             self.undo.remove(0);
@@ -418,6 +451,32 @@ mod history_list_tests {
             !h.label_newest("After redo".into(), made + 1),
             "a redo is not a new edit"
         );
+    }
+
+    #[test]
+    fn an_edit_since_the_last_save_is_known_and_clearing_the_list_does_not_hide_it() {
+        let mut h = History::new();
+        assert!(!h.has_unsaved_edits(), "a song as opened");
+        h.push(song(150.0));
+        assert!(h.has_unsaved_edits(), "a new tempo is an edit");
+        h.mark_saved();
+        assert!(!h.has_unsaved_edits());
+
+        // A later move of the same gesture takes no step but still counts.
+        h.note_edit();
+        assert!(h.has_unsaved_edits());
+        h.mark_saved();
+
+        // Undo changes the song on screen from the one on disk.
+        let back = h.undo(song(155.0)).unwrap();
+        assert!(h.has_unsaved_edits());
+        h.mark_saved();
+        h.redo(back).unwrap();
+        assert!(h.has_unsaved_edits());
+
+        // The history list's Clear forgets the steps, not the edit.
+        h.clear();
+        assert!(h.has_unsaved_edits());
     }
 
     #[test]
@@ -811,6 +870,7 @@ impl DawEngine {
         // twenty times.
         use std::sync::atomic::Ordering::Relaxed;
         if self.history_group_open.load(Relaxed) && self.history_group_taken.swap(true, Relaxed) {
+            self.history.lock().note_edit();
             return;
         }
         let snap = self.project.lock().clone();
@@ -892,6 +952,16 @@ impl DawEngine {
     /// Reset the history — e.g. after loading or creating a new project.
     pub fn reset_history(&self) {
         self.history.lock().clear();
+    }
+
+    /// The song is now what is on disk: just saved, opened or made new.
+    pub fn mark_song_saved(&self) {
+        self.history.lock().mark_saved();
+    }
+
+    /// Whether the song changed since it was last saved or opened.
+    pub fn song_has_unsaved_edits(&self) -> bool {
+        self.history.lock().has_unsaved_edits()
     }
 
     /// (undoDepth, redoDepth) — exposed so the UI can enable/disable menu entries.

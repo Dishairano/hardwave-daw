@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Stands in for the backend: every command succeeds and reads come back empty.
-const invokeMock = vi.fn(async (_cmd: string, _args?: Record<string, unknown>) => null as unknown)
+// Stands in for the backend: every command succeeds and reads come back empty,
+// apart from whether the song has edits the window did not see.
+let backendSeesEdits = false
+const invokeMock = vi.fn(async (cmd: string, _args?: Record<string, unknown>) => {
+  if (cmd === 'song_has_unsaved_edits') return backendSeesEdits
+  return null as unknown
+})
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
 }))
@@ -25,6 +30,7 @@ const savedTo = () =>
   invokeMock.mock.calls.filter(([cmd]) => cmd === 'save_project').map(([, args]) => args?.path)
 
 beforeEach(() => {
+  backendSeesEdits = false
   invokeMock.mockClear()
   saveDialog.mockReset()
   saveDialog.mockResolvedValue(null)
@@ -94,5 +100,21 @@ describe('opening an auto-save', () => {
     expect(s.filePath).toBe('/songs/Anthem.hwp')
     expect(s.dirty).toBe(false)
     expect(s.recentProjects[0]).toBe('/songs/Anthem.hwp')
+  })
+})
+
+describe('whether the song changed', () => {
+  it('an edit only the backend saw, such as a new tempo, marks the song changed', async () => {
+    useProjectStore.setState({ filePath: '/songs/Anthem.hwp', projectName: 'Anthem', dirty: false })
+    expect(await useProjectStore.getState().refreshDirty()).toBe(false)
+
+    backendSeesEdits = true
+    expect(await useProjectStore.getState().refreshDirty()).toBe(true)
+    expect(useProjectStore.getState().dirty).toBe(true)
+  })
+
+  it('a song the window already knows is changed stays changed', async () => {
+    useProjectStore.setState({ dirty: true })
+    expect(await useProjectStore.getState().refreshDirty()).toBe(true)
   })
 })

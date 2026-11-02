@@ -33,6 +33,7 @@ pub fn new_project(state: State<AppState>) {
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     apply_project_time_signature(&engine);
     engine.reset_history();
+    engine.mark_song_saved();
     // The old song's plug-ins go: the new song's mixer inserts and master
     // have the same ids, and kept them (an old sampler played on).
     engine.clear_live_plugins();
@@ -114,10 +115,22 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
     let target = PathBuf::from(&path);
     let result = project.save(&target).map_err(|e| e.to_string());
     drop(project);
+    if result.is_ok() {
+        engine.mark_song_saved();
+    }
     // Save As moves the project to a new folder, and samples collected into
     // the old one are stored relative to it, so the base has to follow.
     engine.set_project_dir(target.parent().map(|p| p.to_path_buf()));
     result
+}
+
+/// Whether the song changed since it was last saved or opened, by any
+/// edit that can be undone. The window asks before it closes, opens
+/// another song or auto-saves, so an edit it did not see itself still
+/// counts.
+#[tauri::command]
+pub fn song_has_unsaved_edits(state: State<AppState>) -> bool {
+    state.engine.lock().song_has_unsaved_edits()
 }
 
 /// The file "Save new version" writes the song at `path` to: the next
@@ -232,6 +245,7 @@ pub(crate) fn open_project_blocking(
         // started, because only the tempo was taken from the loaded map.
         apply_project_time_signature(&engine);
         engine.reset_history();
+        engine.mark_song_saved();
         engine.rebuild_graph();
         // The master's fader is the master level.
         let master = engine
