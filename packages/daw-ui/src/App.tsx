@@ -1703,7 +1703,8 @@ export function App() {
   const handleCrashChoice = useCallback(async (c: CrashChoice) => {
     const info = crashInfo
     setCrashInfo(null)
-    if (!info) return
+    // Later: the dialog goes and the auto-saves stay where they are.
+    if (!info || c === 'later') return
     if (c === 'discard') {
       await invoke('autosave_clear').catch(() => {})
       return
