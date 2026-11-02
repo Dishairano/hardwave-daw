@@ -2,6 +2,7 @@ import { useProjectStore } from '../stores/projectStore'
 
 const STAGES: Record<string, string> = {
   file: 'Reading the file',
+  unpack: 'Unpacking the zip',
   audio: 'Loading the audio',
   plugins: 'Loading the plug-ins',
   done: 'Almost there',
@@ -17,7 +18,8 @@ export function OpeningOverlay() {
   const opening = useProjectStore((s) => s.opening)
   if (!opening) return null
   const stage = STAGES[opening.stage] ?? 'Opening'
-  const count = opening.stage === 'audio' && opening.total > 0 ? ` ${opening.done} of ${opening.total}` : ''
+  const counted = opening.stage === 'audio' || opening.stage === 'unpack'
+  const count = counted && opening.total > 0 ? ` ${opening.done} of ${opening.total}` : ''
   const share = opening.total > 0 ? opening.done / opening.total : 0
   return (
     <div
