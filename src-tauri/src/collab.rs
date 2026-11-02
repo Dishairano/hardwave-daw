@@ -273,6 +273,19 @@ impl Collab {
         );
     }
 
+    /// The whole song went to the other side, which counts every part
+    /// from 0 again when it takes it. Each part edited in this room goes
+    /// out once more with its version, so their next edit counts on from
+    /// ours: without it, their first tempo change or marker after taking
+    /// the song lost to ours and was not taken here.
+    pub fn resend_song_parts(&self) {
+        for clock in self.song.lock().values_mut() {
+            if clock.version > 0 {
+                clock.unsent = true;
+            }
+        }
+    }
+
     pub fn forget_track(&self, track_id: &str) {
         self.track_hashes.lock().remove(track_id);
     }
@@ -746,6 +759,38 @@ mod tests {
         // Settled: nothing more either way.
         assert!(a.collab.song_changes(&a.project).is_empty());
         assert!(b.collab.song_changes(&b.project).is_empty());
+    }
+
+    /// After the guest takes the whole song, the host sends each part
+    /// again with its version, and the guest's next edit then wins.
+    #[test]
+    fn an_edit_made_after_taking_the_whole_song_reaches_the_other_side() {
+        let start = song();
+        let (mut host, mut guest) = (side(&start), side(&start));
+        // The host edits the tempo twice before the guest asks for the song.
+        for bpm in [150.0, 151.0] {
+            host.project.tempo_map.entries[0].bpm = bpm;
+            host.collab.song_changes(&host.project);
+        }
+        // The guest takes it whole, as handle_project does.
+        guest.project = host.project.clone();
+        guest.collab.remember_tracks(&guest.project);
+        host.collab.resend_song_parts();
+        let again = host.collab.song_changes(&host.project);
+        assert_eq!(
+            again.len(),
+            1,
+            "only the part edited in the room goes again"
+        );
+        deliver(again, &mut guest);
+        // Nothing changed for the guest, and nothing goes back.
+        assert_eq!(guest.project.tempo_map.entries[0].bpm, 151.0);
+        assert!(guest.collab.song_changes(&guest.project).is_empty());
+
+        guest.project.tempo_map.entries[0].bpm = 133.0;
+        let from_guest = guest.collab.song_changes(&guest.project);
+        deliver(from_guest, &mut host);
+        assert_eq!(host.project.tempo_map.entries[0].bpm, 133.0);
     }
 
     fn fader() -> SyncKind {

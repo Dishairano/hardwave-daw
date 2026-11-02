@@ -306,6 +306,9 @@ fn handle_project(
                 }
             };
             collab.send_control(SyncKind::ProjectOffer { name, blob });
+            // Followed by each part with its version, so the other side
+            // counts on from ours (see resend_song_parts).
+            collab.resend_song_parts();
             true
         }
         SyncKind::ProjectOffer { name, blob } => {
