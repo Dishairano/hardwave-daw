@@ -333,6 +333,8 @@ permissions = [
   "allow-get-master-samples",
   "allow-get-audio-devices",
   "allow-get-audio-config",
+  "allow-play-test-tone",
+  "allow-get-test-tone",
   "allow-set-audio-config",
   "allow-get-audio-input-devices",
   "allow-get-audio-input-config",

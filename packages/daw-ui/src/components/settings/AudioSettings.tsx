@@ -18,6 +18,8 @@ import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
 import { useSetupWizardStore } from '../../stores/setupWizardStore'
 import { usePluginStore } from '../../stores/pluginStore'
+import { useTransportStore } from '../../stores/transportStore'
+import { TestToneStrip, useTestTone } from './TestToneStrip'
 import {
   deskInputOptions, PROTOCOL_OPTIONS, SURFACE_CAPTIONS, SURFACE_OFF,
   type ControlSurfaceStatus, type DeskProtocol,
@@ -185,6 +187,13 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const [selectedBuffer, setSelectedBuffer] = useState(512)
   const [applying, setApplying] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The test tone: after a change of the device, rate, buffer, driver or
+  // output pair it plays on the device just opened, and the strip under the
+  // device names it. Not over a song that plays; Test sound always does.
+  const tone = useTestTone()
+  const toneAfterChange = () => {
+    if (!useTransportStore.getState().playing) void tone.play()
+  }
   const [exclusive, setExclusive] = useState<WasapiExclusiveStatus>({ enabled: false, available: false })
   const [monitor, setMonitor] = useState<InputMeterSnapshot | null>(null)
   const [monitorOn, setMonitorOn] = useState(false)
@@ -492,6 +501,9 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
   const apply = async () => {
     setApplying(true)
     setError(null)
+    const outputChanged = selectedDevice !== config.device
+      || selectedRate !== config.sample_rate
+      || selectedBuffer !== config.buffer_size
     try {
       await invoke('set_audio_config', {
         device: selectedDevice,
@@ -504,8 +516,11 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
       })
       setConfig({ device: selectedDevice, sample_rate: selectedRate, buffer_size: selectedBuffer })
       setInputConfig({ device: selectedInput, channels: selectedInputChannels })
+      if (outputChanged || tone.state.kind === 'failed') toneAfterChange()
     } catch (e: any) {
       setError(String(e))
+      // The strip under the device says it did not open, with Retry.
+      if (outputChanged || tone.state.kind === 'failed') tone.failed(String(e))
     }
     setApplying(false)
   }
@@ -589,6 +604,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                         setSelectedDevice(cfg.device)
                         setSelectedRate(cfg.sample_rate)
                         setSelectedBuffer(cfg.buffer_size)
+                        toneAfterChange()
                       })
                       .catch(e => { setHost(previous); setHostError(String(e)) })
                   }}
@@ -619,6 +635,19 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                 ]}
               />
             </SettingRow>
+            {tone.state.kind !== 'idle' && (
+              <div style={{ margin: '2px 0 12px' }}>
+                <TestToneStrip
+                  state={tone.state}
+                  meters={tone.meters}
+                  detail={(_, at) => tf('applied {time}', {
+                    time: at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  })}
+                  onPlayAgain={() => { void tone.play() }}
+                  onRetry={() => { void apply() }}
+                />
+              </div>
+            )}
 
             {/* Sample Rate */}
             <SettingRow label="Sample Rate">
@@ -770,6 +799,7 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
                   // The pair is fixed when the stream opens, so the engine
                   // restarts audio: a moment of silence, then the new pair.
                   invoke('set_channel_offsets', { input: inputOffset, output: next })
+                    .then(toneAfterChange)
                     .catch(() => {})
                 }}
                 options={channelPairOptions(
@@ -1709,6 +1739,24 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
           borderTop: `1px solid ${hw.border}`,
           background: 'rgba(255,255,255,0.02)',
         }}>
+          {tab === 'audio' && (
+            <button
+              onClick={() => { void tone.play() }}
+              title={tr('Play the test tone on the device in use, left then right')}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 'auto',
+                padding: '5px 14px', fontSize: 12, fontWeight: 600,
+                borderRadius: hw.radius.sm, border: 'none', cursor: 'pointer',
+                background: 'rgba(255,255,255,0.06)', color: hw.textSecondary, fontFamily: 'inherit',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M2 6h3l4-3v10l-4-3H2z" />
+                <path d="M11.5 5.5a3.5 3.5 0 0 1 0 5M13.5 3.5a6.5 6.5 0 0 1 0 9" />
+              </svg>
+              {tr('Test sound')}
+            </button>
+          )}
           <Btn label={tr('Close')} onClick={onClose} />
           <Btn label={applying ? tr('Applying...') : tr('Apply')} primary disabled={!hasChanges || applying} onClick={apply} />
         </div>

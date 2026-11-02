@@ -623,6 +623,10 @@ pub struct DawEngine {
     /// Browser audition requests, shared with the audio thread.
     preview: crate::preview_player::PreviewRequest,
 
+    /// The test tone after Apply in Settings > Audio, shared with the audio
+    /// thread.
+    test_tone: crate::test_tone::TestToneRequest,
+
     /// Behaviour switches from the Audio settings panel, read by the audio
     /// thread every block.
     audio_prefs: crate::audio_prefs::AudioPrefs,
@@ -775,6 +779,7 @@ impl DawEngine {
             audio_xruns: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             metronome: crate::metronome::MetronomeSettings::new(),
             preview: crate::preview_player::PreviewRequest::new(),
+            test_tone: crate::test_tone::TestToneRequest::new(),
             audio_prefs: crate::audio_prefs::AudioPrefs::new(),
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
@@ -1336,7 +1341,7 @@ impl DawEngine {
         *self.insert_command_sender.lock() = Some(cmd_tx);
         *self.insert_graveyard.lock() = Some(grave_rx);
 
-        let callback = EngineCallback::new(
+        let mut callback = EngineCallback::new(
             transport,
             project,
             meter_producer,
@@ -1369,6 +1374,9 @@ impl DawEngine {
             Arc::clone(&self.reference_gain_centi_db),
             Arc::clone(&self.session),
         );
+        // Only the live callback hears the test tone; an export's callback
+        // keeps the one nobody can start.
+        callback.test_tone = crate::test_tone::TestTone::new(self.test_tone.clone());
 
         self.audio_device
             .start(callback)
@@ -1780,6 +1788,12 @@ impl DawEngine {
     /// could not do.
     pub fn preview(&self) -> &crate::preview_player::PreviewRequest {
         &self.preview
+    }
+
+    /// The test tone: a soft sine on the left output, then the right,
+    /// straight to the sound card (see `test_tone`).
+    pub fn test_tone(&self) -> &crate::test_tone::TestToneRequest {
+        &self.test_tone
     }
 
     /// The Audio settings panel's behaviour switches.
@@ -3089,6 +3103,9 @@ struct EngineCallback {
     /// Plays browser auditions. Like the click, mixed in after the tap, so an
     /// audition cannot end up in a recording or a bounce.
     preview: crate::preview_player::PreviewPlayer,
+    /// The test tone, mixed in with the auditions. Built unwired; only the
+    /// live callback is handed the request the window starts it with.
+    test_tone: crate::test_tone::TestTone,
     /// The Audio settings panel's behaviour switches, shared with the engine
     /// so a change applies to the next block.
     audio_prefs: crate::audio_prefs::AudioPrefs,
@@ -3315,6 +3332,7 @@ impl EngineCallback {
     ) -> Self {
         let mut cb = Self {
             preview: crate::preview_player::PreviewPlayer::new(preview),
+            test_tone: crate::test_tone::TestTone::unwired(),
             audio_prefs,
             record_pass,
             record_last_pos,
@@ -5192,13 +5210,16 @@ impl EngineCallback {
     }
 
     /// What is played straight to the sound card on top of the song: the
-    /// browser's auditions. After the master, its tap and the capture path,
-    /// so none of it prints into a recording or a bounce, and on every block,
-    /// the stopped and the counting-in ones too: an audition is mostly
-    /// listened to with the song stopped.
+    /// browser's auditions and the test tone. After the master, its tap and
+    /// the capture path, so none of it prints into a recording or a bounce,
+    /// and a muted master or a plug-in on it cannot hide it. On every block,
+    /// the stopped and the counting-in ones too: they are mostly listened to
+    /// with the song stopped.
     fn render_auditions(&mut self, block: &mut [f32], num_frames: usize) {
+        let rate = self.sample_rate as f64;
         self.preview
-            .render(block, num_frames, &self.audio_pool, self.sample_rate as f64);
+            .render(block, num_frames, &self.audio_pool, rate);
+        self.test_tone.render(block, num_frames, rate);
         // The last thing before the sound card: nothing broken reaches the
         // speakers, whatever produced it (a plug-in, a script, a value from
         // a file or the network).
@@ -7261,6 +7282,61 @@ mod rt_safety_tests {
             out.iter().any(|s| s.abs() > 0.1),
             "the audition is heard with the song stopped"
         );
+    }
+
+    /// The test tone after Apply is heard with the song stopped, on the left
+    /// first, straight on the output: nothing reaches the master's tap, so
+    /// the meters and scopes (and anything recording from them) never see it.
+    #[test]
+    fn the_test_tone_plays_on_the_output_and_not_through_the_master() {
+        let (mut cb, _cmd_tx) = make_callback(Arc::new(Mutex::new(Project::default())));
+        let request = crate::test_tone::TestToneRequest::new();
+        cb.test_tone = crate::test_tone::TestTone::new(request.clone());
+        // Playing, so the graph runs and the master's tap is fed.
+        cb.transport
+            .playing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        request.play();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        let left = out.iter().step_by(2).fold(0.0f32, |m, s| m.max(s.abs()));
+        let right = out
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(left > 0.0 && right == 0.0, "left first: {left} {right}");
+        let tapped = cb.master_tap.lock().snapshot_interleaved(256);
+        assert!(
+            tapped.iter().all(|s| *s == 0.0),
+            "the master's tap does not have it"
+        );
+
+        // With the song stopped as well.
+        cb.transport
+            .playing
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        request.play();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        assert!(out.iter().any(|s| s.abs() > 0.0));
+    }
+
+    /// An export never has the test tone in it, even while the window has
+    /// it playing.
+    #[test]
+    fn an_export_never_has_the_test_tone_in_it() {
+        let engine = DawEngine::new();
+        engine.test_tone().play();
+        let mut peak = 0.0f32;
+        engine
+            .render_offline(48_000, 48_000, |block| {
+                peak = block.iter().fold(peak, |m, s| m.max(s.abs()));
+                true
+            })
+            .unwrap();
+        assert_eq!(peak, 0.0, "an empty song bounces to silence");
+        assert!(engine.test_tone().is_playing(), "still asked for, live");
     }
 
     #[test]

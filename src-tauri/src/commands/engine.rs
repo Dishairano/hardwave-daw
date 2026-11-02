@@ -168,6 +168,98 @@ pub fn get_audio_devices(state: State<AppState>) -> Vec<AudioDeviceInfo> {
         .collect()
 }
 
+/// The device the test tone plays on, for the window to name.
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestToneDevice {
+    pub device: String,
+    /// The output pair as the interface numbers it: "1/2", "3/4".
+    pub outputs: String,
+    pub sample_rate: u32,
+    pub buffer_size: u32,
+}
+
+/// What the test tone is doing, for the meters beside the device's name.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestToneReading {
+    pub playing: bool,
+    /// "idle", "left" or "right".
+    pub side: &'static str,
+    pub peak_left: f32,
+    pub peak_right: f32,
+}
+
+/// The output pair the mix goes out of, as the interface numbers it.
+fn output_pair(first_channel: u16) -> String {
+    format!("{}/{}", first_channel + 1, first_channel + 2)
+}
+
+/// Play a soft tone on the sound card, left then right, and say which
+/// device it is. Settings > Audio plays it after Apply, and the first run's
+/// Sound step when a device is picked: Apply used to switch the device in
+/// silence, so nobody could tell which one was live until a song played.
+/// When the sound card is not running there is nothing to play it on, and
+/// the answer says so.
+#[tauri::command]
+pub fn play_test_tone(state: State<AppState>) -> Result<TestToneDevice, String> {
+    let engine = state.engine.lock();
+    if !engine.is_running() {
+        return Err(
+            "The sound card is not running. Pick it again, or try another one.".to_string(),
+        );
+    }
+    let (_, sample_rate, buffer_size) = engine.audio_config();
+    let device = engine
+        .audio_device_manager()
+        .active_device_name()
+        .unwrap_or("the default output")
+        .to_string();
+    engine.test_tone().play();
+    Ok(TestToneDevice {
+        device,
+        outputs: output_pair(engine.channel_offsets().1),
+        sample_rate,
+        buffer_size,
+    })
+}
+
+/// Polled for the meters while the tone plays, from the window's own
+/// thread: never waits on the engine. Busy reads as not playing.
+#[tauri::command]
+pub fn get_test_tone(state: State<AppState>) -> TestToneReading {
+    use hardwave_engine::test_tone::ToneSide;
+    let Some(engine) = state.engine.try_lock_for(METER_POLL_WAIT) else {
+        return TestToneReading {
+            playing: false,
+            side: "idle",
+            peak_left: 0.0,
+            peak_right: 0.0,
+        };
+    };
+    let tone = engine.test_tone();
+    let (peak_left, peak_right) = tone.peaks();
+    TestToneReading {
+        playing: tone.is_playing(),
+        side: match tone.side() {
+            ToneSide::Idle => "idle",
+            ToneSide::Left => "left",
+            ToneSide::Right => "right",
+        },
+        peak_left,
+        peak_right,
+    }
+}
+
+#[cfg(test)]
+mod test_tone_tests {
+    #[test]
+    fn the_output_pair_is_numbered_as_on_the_interface() {
+        assert_eq!(super::output_pair(0), "1/2");
+        assert_eq!(super::output_pair(2), "3/4");
+    }
+}
+
 #[tauri::command]
 pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
     let (device, sample_rate, buffer_size) = state.engine.lock().audio_config();

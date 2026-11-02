@@ -383,6 +383,21 @@ export const nlPanels: Record<string, string> = {
   'Help → Re-run setup wizard': 'Help → Installatiewizard opnieuw starten',
   'Walks through this flow again': 'Loopt deze stappen opnieuw door',
 
+  // ---- Test tone
+  'The sound card did not open': 'De geluidskaart ging niet open',
+  'Retry': 'Opnieuw proberen',
+  'Test tone on {device}': 'Testtoon op {device}',
+  'Outputs {pair}': 'Uitgangen {pair}',
+  'left, then right': 'links, dan rechts',
+  'Play again': 'Opnieuw afspelen',
+  'I hear nothing': 'Ik hoor niets',
+  "Turn up the interface's volume knob, and check its monitors or headphones are on.": 'Draai de volumeknop van de interface open en kijk of de monitors of koptelefoon aanstaan.',
+  'Pick another output device, or another output pair, and listen again.': 'Kies een ander uitvoerapparaat of een ander uitgangenpaar en luister opnieuw.',
+  'Another program may hold the device: close it, or turn off exclusive mode for this device in the Windows sound settings.': 'Misschien houdt een ander programma het apparaat vast: sluit het, of zet de exclusieve modus voor dit apparaat uit in de geluidsinstellingen van Windows.',
+  'applied {time}': 'toegepast {time}',
+  'Test sound': 'Testgeluid',
+  'Play the test tone on the device in use, left then right': 'De testtoon afspelen op het apparaat dat in gebruik is, links en dan rechts',
+
   // ---- Bug report (only what the person reads; what is sent stays English)
   'Too many reports for now': 'Voorlopig te veel meldingen',
   'The bug form accepts six reports an hour. Try again a little later, or use hardwavestudios.com/report-a-bug.': 'Het bugformulier neemt zes meldingen per uur aan. Probeer het later nog eens, of gebruik hardwavestudios.com/report-a-bug.',
