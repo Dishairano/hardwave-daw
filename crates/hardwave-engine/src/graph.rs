@@ -1,5 +1,7 @@
 //! Audio graph — DAG of processing nodes, topologically sorted for real-time execution.
 
+use std::collections::HashMap;
+
 pub type NodeId = usize;
 
 /// Context passed to each node during processing.
@@ -172,6 +174,11 @@ struct Edge {
     /// line up against the slowest branch.
     compensation_samples: u32,
 }
+
+/// Compensation delay lines taken from a graph that is being rebuilt, by
+/// (source track, source port, destination track, destination port).
+#[derive(Default)]
+pub struct HeldDelays(HashMap<(String, usize, String, usize), EdgeDelayLine>);
 
 /// Delay line for one edge's PDC compensation. `ring` holds `capacity`
 /// samples; `write_pos` is the next index to write to.
@@ -391,6 +398,67 @@ impl AudioGraph {
         });
         self.edge_delays.push(None);
         self.order_dirty = true;
+    }
+
+    /// Take the compensation delay lines out of a graph about to be cleared,
+    /// with the tracks and ports at each end of their edge, for the graph
+    /// built in its place (`restore_delays`).
+    pub fn take_delays(&mut self) -> HeldDelays {
+        let mut held = HashMap::new();
+        for (edge, line) in self.edges.iter().zip(self.edge_delays.iter_mut()) {
+            let (Some(source), Some(dest)) = (
+                self.nodes.get(edge.source).and_then(|n| n.track_id()),
+                self.nodes.get(edge.dest).and_then(|n| n.track_id()),
+            ) else {
+                continue;
+            };
+            if let Some(line) = line.take() {
+                let key = (
+                    source.to_string(),
+                    edge.source_port,
+                    dest.to_string(),
+                    edge.dest_port,
+                );
+                held.insert(key, line);
+            }
+        }
+        HeldDelays(held)
+    }
+
+    /// After `finalize_pdc`: an edge between the same tracks and ports as
+    /// one in the graph this replaced, delayed by the same amount, carries
+    /// on with that edge's line and the audio already in it. A new line
+    /// starts empty, so every rebuild (a mute, a solo, a send) cut that
+    /// much out of every compensated track while the song played: a click
+    /// with a short lookahead, a gap with a long one.
+    pub fn restore_delays(&mut self, held: HeldDelays) {
+        let mut held = held.0;
+        if held.is_empty() {
+            return;
+        }
+        for (index, edge) in self.edges.iter().enumerate() {
+            let Some(Some(line)) = self.edge_delays.get(index) else {
+                continue;
+            };
+            let (Some(source), Some(dest)) = (
+                self.nodes.get(edge.source).and_then(|n| n.track_id()),
+                self.nodes.get(edge.dest).and_then(|n| n.track_id()),
+            ) else {
+                continue;
+            };
+            let key = (
+                source.to_string(),
+                edge.source_port,
+                dest.to_string(),
+                edge.dest_port,
+            );
+            let same = held.get(&key).is_some_and(|old| {
+                old.samples == line.samples && old.ring.len() == line.ring.len()
+            });
+            if same {
+                self.edge_delays[index] = held.remove(&key);
+            }
+        }
     }
 
     /// Whether sound leaving `from` already arrives at `to` through the
@@ -1076,6 +1144,84 @@ mod tests {
         g.process(&ctx(), &[]);
         assert_eq!(quiet_runs.load(Relaxed), 3);
         assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+    }
+
+    /// A track's node for the rebuild test: a steady level, a latency, and
+    /// the track id that names its edges across a rebuild. With no level it
+    /// passes its input on, as the master does.
+    struct Tracked {
+        id: &'static str,
+        latency: u32,
+        level: Option<f32>,
+    }
+
+    impl AudioNode for Tracked {
+        fn name(&self) -> &str {
+            self.id
+        }
+        fn track_id(&self) -> Option<&str> {
+            Some(self.id)
+        }
+        fn latency_samples(&self) -> u32 {
+            self.latency
+        }
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+            match self.level {
+                Some(level) => outputs[0].fill(level),
+                None => outputs[0].copy_from_slice(inputs[0]),
+            }
+        }
+    }
+
+    /// A fast track lined up behind a slow one, both into the master.
+    fn padded_song(g: &mut AudioGraph) -> NodeId {
+        let fast = g.add_node(Box::new(Tracked {
+            id: "fast",
+            latency: 0,
+            level: Some(0.5),
+        }));
+        let slow = g.add_node(Box::new(Tracked {
+            id: "slow",
+            latency: 8,
+            level: Some(0.0),
+        }));
+        let master = g.add_node(Box::new(Tracked {
+            id: "master",
+            latency: 0,
+            level: None,
+        }));
+        g.connect(fast, 0, master, 0);
+        g.connect(slow, 0, master, 0);
+        g.finalize_pdc(true);
+        master
+    }
+
+    /// A rebuild (a mute, a solo, a send) keeps the audio waiting in the
+    /// compensation delay lines. The new lines started empty, so a track
+    /// held back behind a slower one dropped out for that long.
+    #[test]
+    fn a_rebuild_keeps_the_audio_in_the_compensation_lines() {
+        let mut g = AudioGraph::new(16);
+        padded_song(&mut g);
+        g.process(&ctx(), &[]);
+        g.process(&ctx(), &[]);
+        let held = g.take_delays();
+        g.clear();
+        let master = padded_song(&mut g);
+        g.restore_delays(held);
+        g.process(&ctx(), &[]);
+        let out = &g.node_output(master).unwrap()[0];
+        assert!(
+            out.iter().all(|v| *v == 0.5),
+            "no gap after the rebuild: {out:?}"
+        );
     }
 
     #[test]

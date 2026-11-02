@@ -4048,6 +4048,9 @@ impl EngineCallback {
             }
         }
 
+        // The compensation delay lines, with the audio in them, for the
+        // same edges in the new graph.
+        let held_delays = self.graph.take_delays();
         self.graph.clear();
         self.send_edges.clear();
         // The new nodes start with their own level and pan.
@@ -5008,6 +5011,7 @@ impl EngineCallback {
                 .pdc_enabled
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
+        self.graph.restore_delays(held_delays);
         self.graph_latency_samples.store(
             self.graph.total_latency_samples(),
             std::sync::atomic::Ordering::Relaxed,
