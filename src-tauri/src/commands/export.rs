@@ -89,6 +89,9 @@ fn instrument_ids(engine: &DawEngine) -> std::collections::HashSet<String> {
 /// Prepare a render under the engine's lock, let go of the lock, then
 /// render and write. The render has its own copy of everything; holding
 /// the lock through it froze every window command until the file was done.
+///
+/// `onto_a_track` is for audio that goes back onto a track (a bounce, a
+/// freeze, a consolidate): see [`hardwave_engine::OfflineRender::for_a_track`].
 #[allow(clippy::too_many_arguments)]
 fn render_unlocked<F>(
     engine: parking_lot::MutexGuard<'_, DawEngine>,
@@ -98,6 +101,7 @@ fn render_unlocked<F>(
     start_samples: u64,
     cancel: &Arc<AtomicBool>,
     on_progress: F,
+    onto_a_track: bool,
     prepare: impl FnOnce(&mut Project),
 ) -> Result<bool, String>
 where
@@ -111,6 +115,7 @@ where
         start_samples,
         cancel,
         on_progress,
+        onto_a_track,
         prepare,
     )
     .map(|loudness| loudness.is_some())
@@ -127,6 +132,7 @@ fn render_unlocked_measured<F>(
     start_samples: u64,
     cancel: &Arc<AtomicBool>,
     on_progress: F,
+    onto_a_track: bool,
     prepare: impl FnOnce(&mut Project),
 ) -> Result<Option<FileLoudness>, String>
 where
@@ -136,6 +142,11 @@ where
     let render =
         engine.prepare_offline_render(fmt.sample_rate, start_samples, Some(&factory), prepare);
     drop(engine);
+    let render = if onto_a_track {
+        render.for_a_track()
+    } else {
+        render
+    };
     let mut meter = LoudnessTap::new(fmt.sample_rate);
     let completed = write_render(
         render,
@@ -1234,6 +1245,7 @@ pub async fn export_project_wav(
                     );
                 }
             },
+            false,
             |_| {},
         )?;
         let completed = loudness.is_some();
@@ -1368,6 +1380,7 @@ pub async fn consolidate_track_range(
                 start_samples,
                 &cancel,
                 |_, _| {},
+                true,
                 // The glued clip stays on this track, through its effects
                 // and fader and on to the master: the render has none of
                 // them, only the instrument that plays its notes.
@@ -1497,6 +1510,7 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
                 0,
                 &cancel,
                 |_, _| {},
+                true,
                 // Through its own effects and fader, which the new track
                 // does without, and not through its bus or the master,
                 // which the new track plays into again.
@@ -1670,6 +1684,7 @@ pub async fn export_project_stems(
                             );
                         }
                     },
+                    false,
                     |proj: &mut Project| {
                         // Exclude rather than mute. A muted TrackNode returns
                         // before writing its output ports, which also stops it
@@ -1734,6 +1749,7 @@ pub async fn export_project_stems(
                             );
                         }
                     },
+                    false,
                     |proj: &mut Project| {
                         if !respect_mute_solo {
                             for t in proj.tracks.iter_mut() {
@@ -1851,6 +1867,7 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
             0,
             &cancel,
             |_, _| {},
+            true,
             // Through its own effects, which rest while it is frozen, and
             // not through its bus or the master, which it still plays into.
             move |proj: &mut Project| isolate_track_for_render(proj, &target, true, &|_| true),
