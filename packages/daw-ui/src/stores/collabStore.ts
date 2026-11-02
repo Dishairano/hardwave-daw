@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
+import { t } from '../i18n'
 
 /**
  * The room, as the arrangement needs it: whether there is one, and
@@ -31,6 +32,27 @@ interface CollabState {
 
 let timer: ReturnType<typeof setInterval> | null = null
 let lastShared = 0
+
+/** The room this window last joined as a guest, to tell coming back from coming in. */
+let lastJoined: string | null = null
+
+/**
+ * What to tell a guest who has just come into a room.
+ *
+ * Someone coming in for the first time has missed nothing they had: the
+ * room only replays what a person missed while away, and a host who had
+ * been working a while has more than it keeps. They were told "You were
+ * away too long to replay" on their very first visit. A first visit now
+ * points at the song; coming back says what the replay did.
+ */
+export function joinedNotice(room: string, caughtUp: boolean): string {
+  const back = lastJoined === room
+  lastJoined = room
+  if (!back) return t('Get the song from them to start from what they have.')
+  return caughtUp
+    ? t('Everything you missed has been applied.')
+    : t('You were away too long to replay: ask them to send the project.')
+}
 
 export const useCollabStore = create<CollabState>((set, get) => ({
   connected: false,

@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTrackStore } from '../stores/trackStore'
 import { useNotificationStore } from '../stores/notificationStore'
-import { useCollabStore } from '../stores/collabStore'
+import { joinedNotice, useCollabStore } from '../stores/collabStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { btn } from './ui/dialogStyles'
 import { t, tf, useLanguage } from '../i18n'
@@ -84,9 +84,7 @@ export function CollabPanel({ onClose }: { onClose: () => void }) {
       useCollabStore.getState().start()
       await useTrackStore.getState().fetchTracks()
       useNotificationStore.getState().push('info', t('You are in the room'), {
-        detail: joined.caughtUp
-          ? t('Everything you missed has been applied.')
-          : t('You were away too long to replay: ask them to send the project.'),
+        detail: joinedNotice(room.trim(), joined.caughtUp),
       })
       void refresh()
     } catch (e) {
