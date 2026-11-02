@@ -19,6 +19,7 @@ use hardwave_project::multiplayer::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 /// How many messages a room keeps so a peer that drops can catch up.
 ///
@@ -36,6 +37,79 @@ pub const MAX_CHAT_CHARS: usize = 2000;
 pub const MAX_TRACK_BYTES: usize = 4 * 1024 * 1024;
 /// Wrong codes a room takes before its code is replaced.
 pub const MAX_WRONG_CODES: u32 = 10;
+/// Messages per second a connection may send, sustained.
+pub const SEND_RATE: f64 = 40.0;
+/// And in a burst.
+pub const SEND_BURST: f64 = 200.0;
+
+/// What a message costs against a connection's sending allowance: a song
+/// more than an edit, and a track or a part of the song by its size, a few
+/// for a large one and one for a small one. A part of the song counted as
+/// one whatever its size, so a peer could send two hundred parts of 4 MB at
+/// once where it could send a handful of tracks that size.
+pub fn message_cost(kind: &SyncKind) -> f64 {
+    match kind {
+        SyncKind::ProjectOffer { .. } => 100.0,
+        SyncKind::TrackState { blob, .. } | SyncKind::SongState { blob, .. } => {
+            1.0 + (blob.len() / (256 * 1024)) as f64
+        }
+        _ => 1.0,
+    }
+}
+
+/// A sending allowance: `burst` at once, refilled at `rate` a second. The
+/// room service holds each connection to one; the DAW keeps its own a little
+/// under the room's, so what it sends is never dropped for coming too fast.
+#[derive(Debug, Clone)]
+pub struct TokenBucket {
+    tokens: f64,
+    rate: f64,
+    burst: f64,
+    refilled: Option<Instant>,
+}
+
+impl TokenBucket {
+    /// A full allowance.
+    pub fn new(rate: f64, burst: f64) -> Self {
+        Self {
+            tokens: burst,
+            rate,
+            burst,
+            refilled: None,
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        if let Some(last) = self.refilled {
+            let gained = now.saturating_duration_since(last).as_secs_f64() * self.rate;
+            self.tokens = (self.tokens + gained).min(self.burst);
+        }
+        self.refilled = Some(now);
+    }
+
+    /// Take `cost` when there is that much left; nothing is taken otherwise.
+    pub fn try_take(&mut self, cost: f64, now: Instant) -> bool {
+        self.refill(now);
+        // Waiting exactly `wait_for` refills to the cost give or take a
+        // nanosecond of rounding, which counts as there.
+        if self.tokens + 1e-6 < cost {
+            return false;
+        }
+        self.tokens -= cost;
+        true
+    }
+
+    /// How long until `cost` can be taken: zero when it can be now.
+    pub fn wait_for(&mut self, cost: f64, now: Instant) -> Duration {
+        self.refill(now);
+        let short = cost.min(self.burst) - self.tokens;
+        if short <= 0.0 {
+            Duration::ZERO
+        } else {
+            Duration::from_secs_f64(short / self.rate)
+        }
+    }
+}
 
 /// Why someone was not let in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +522,51 @@ impl LiveRoom {
 mod tests {
     use super::*;
     use hardwave_project::multiplayer::{MixerSync, Presence, TransportSync};
+
+    /// A part of the song costs by its size, as a track does: two hundred
+    /// parts of 4 MB at once are not one burst.
+    #[test]
+    fn a_song_part_costs_by_its_size_like_a_track() {
+        let part = |len: usize| SyncKind::SongState {
+            section: "rack".into(),
+            version: 1,
+            author: 1,
+            blob: vec![0; len],
+        };
+        let track = SyncKind::TrackState {
+            track_id: "t".into(),
+            index: 0,
+            blob: vec![0; 4 * 1024 * 1024],
+        };
+        assert_eq!(message_cost(&part(100)), 1.0);
+        assert_eq!(message_cost(&part(4 * 1024 * 1024)), message_cost(&track));
+        assert_eq!(message_cost(&part(4 * 1024 * 1024)), 17.0);
+        let mut bucket = TokenBucket::new(SEND_RATE, SEND_BURST);
+        let now = Instant::now();
+        let taken = (0..200)
+            .filter(|_| bucket.try_take(message_cost(&part(4 * 1024 * 1024)), now))
+            .count();
+        assert_eq!(
+            taken, 11,
+            "a burst holds eleven parts that size, not two hundred"
+        );
+    }
+
+    /// The allowance: a burst at once, then the rate.
+    #[test]
+    fn the_allowance_is_a_burst_then_the_rate() {
+        let mut bucket = TokenBucket::new(40.0, 200.0);
+        let start = Instant::now();
+        assert_eq!(
+            (0..300).filter(|_| bucket.try_take(1.0, start)).count(),
+            200
+        );
+        let wait = bucket.wait_for(1.0, start).as_secs_f64();
+        assert!((wait - 0.025).abs() < 1e-6, "{wait}");
+        let later = start + Duration::from_secs(1);
+        assert_eq!((0..100).filter(|_| bucket.try_take(1.0, later)).count(), 40);
+        assert_eq!(bucket.wait_for(0.0, later), Duration::ZERO);
+    }
 
     fn room() -> LiveRoom {
         LiveRoom::open("host-1", 1_760_000_000)
