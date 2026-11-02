@@ -1682,9 +1682,9 @@ export function App() {
   }, [saveProject, handleSaveProjectAs, showErrorDialog])
 
   // Restore the last autosave snapshot. FL Studio's "Revert to last
-  // backup" — picks up the most recent autosave_latest path and
-  // loads it as if the user opened it manually. Fails silently when
-  // there's nothing to restore.
+  // backup": picks up the most recent autosave_latest path and opens it
+  // as an unsaved song (saving asks where), with the track list read
+  // again like any other open.
   const handleRevertToBackup = useCallback(async () => {
     try {
       const latest = await invoke<{ path: string; modified_unix: number } | null>('autosave_latest')
@@ -1692,11 +1692,13 @@ export function App() {
         await showErrorDialog('No backup found', 'No autosave snapshot is available for this session.')
         return
       }
-      await loadProject(latest.path)
+      await loadProject(latest.path, { asRecovered: true })
+      await fetchTracks()
+      await warnIfMissingPlugins()
     } catch (err) {
       await showErrorDialog('Revert failed', String(err))
     }
-  }, [loadProject, showErrorDialog])
+  }, [loadProject, fetchTracks, showErrorDialog, warnIfMissingPlugins])
 
   const handleCrashChoice = useCallback(async (c: CrashChoice) => {
     const info = crashInfo
@@ -1708,9 +1710,8 @@ export function App() {
     }
     if (c === 'recover') {
       try {
-        await loadProject(info.path)
+        await loadProject(info.path, { asRecovered: true })
         await fetchTracks()
-        useProjectStore.getState().markDirty()
         await warnIfMissingPlugins()
       } catch (err) {
         await showErrorDialog('Recovery failed', String(err))

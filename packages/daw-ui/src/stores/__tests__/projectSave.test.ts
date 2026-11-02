@@ -67,3 +67,32 @@ describe('Save As', () => {
     expect(savedTo()).toEqual(['/songs/Anthem.hwp'])
   })
 })
+
+describe('opening an auto-save', () => {
+  const autosave = '/cache/autosaves/autosave-1761900000.hwp'
+
+  it('opens it as an unsaved song, so Ctrl+S asks where instead of writing into the cache', async () => {
+    useProjectStore.setState({ filePath: '/songs/Anthem.hwp', projectName: 'Anthem', dirty: false })
+
+    await useProjectStore.getState().loadProject(autosave, { asRecovered: true })
+
+    const s = useProjectStore.getState()
+    expect(s.filePath).toBeNull()
+    expect(s.dirty).toBe(true)
+    expect(s.recentProjects).not.toContain(autosave)
+
+    saveDialog.mockResolvedValue('/songs/Anthem recovered.hwp')
+    await useProjectStore.getState().saveProject()
+    expect(saveDialog).toHaveBeenCalledTimes(1)
+    expect(savedTo()).toEqual(['/songs/Anthem recovered.hwp'])
+  })
+
+  it('a normal open still takes the file as the song', async () => {
+    await useProjectStore.getState().loadProject('/songs/Anthem.hwp')
+
+    const s = useProjectStore.getState()
+    expect(s.filePath).toBe('/songs/Anthem.hwp')
+    expect(s.dirty).toBe(false)
+    expect(s.recentProjects[0]).toBe('/songs/Anthem.hwp')
+  })
+})
