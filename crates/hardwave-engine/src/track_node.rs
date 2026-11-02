@@ -1199,6 +1199,11 @@ impl AudioNode for TrackNode {
         }
 
         if self.muted || (!ctx.playing && !self.live_input) {
+            // Silence on the meter as well. A track muted (or silenced by
+            // another track's solo) while the song played kept showing its
+            // last level until the song stopped, because the mixer is only
+            // sent meters that change.
+            self.meter.park();
             return;
         }
 
@@ -1269,7 +1274,8 @@ impl AudioNode for TrackNode {
                 if m {
                     // Don't permanently store muted=true so a deleted
                     // lane immediately restores audio. Just early-exit
-                    // the block at silence.
+                    // the block at silence, with the meter at silence too.
+                    self.meter.park();
                     return;
                 }
             }
@@ -1698,6 +1704,23 @@ mod tests {
             (after / before - 0.5).abs() < 0.05,
             "half the fader, half the level: {before} then {after}"
         );
+    }
+
+    /// Muting a track while the song plays drops its meter to silence. It
+    /// kept showing the last block's level until the song stopped.
+    #[test]
+    fn a_muted_track_meters_silence() {
+        let (mut node, session) = node_with_loop(480);
+        session.queue(0);
+        let _ = block(&mut node, 96_000, 256);
+        let meter = Arc::clone(&node.meter);
+        assert!(meter.peak_db_l.load(Ordering::Relaxed) > -60.0);
+        node.set_muted(true);
+        let _ = block(&mut node, 96_256, 256);
+        assert_eq!(meter.peak_db_l.load(Ordering::Relaxed), -120.0);
+        assert_eq!(meter.peak_db_r.load(Ordering::Relaxed), -120.0);
+        assert_eq!(meter.rms_db.load(Ordering::Relaxed), -120.0);
+        assert_eq!(meter.pre_fader_peak_db.load(Ordering::Relaxed), -120.0);
     }
 
     #[test]
