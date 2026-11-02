@@ -127,6 +127,11 @@ const INSERT_POLARITY: u32 = 1 << 0;
 const INSERT_SWAP: u32 = 1 << 1;
 const INSERT_EFFECTS_ON: u32 = 1 << 2;
 const INSERT_ENABLED: u32 = 1 << 3;
+/// Docked in the middle or on the right of FL's mixer. Every numbered
+/// insert is docked in the middle unless moved; the master and FL's
+/// "current" insert are docked on the left.
+const INSERT_DOCKED_MIDDLE: u32 = 1 << 6;
+const INSERT_DOCKED_RIGHT: u32 = 1 << 7;
 const INSERT_SOLO: u32 = 1 << 12;
 /// One byte per insert, set where this one sends its sound.
 const INSERT_ROUTING: u8 = TEXT + 43; // 235
@@ -347,6 +352,8 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
     // Automation clips' channels and the knob each moves, read once the
     // mixer says where its inserts start.
     let mut remote_controls: Vec<(u32, u32)> = Vec::new();
+    // The last insert's flags, to tell FL's "current" insert at the end.
+    let mut last_insert_flags = 0u32;
     for event in events(body)? {
         // A plug-in event inside an insert is a slot's, not a channel's.
         if current_insert.is_some() {
@@ -410,6 +417,7 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
                 current_channel = None;
                 pending_slot = None;
                 let flags = u32_at(event.data, 4);
+                last_insert_flags = flags;
                 current_insert = Some(project.mixer.len());
                 project.mixer.push(FlMixerTrack {
                     index: project.mixer.len() as u32,
@@ -786,6 +794,16 @@ pub fn parse(bytes: &[u8]) -> Result<FlProject, FlpError> {
         project.playlist_track_colors = open.track_colors.clone();
         project.playlist_tracks_off = open.tracks_off.clone();
         project.playlist_tracks_solo = open.tracks_solo.clone();
+    }
+    // FL 9 and later write their "current" insert after the numbered ones,
+    // docked on the left as only the master is otherwise. Counted by its
+    // place it read as one insert more than the song has (insert 21 of a
+    // song with 20), so it is marked and left out where inserts are made.
+    if fl_major >= 9 && project.mixer.len() >= 2 {
+        let docked_left = last_insert_flags & (INSERT_DOCKED_MIDDLE | INSERT_DOCKED_RIGHT) == 0;
+        if let Some(last) = project.mixer.last_mut().filter(|_| docked_left) {
+            last.current = true;
+        }
     }
     Ok(project)
 }
@@ -1957,6 +1975,40 @@ mod tests {
                 }]
             );
         }
+    }
+
+    /// FL 26 writes the master, the inserts in use, and last its "current"
+    /// insert, docked on the left like the master (flags 0x0c where the
+    /// numbered inserts have 0x4c). It is not one of the song's inserts.
+    #[test]
+    fn fl_s_current_insert_is_marked() {
+        let insert = |writer: &mut Writer, name: Option<&str>, flags: u8| {
+            if let Some(name) = name {
+                writer.text(INSERT_NAME, name);
+            }
+            writer.event(INSERT_FLAGS, &[0, 0, 0, 0, flags, 0, 0, 0, 0, 0, 0, 0]);
+            writer.event(INSERT_ROUTING, &[0, 0, 0]);
+            writer.event(INSERT_OUTPUT, &u32::MAX.to_le_bytes());
+        };
+        let song = |version: &[u8], last_flags: u8| {
+            let mut writer = Writer::new();
+            writer.event(FL_VERSION, version);
+            insert(&mut writer, None, 0x0c);
+            insert(&mut writer, Some("KICK"), 0x4c);
+            insert(&mut writer, Some("KICK SIDECHAIN REVERB"), 0x4c);
+            insert(&mut writer, None, last_flags);
+            parse(&writer.finish(96)).expect("it should read")
+        };
+        let project = song(b"26.0.0.5000\0", 0x0c);
+        let current: Vec<_> = project.mixer.iter().map(|m| m.current).collect();
+        assert_eq!(current, [false, false, false, true]);
+        assert_eq!(project.mixer[2].name, "KICK SIDECHAIN REVERB");
+        // An insert docked in the middle is a numbered one, wherever it is.
+        let project = song(b"26.0.0.5000\0", 0x4c);
+        assert!(project.mixer.iter().all(|m| !m.current));
+        // Before FL 9 there was no current insert to write.
+        let project = song(b"8.0.0.100\0", 0x0c);
+        assert!(project.mixer.iter().all(|m| !m.current));
     }
 
     /// An automation clip's data with these points: (beats after the one

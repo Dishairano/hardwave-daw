@@ -391,6 +391,11 @@ pub struct FlMixerTrack {
     pub routes: Vec<FlRoute>,
     /// The effect slots that hold a plug-in.
     pub slots: Vec<FlMixerSlot>,
+    /// FL's "current" insert, written after the numbered ones: it shows
+    /// whichever channel is selected in FL and holds nothing of the song,
+    /// so it is not one of the song's inserts.
+    #[serde(default)]
+    pub current: bool,
 }
 
 impl Default for FlMixerTrack {
@@ -410,6 +415,7 @@ impl Default for FlMixerTrack {
             eq_gains: [0; 3],
             routes: Vec::new(),
             slots: Vec::new(),
+            current: false,
         }
     }
 }
