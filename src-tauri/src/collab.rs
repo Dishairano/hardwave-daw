@@ -387,6 +387,30 @@ impl Collab {
         (changed, gone)
     }
 
+    /// Count what came in from the other side, for the panel's "received":
+    /// every change to the song, whole tracks and song parts included. Only
+    /// the few messages that went through the generic edit path were
+    /// counted, so the panel said 0 received while tracks, the tempo and
+    /// markers arrived.
+    pub fn count_received(&self, kind: &SyncKind) {
+        let edit = matches!(
+            kind,
+            SyncKind::Transport(_)
+                | SyncKind::Mixer(_)
+                | SyncKind::Note(_)
+                | SyncKind::Clip(_)
+                | SyncKind::Chat { .. }
+                | SyncKind::TrackState { .. }
+                | SyncKind::TrackRemoved { .. }
+                | SyncKind::SongState { .. }
+                | SyncKind::PluginParam { .. }
+                | SyncKind::ProjectOffer { .. }
+        );
+        if edit {
+            self.received.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Something to tell the person in the room's panel.
     pub fn say(&self, what: &str) {
         self.status.lock().message = what.to_string();
@@ -596,7 +620,6 @@ pub fn apply_incoming(
     collab.applying.store(true, Ordering::Relaxed);
     let applied = multiplayer_apply::apply(project, message);
     collab.applying.store(false, Ordering::Relaxed);
-    collab.received.fetch_add(1, Ordering::Relaxed);
     applied.transport
 }
 
@@ -974,7 +997,35 @@ mod tests {
         // And applying it really does change the song.
         apply_incoming(&collab, &mut project, &incoming);
         assert_eq!(project.track(&track_id).unwrap().volume_db, -9.0);
-        assert_eq!(collab.status().received, 1);
+    }
+
+    /// The panel's "received" counts every change from the other side,
+    /// whole tracks and song parts included; who is in the room does not.
+    #[test]
+    fn received_counts_tracks_and_song_parts() {
+        let collab = Collab::default();
+        for kind in [
+            SyncKind::TrackState {
+                track_id: "t".into(),
+                index: 1,
+                blob: Vec::new(),
+            },
+            SyncKind::SongState {
+                section: "tempo".into(),
+                version: 1,
+                author: 1,
+                blob: Vec::new(),
+            },
+            SyncKind::TrackRemoved {
+                track_id: "t".into(),
+            },
+            fader(),
+            SyncKind::MembersChanged { names: Vec::new() },
+            SyncKind::Heartbeat,
+        ] {
+            collab.count_received(&kind);
+        }
+        assert_eq!(collab.status().received, 4);
     }
 
     /// A song too large for one room message is not sent (the room would
