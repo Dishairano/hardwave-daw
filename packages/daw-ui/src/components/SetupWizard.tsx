@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import {
   type VelocityCurve,
   type WizardStep,
+  midiInputOn,
   useSetupWizardStore,
 } from '../stores/setupWizardStore'
 import { t, tf, useLanguage } from '../i18n'
@@ -51,11 +52,13 @@ export function SetupWizard() {
     setStep,
     setMidiMasterEnabled,
     setVelocityCurve,
+    midiInputs,
+    setMidiInputEnabled,
   } = useSetupWizardStore()
   useLanguage()
 
   const [ports, setPorts] = useState<string[]>([])
-  const [enabledPorts, setEnabledPorts] = useState<Set<string>>(new Set())
+  const enabledPorts = new Set(ports.filter((p) => midiInputOn(midiInputs, p)))
   const [activity, setActivity] = useState<MidiActivitySnapshot | null>(null)
   const [scanning, setScanning] = useState(false)
   const [driver, setDriver] = useState<{ ok: boolean; detail: string } | null>(null)
@@ -66,14 +69,20 @@ export function SetupWizard() {
       const list = (await invoke('list_midi_inputs')) as string[]
       setPorts(list)
       // Default: all detected ports get enabled at first sight, unless
-      // the user later toggles them off.
-      setEnabledPorts(new Set(list))
+      // the user later toggles them off. They are opened here: the rows
+      // said "Listening" for ports nothing had opened, so a keyboard
+      // played nothing until its toggle was clicked off and on again.
+      const inputs = useSetupWizardStore.getState().midiInputs
+      for (const port of list) {
+        if (!midiInputOn(inputs, port)) continue
+        await setMidiInputEnabled(port, true).catch((err) => console.warn('open_midi_input failed:', err))
+      }
     } catch (err) {
       console.warn('list_midi_inputs failed:', err)
     } finally {
       setScanning(false)
     }
-  }, [])
+  }, [setMidiInputEnabled])
 
   // Scan on open + when step changes to devices.
   useEffect(() => {
@@ -104,25 +113,14 @@ export function SetupWizard() {
 
   const toggleDevice = useCallback(
     async (port: string) => {
-      const next = new Set(enabledPorts)
-      if (next.has(port)) {
-        next.delete(port)
-        try {
-          await invoke('close_midi_input', { portName: port })
-        } catch (err) {
-          console.warn('close_midi_input failed:', err)
-        }
-      } else {
-        next.add(port)
-        try {
-          await invoke('open_midi_input', { portName: port })
-        } catch (err) {
-          console.warn('open_midi_input failed:', err)
-        }
+      const on = midiInputOn(useSetupWizardStore.getState().midiInputs, port)
+      try {
+        await setMidiInputEnabled(port, !on)
+      } catch (err) {
+        console.warn(on ? 'close_midi_input failed:' : 'open_midi_input failed:', err)
       }
-      setEnabledPorts(next)
     },
-    [enabledPorts],
+    [setMidiInputEnabled],
   )
 
   if (!visible) return null

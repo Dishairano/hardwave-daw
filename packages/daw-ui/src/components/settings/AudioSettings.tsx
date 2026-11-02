@@ -16,6 +16,7 @@ import { MtcFollowRow } from './MtcFollowRow'
 import { PluginLatencyRow } from './PluginLatencyRow'
 import { ReleaseInBackgroundRow } from './ReleaseInBackgroundRow'
 import { useMetronomeStore } from '../../stores/metronomeStore'
+import { useSetupWizardStore } from '../../stores/setupWizardStore'
 import { usePluginStore } from '../../stores/pluginStore'
 
 interface AudioDevice {
@@ -363,11 +364,13 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
     setError(null)
     setMidiBusy(true)
     try {
+      // Through the wizard's store, so the choice is there at the next
+      // launch as well.
       if (midiOpen.includes(port)) {
-        await invoke('close_midi_input', { portName: port })
+        await useSetupWizardStore.getState().setMidiInputEnabled(port, false)
         setMidiOpen(list => list.filter(p => p !== port))
       } else {
-        await invoke('open_midi_input', { portName: port })
+        await useSetupWizardStore.getState().setMidiInputEnabled(port, true)
         setMidiOpen(list => [...list, port])
       }
     } catch (e: any) {

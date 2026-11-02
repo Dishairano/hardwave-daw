@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core'
  *  - skippedAt: remembers if the user hit "Skip — won't ask again"
  *  - velocityCurves: per-input curve preset
  *  - midiMasterEnabled: master gate (future: gates events at engine level)
+ *  - midiInputs: which inputs are on, opened again at every launch
  *
  * Wizard step is transient (not persisted) so reopening the wizard
  * always starts from step 1.
@@ -43,6 +44,11 @@ interface SetupWizardState {
   /** Per-input velocity curve, keyed by port name. The backend applies it to
    * incoming note-ons on that port. */
   velocityCurves: Record<string, VelocityCurve>
+  /** Each MIDI input's on or off, by port name, as the wizard or the
+   * settings left it. A port not in here is on (see `midiInputOn`). The
+   * engine keeps no list of its own across a restart, so without this a
+   * controller was dead at every launch until it was switched on again. */
+  midiInputs: Record<string, boolean>
 
   // ── actions ──
   open: () => void
@@ -54,6 +60,16 @@ interface SetupWizardState {
   markComplete: () => void
   setMidiMasterEnabled: (v: boolean) => void
   setVelocityCurve: (portName: string, curve: VelocityCurve) => void
+  /** Open or close one MIDI input and remember it. Rejects with the
+   * engine's reason when the port would not open; the choice is kept, and
+   * the engine opens the port when the device comes back. */
+  setMidiInputEnabled: (portName: string, enabled: boolean) => Promise<void>
+}
+
+/** Whether a MIDI input is on: what was chosen for it, or on when nothing
+ * was, so a controller the wizard finds plays straight away. */
+export function midiInputOn(inputs: Record<string, boolean>, portName: string): boolean {
+  return inputs[portName] ?? true
 }
 
 const STEP_ORDER: WizardStep[] = ['welcome', 'audio', 'devices', 'velocity', 'test', 'done']
@@ -67,6 +83,7 @@ export const useSetupWizardStore = create<SetupWizardState>()(
       skippedAt: null,
       midiMasterEnabled: true,
       velocityCurves: {},
+      midiInputs: {},
 
       open: () => set({ visible: true, step: 'welcome' }),
       close: () => set({ visible: false }),
@@ -92,6 +109,10 @@ export const useSetupWizardStore = create<SetupWizardState>()(
         set((s) => ({ velocityCurves: { ...s.velocityCurves, [portName]: curve } }))
         invoke('set_midi_velocity_curve', { portName, curve }).catch(() => {})
       },
+      setMidiInputEnabled: async (portName, enabled) => {
+        set((s) => ({ midiInputs: { ...s.midiInputs, [portName]: enabled } }))
+        await invoke(enabled ? 'open_midi_input' : 'close_midi_input', { portName })
+      },
     }),
     {
       name: 'hw-setup-wizard',
@@ -101,6 +122,7 @@ export const useSetupWizardStore = create<SetupWizardState>()(
         skippedAt: s.skippedAt,
         midiMasterEnabled: s.midiMasterEnabled,
         velocityCurves: s.velocityCurves,
+        midiInputs: s.midiInputs,
       }),
     },
   ),
@@ -125,9 +147,14 @@ export function maybeAutoOpenSetupWizard(): void {
  * safe to call again.
  */
 export function applySavedMidiInputSettings(): void {
-  const { midiMasterEnabled, velocityCurves } = useSetupWizardStore.getState()
+  const { midiMasterEnabled, velocityCurves, midiInputs } = useSetupWizardStore.getState()
   invoke('set_midi_master_enabled', { enabled: midiMasterEnabled }).catch(() => {})
   for (const [portName, curve] of Object.entries(velocityCurves)) {
     invoke('set_midi_velocity_curve', { portName, curve }).catch(() => {})
+  }
+  // A port that is not plugged in now is still asked for: the engine
+  // keeps it wanted and opens it when the device appears.
+  for (const [portName, on] of Object.entries(midiInputs)) {
+    if (on) invoke('open_midi_input', { portName }).catch(() => {})
   }
 }
