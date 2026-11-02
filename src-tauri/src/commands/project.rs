@@ -3,7 +3,7 @@ use crate::AppState;
 use hardwave_project::tempo::{TempoEntry, TempoRamp};
 use hardwave_project::Project;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Serialize)]
@@ -113,15 +113,45 @@ pub fn save_project(state: State<AppState>, path: String) -> Result<(), String> 
     live.write_into(&mut project);
 
     let target = PathBuf::from(&path);
+    let new_dir = target.parent().map(|p| p.to_path_buf());
+    follow_to_folder(
+        &mut project,
+        engine.project_dir().as_deref(),
+        new_dir.as_deref(),
+    );
     let result = project.save(&target).map_err(|e| e.to_string());
     drop(project);
     if result.is_ok() {
         engine.mark_song_saved();
+        // The song lives in the new folder now: samples collected later are
+        // named relative to it. A save that failed leaves it where it was,
+        // and its samples with it.
+        engine.set_project_dir(new_dir);
     }
-    // Save As moves the project to a new folder, and samples collected into
-    // the old one are stored relative to it, so the base has to follow.
-    engine.set_project_dir(target.parent().map(|p| p.to_path_buf()));
     result
+}
+
+/// Ready the song to be saved into `to` from the folder it lives in, `from`.
+///
+/// Samples collected into the song's folder are named relative to it. Save
+/// As into another folder kept those names and moved the song's base to
+/// the new folder, where no such files are: the copy opened with every
+/// collected sample missing, and so did the open song the next time. They
+/// now become full paths into the old folder, where they really are.
+fn follow_to_folder(project: &mut Project, from: Option<&Path>, to: Option<&Path>) {
+    let Some(from) = from else {
+        return;
+    };
+    let same = to.is_some_and(|to| {
+        to == from
+            || matches!(
+                (std::fs::canonicalize(to), std::fs::canonicalize(from)),
+                (Ok(a), Ok(b)) if a == b
+            )
+    });
+    if !same {
+        project.anchor_sample_files(from);
+    }
 }
 
 /// Whether the song changed since it was last saved or opened, by any
@@ -812,4 +842,76 @@ pub fn place_pattern_on_playlist(app: AppHandle, state: State<AppState>) -> usiz
         crate::commands::plugins::tell_windows_track_changed(&app, &id);
     }
     placed
+}
+
+#[cfg(test)]
+mod save_folder_tests {
+    use super::follow_to_folder;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+    use hardwave_project::Project;
+
+    fn song_with_collected_kick() -> Project {
+        let mut song = Project::default();
+        song.track_mut("insert-001")
+            .unwrap()
+            .clips
+            .push(ClipPlacement {
+                content: ClipContent::Audio(AudioClip {
+                    id: "clip-1".into(),
+                    name: "kick".into(),
+                    source_path: "9f2c".into(),
+                    source_hash: String::new(),
+                    source_start: 0,
+                    source_end: 48_000,
+                    gain_db: 0.0,
+                    fade_in_ticks: 0,
+                    fade_out_ticks: 0,
+                    muted: false,
+                    reversed: false,
+                    pitch_semitones: 0.0,
+                    stretch_ratio: 1.0,
+                    fade_in_curve: Default::default(),
+                    fade_out_curve: Default::default(),
+                    warp_markers: Vec::new(),
+                    source_file: "Anthem Samples/kick.wav".into(),
+                    treatment: Default::default(),
+                }),
+                track_id: "insert-001".into(),
+                position_ticks: 0,
+                length_ticks: 3840,
+                lane: 0,
+                color: None,
+            });
+        song
+    }
+
+    fn kick_file(song: &Project) -> String {
+        match &song.track("insert-001").unwrap().clips[0].content {
+            ClipContent::Audio(a) => a.source_file.clone(),
+            _ => panic!("an audio clip"),
+        }
+    }
+
+    #[test]
+    fn save_as_into_another_folder_keeps_the_collected_samples() {
+        let home = std::env::temp_dir().join("Anthem");
+        let usb = std::env::temp_dir().join("USB");
+        let mut song = song_with_collected_kick();
+        follow_to_folder(&mut song, Some(&home), Some(&usb));
+        assert_eq!(
+            kick_file(&song),
+            home.join("Anthem Samples/kick.wav").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn saving_in_its_own_folder_keeps_the_song_movable() {
+        let home = std::env::temp_dir().join("Anthem");
+        let mut song = song_with_collected_kick();
+        follow_to_folder(&mut song, Some(&home), Some(&home));
+        assert_eq!(kick_file(&song), "Anthem Samples/kick.wav");
+        // A song never saved has no folder its samples could be relative to.
+        follow_to_folder(&mut song, None, Some(&home));
+        assert_eq!(kick_file(&song), "Anthem Samples/kick.wav");
+    }
 }
