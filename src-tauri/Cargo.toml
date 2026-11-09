@@ -59,7 +59,7 @@ url = "2"
 
 hound.workspace = true
 flacenc.workspace = true
-shine-rs.workspace = true
+rusty_mp3.workspace = true
 # Used by Project Info dialog handlers to stamp modified_at on metadata
 # changes (RFC3339). chrono is already a workspace dep — wire it through.
 chrono.workspace = true

@@ -556,156 +556,62 @@ fn is_mp3_path(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Encode normalized interleaved stereo `f32` samples to a CBR MP3 file via
-/// shine-rs. Shine supports only MPEG-1/2/2.5 sample rates up to 48 kHz; the
-/// caller enforces that constraint upstream so we can error cleanly here.
+/// The sample rates an MP3 can carry: MPEG-1, MPEG-2 and MPEG-2.5 Layer III.
+const MP3_RATES: &[u32] = &[8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
+
+/// Encode normalized interleaved stereo `f32` samples to an MP3 file with
+/// rusty_mp3 (pure Rust, Apache-2.0). `vbr_quality` picks VBR at a
+/// LAME-style quality (0 = best, 9 = smallest); `None` is CBR at
+/// `bitrate_kbps`, snapped to the nearest bitrate the format allows. The
+/// first frame is an Info/Xing tag with the encoder delay and padding, so
+/// players that read it play the file at exactly the rendered length.
 fn write_mp3_from_buffer(
     out_path: &Path,
     buffer: &[f32],
     sample_rate: u32,
     bitrate_kbps: u32,
+    vbr_quality: Option<u32>,
 ) -> Result<(), String> {
-    use shine_rs::{Mp3Encoder, Mp3EncoderConfig, StereoMode};
+    let mp3 = encode_mp3(buffer, sample_rate, bitrate_kbps, vbr_quality)?;
+    fs::write(out_path, &mp3).map_err(|e| format!("mp3 file: {e}"))?;
+    Ok(())
+}
 
-    const SHINE_RATES: &[u32] = &[8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
-    if !SHINE_RATES.contains(&sample_rate) {
+fn encode_mp3(
+    buffer: &[f32],
+    sample_rate: u32,
+    bitrate_kbps: u32,
+    vbr_quality: Option<u32>,
+) -> Result<Vec<u8>, String> {
+    use rusty_mp3::{vbr_quality_index, Error, Mp3Encoder, Mp3EncoderConfig};
+
+    if !MP3_RATES.contains(&sample_rate) {
         return Err(format!(
-            "MP3 export does not support {sample_rate} Hz — choose 32000/44100/48000"
+            "MP3 export does not support {sample_rate} Hz; choose 32000, 44100 or 48000"
         ));
     }
 
-    let mut pcm: Vec<i16> = Vec::with_capacity(buffer.len());
-    for &s in buffer {
-        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i32;
-        pcm.push(v.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
-    }
-
-    let cfg = Mp3EncoderConfig::new()
-        .sample_rate(sample_rate)
-        .bitrate(bitrate_kbps)
-        .channels(2)
-        .stereo_mode(StereoMode::JointStereo);
-    let mut encoder = Mp3Encoder::new(cfg).map_err(|e| format!("mp3 init: {e:?}"))?;
-
-    let mut out = Vec::with_capacity(pcm.len() / 8);
-    let frame_len = encoder.samples_per_frame();
-    let mut cursor = 0usize;
-    while cursor < pcm.len() {
-        let end = (cursor + frame_len).min(pcm.len());
-        let frames = encoder
-            .encode_interleaved(&pcm[cursor..end])
-            .map_err(|e| format!("mp3 encode: {e:?}"))?;
-        for f in frames {
-            out.extend_from_slice(&f);
+    let mut encoder = Mp3Encoder::new(Mp3EncoderConfig {
+        bitrate_kbps,
+        vbr_quality: vbr_quality.map(|q| vbr_quality_index(q.min(9) as f32)),
+    });
+    encoder
+        .push_pcm_f32(buffer, 2, sample_rate)
+        .map_err(|e| format!("mp3 encode: {e:?}"))?;
+    // Drained only after finish(), so the first packet is the completed
+    // Info/Xing tag and the bytes are final.
+    encoder.finish();
+    let mut out = Vec::with_capacity(buffer.len() / 8);
+    loop {
+        match encoder.next_packet() {
+            Ok(packet) => out.extend_from_slice(&packet),
+            Err(Error::Eof) => return Ok(out),
+            Err(e) => return Err(format!("mp3 encode: {e:?}")),
         }
-        cursor = end;
     }
-    let tail = encoder.finish().map_err(|e| format!("mp3 finish: {e:?}"))?;
-    out.extend_from_slice(&tail);
-
-    fs::write(out_path, &out).map_err(|e| format!("mp3 file: {e}"))?;
-    Ok(())
 }
 
-/// Encode an interleaved stereo f32 buffer as a genuine VBR MP3 by
-/// splitting it into fixed segments and choosing a bitrate per
-/// segment based on the segment's RMS level. Quieter segments land
-/// in a lower bitrate tier; louder ones in a higher tier. The
-/// resulting file is freeform VBR — each frame header carries the
-/// correct bitrate, so VLC / ffmpeg / any frame-by-frame MP3
-/// decoder reads it natively.
-///
-/// The `quality` parameter in `[0, 9]` (0 = best, 9 = smallest)
-/// biases the per-segment bitrate tiers up or down by one step.
-fn write_mp3_vbr_from_buffer(
-    out_path: &Path,
-    buffer: &[f32],
-    sample_rate: u32,
-    quality: u32,
-) -> Result<(), String> {
-    use shine_rs::{Mp3Encoder, Mp3EncoderConfig, StereoMode};
-
-    const SHINE_RATES: &[u32] = &[8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000];
-    if !SHINE_RATES.contains(&sample_rate) {
-        return Err(format!("MP3 VBR export does not support {sample_rate} Hz"));
-    }
-
-    // Quality → bitrate tiers (kbps). Quality 0 = highest average
-    // bitrate; quality 9 = lowest. Each tier has a "quiet / medium /
-    // loud" ladder that a per-segment RMS pick traverses.
-    let quality = quality.min(9);
-    let tiers: [[u32; 3]; 10] = [
-        [224, 288, 320], // 0 best
-        [192, 256, 320],
-        [160, 224, 288],
-        [128, 192, 256],
-        [128, 160, 224],
-        [112, 128, 192],
-        [96, 128, 160],
-        [80, 112, 128],
-        [64, 96, 128],
-        [64, 80, 96], // 9 smallest
-    ];
-    let ladder = tiers[quality as usize];
-
-    // 2-second segments — large enough for shine to settle, small
-    // enough for bitrate to track signal loudness.
-    let segment_frames: usize = (sample_rate as usize * 2) * 2; // stereo samples
-    let mut cursor = 0usize;
-    let mut out = Vec::with_capacity(buffer.len());
-
-    while cursor < buffer.len() {
-        let end = (cursor + segment_frames).min(buffer.len());
-        let segment = &buffer[cursor..end];
-        // RMS of the segment.
-        let mut sum_sq = 0.0_f64;
-        for &s in segment {
-            sum_sq += (s as f64) * (s as f64);
-        }
-        let rms = (sum_sq / segment.len() as f64).sqrt();
-        // Pick a tier: < -24 dBFS → low, -24..-12 → mid, > -12 → high.
-        let bitrate = if rms < 0.063 {
-            ladder[0]
-        } else if rms < 0.251 {
-            ladder[1]
-        } else {
-            ladder[2]
-        };
-
-        let mut pcm: Vec<i16> = Vec::with_capacity(segment.len());
-        for &s in segment {
-            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i32;
-            pcm.push(v.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
-        }
-        let cfg = Mp3EncoderConfig::new()
-            .sample_rate(sample_rate)
-            .bitrate(bitrate)
-            .channels(2)
-            .stereo_mode(StereoMode::JointStereo);
-        let mut encoder = Mp3Encoder::new(cfg).map_err(|e| format!("mp3 init: {e:?}"))?;
-        let frame_len = encoder.samples_per_frame();
-        let mut segment_cursor = 0usize;
-        while segment_cursor < pcm.len() {
-            let segment_end = (segment_cursor + frame_len).min(pcm.len());
-            let frames = encoder
-                .encode_interleaved(&pcm[segment_cursor..segment_end])
-                .map_err(|e| format!("mp3 encode: {e:?}"))?;
-            for f in frames {
-                out.extend_from_slice(&f);
-            }
-            segment_cursor = segment_end;
-        }
-        let tail = encoder.finish().map_err(|e| format!("mp3 finish: {e:?}"))?;
-        out.extend_from_slice(&tail);
-
-        cursor = end;
-    }
-
-    fs::write(out_path, &out).map_err(|e| format!("mp3 file: {e}"))?;
-    Ok(())
-}
-
-/// MP3 render path: buffer full render, normalize, then hand off to shine.
+/// MP3 render path: buffer full render, normalize, then encode.
 #[allow(clippy::too_many_arguments)]
 fn write_render_mp3<F>(
     render: OfflineRender,
@@ -779,14 +685,13 @@ where
 
     on_progress((total_samples * 90) / 100, total_samples);
     meter.push_interleaved(&buffer);
-    match fmt.mp3_vbr_quality {
-        Some(quality) => {
-            write_mp3_vbr_from_buffer(out_path, &buffer, fmt.sample_rate, quality)?;
-        }
-        None => {
-            write_mp3_from_buffer(out_path, &buffer, fmt.sample_rate, fmt.mp3_bitrate_kbps)?;
-        }
-    }
+    write_mp3_from_buffer(
+        out_path,
+        &buffer,
+        fmt.sample_rate,
+        fmt.mp3_bitrate_kbps,
+        fmt.mp3_vbr_quality,
+    )?;
     on_progress(total_samples, total_samples);
     Ok(true)
 }
@@ -2062,5 +1967,94 @@ mod loudness_tests {
         let (a, b) = (whole.finish(), one_by_one.finish());
         assert_eq!(a.peak_db, b.peak_db);
         assert_eq!(a.lufs_integrated, b.lufs_integrated);
+    }
+}
+
+#[cfg(test)]
+mod mp3_tests {
+    use super::encode_mp3;
+    use rusty_mp3::{Error, Mp3Decoder};
+
+    /// `seconds` of a 440 Hz sine at -6 dBFS on both sides, interleaved.
+    fn sine(sample_rate: u32, seconds: usize) -> Vec<f32> {
+        let amp = 10f32.powf(-6.0 / 20.0);
+        (0..sample_rate as usize * seconds)
+            .flat_map(|i| {
+                let v = amp
+                    * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate as f32).sin();
+                [v, v]
+            })
+            .collect()
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    /// Decodes the whole file: (sample rate, channels, interleaved samples).
+    fn decode(mp3: &[u8]) -> (u32, u16, Vec<f32>) {
+        let mut decoder = Mp3Decoder::new();
+        decoder.push(mp3);
+        decoder.flush();
+        let (mut rate, mut channels, mut out) = (0, 0, Vec::new());
+        loop {
+            match decoder.next_frame() {
+                Ok(frame) => {
+                    rate = frame.sample_rate;
+                    channels = frame.channels;
+                    out.extend_from_slice(&frame.samples);
+                }
+                Err(Error::Eof) => return (rate, channels, out),
+                Err(e) => panic!("the export does not decode: {e:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_cbr_export_plays_back_at_its_rate_length_and_level() {
+        for rate in [44_100, 48_000] {
+            let pcm = sine(rate, 5);
+            let mp3 = encode_mp3(&pcm, rate, 128, None).expect("encodes");
+            // 128 kbps for five seconds is 80 kB, give or take the tag frame.
+            let expected = 128_000 / 8 * 5;
+            assert!(
+                (mp3.len() as i64 - expected as i64).unsigned_abs() < expected as u64 / 20,
+                "{rate} Hz: {} bytes for 5 s at 128 kbps",
+                mp3.len()
+            );
+            let (got_rate, channels, out) = decode(&mp3);
+            assert_eq!(got_rate, rate);
+            assert_eq!(channels, 2);
+            // Never shorter than what was rendered; the codec's delay and the
+            // last frame's padding add at most a few frames.
+            assert!(out.len() >= pcm.len(), "{} < {}", out.len(), pcm.len());
+            assert!(out.len() <= pcm.len() + 2 * 4 * 1152);
+            let level = 20.0 * (rms(&out) / rms(&pcm)).log10();
+            assert!(level.abs() < 0.5, "{rate} Hz: level changed by {level} dB");
+        }
+    }
+
+    #[test]
+    fn vbr_quality_zero_is_larger_than_quality_nine_and_both_play() {
+        let pcm = sine(44_100, 5);
+        let best = encode_mp3(&pcm, 44_100, 320, Some(0)).expect("encodes");
+        let smallest = encode_mp3(&pcm, 44_100, 320, Some(9)).expect("encodes");
+        assert!(
+            best.len() > smallest.len() * 2,
+            "q0 {} bytes, q9 {} bytes",
+            best.len(),
+            smallest.len()
+        );
+        for mp3 in [&best, &smallest] {
+            let (rate, channels, out) = decode(mp3);
+            assert_eq!((rate, channels), (44_100, 2));
+            assert!(out.len() >= pcm.len());
+        }
+    }
+
+    #[test]
+    fn a_rate_mp3_cannot_carry_is_refused() {
+        let err = encode_mp3(&sine(96_000, 1), 96_000, 320, None).unwrap_err();
+        assert!(err.contains("96000"), "{err}");
     }
 }

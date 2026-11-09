@@ -45,7 +45,7 @@ confidence-threshold = 0.9
 [licenses.private]
 ignore = true
 
-# Waiting on the founder (9 Nov 2026).
+# The one licence exception left, waiting on the founder (9 Nov 2026).
 # Ableton Link: rusty_link and the Link SDK it builds and links statically
 # into the engine are GPL-2.0-or-later. A verbal permission from Ableton
 # (2026-10-07) is not a licence on paper, and it would not cover
@@ -56,13 +56,6 @@ ignore = true
 [[licenses.exceptions]]
 crate = "rusty_link"
 allow = ["GPL-2.0-or-later"]
-
-[[licenses.exceptions]]
-# MP3 export (shine). LGPL: allowed in a closed-source program if
-# people can swap in their own build of the library, which a statically
-# linked Rust binary does not offer as it stands.
-crate = "shine-rs"
-allow = ["LGPL-2.0"]
 
 [bans]
 multiple-versions = "allow"
