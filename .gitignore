@@ -14,3 +14,6 @@ packages/daw-ui/test-results/
 # Written by every typecheck, so a tracked copy makes the release gate
 # think the tree changed under it.
 packages/daw-ui/tsconfig.tsbuildinfo
+
+# Python bytecode from the Secure Code Check scripts and their tests.
+__pycache__/
