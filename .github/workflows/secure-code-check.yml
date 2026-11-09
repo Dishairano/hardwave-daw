@@ -170,11 +170,13 @@ jobs:
                 install -D -m644 "$rule" "rules/${rule#semgrep-rules/}"
               done
           echo "$(find rules -type f | wc -l) rule files"
+      # The source is mounted read-only and the results come back on
+      # stdout, so the container never writes into the workspace.
       - name: Scan the source
         run: >-
-          docker run --rm -v "$PWD:/w" -w /w/src "$SEMGREP_IMAGE"
+          docker run --rm -v "$PWD:/w:ro" -w /w/src -e HOME=/tmp "$SEMGREP_IMAGE"
           semgrep scan --config /w/rules --metrics off --disable-version-check
-          --json --output /w/semgrep.json --quiet
+          --json > semgrep.json
       - name: High findings fail
         id: gate
         run: python3 src/scripts/secure-code-check/semgrep_gate.py semgrep.json rules
