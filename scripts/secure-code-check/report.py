@@ -202,15 +202,27 @@ def public_key(repo: pathlib.Path) -> dict:
 
 # ---------------------------------------------------------------- checks
 
-def job_status(needs: dict, *jobs: str) -> str:
-    results = [needs.get(job, {}).get("result", "missing") for job in jobs]
-    if all(r == "success" for r in results):
+def combined(results: list) -> str:
+    """One status from several GitHub job results or step outcomes."""
+    if results and all(r == "success" for r in results):
         return "passed"
     if any(r == "failure" for r in results):
         return "failed"
     if any(r == "cancelled" for r in results):
         return "cancelled"
     return "not_run"
+
+
+def job_status(needs: dict, *jobs: str) -> str:
+    return combined([needs.get(job, {}).get("result", "missing") for job in jobs])
+
+
+def step_status(needs: dict, parts: list) -> str:
+    """Status from step outcomes a job reports as outputs, e.g.
+    [("rust-dependencies", "licences")]. Falls back to the job's own
+    result when a job does not report that step."""
+    return combined([outputs(needs, job).get(key) or needs.get(job, {}).get("result", "missing")
+                     for job, key in parts])
 
 
 def outputs(needs: dict, job: str) -> dict:
@@ -243,7 +255,7 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
             "id": "rust-dependencies", "name": "Rust dependencies", "tool": TOOLS["cargo_deny"],
             "what": f"{daw_crates} crates in the DAW's Cargo.lock against the RustSec advisory database: "
                     "known vulnerabilities, yanked crates, download sources",
-            "status": job_status(needs, "rust-dependencies"),
+            "status": step_status(needs, [("rust-dependencies", "advisories")]),
             "exceptions": advisory_count,
             "controls": ["8.8", "5.21"],
         },
@@ -252,7 +264,8 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
             "tool": f"{TOOLS['cargo_deny']}, {TOOLS['npm_audit']}",
             "what": f"{launcher_crates} crates of the launcher and uninstaller, and the {launcher_npm} "
                     "npm packages it ships",
-            "status": job_status(needs, "launcher-dependencies"),
+            "status": step_status(needs, [("launcher-dependencies", "advisories"),
+                                          ("launcher-dependencies", "npm")]),
             "controls": ["8.8", "5.21"],
         },
         {
@@ -265,7 +278,8 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
         {
             "id": "licences", "name": "Licences", "tool": TOOLS["cargo_deny"],
             "what": "Every crate's licence against our allow list",
-            "status": job_status(needs, "rust-dependencies", "launcher-dependencies"),
+            "status": step_status(needs, [("rust-dependencies", "licences"),
+                                          ("launcher-dependencies", "licences")]),
             "exceptions": licence_count,
             "controls": ["5.32"],
         },

@@ -35,16 +35,37 @@ permissions:
   contents: read
 
 jobs:
+  # Advisories and licences run as separate steps so the report can say
+  # which of the two failed; the job fails if either does.
   rust-dependencies:
     name: Rust dependencies (cargo deny)
     runs-on: ubuntu-latest
+    outputs:
+      advisories: ${{ steps.advisories.outcome }}
+      licences: ${{ steps.licences.outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - name: Advisories, yanked crates, bans and sources
+        id: advisories
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          command: check advisories bans licenses sources
+          command: check advisories bans sources
+      - name: Licences
+        id: licences
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check licenses
+      - name: Both pass
+        env:
+          ADVISORIES: ${{ steps.advisories.outcome }}
+          LICENCES: ${{ steps.licences.outcome }}
+        run: |
+          echo "advisories: $ADVISORIES, licences: $LICENCES"
+          [ "$ADVISORIES" = success ] && [ "$LICENCES" = success ]
 
   # The launcher under installer/ has lock files of its own, and it is no
   # small thing: it downloads and runs the DAW's installer, and it is the
@@ -53,15 +74,30 @@ jobs:
   launcher-dependencies:
     name: Launcher and uninstaller dependencies
     runs-on: ubuntu-latest
+    outputs:
+      advisories: ${{ steps.advisories.outcome }}
+      licences: ${{ steps.licences.outcome }}
+      npm: ${{ steps.npm.outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - name: Advisories, yanked crates, bans and sources
+        id: advisories
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           manifest-path: installer/src-tauri/Cargo.toml
           arguments: --config deny.toml
-          command: check advisories bans licenses sources
+          command: check advisories bans sources
+      - name: Licences
+        id: licences
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: installer/src-tauri/Cargo.toml
+          arguments: --config deny.toml
+          command: check licenses
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
@@ -69,8 +105,18 @@ jobs:
       # need major upgrades to clear their advisories and are audited
       # once those are done.
       - name: Audit the shipped packages
+        id: npm
+        continue-on-error: true
         working-directory: installer
         run: npm audit --omit=dev --audit-level=moderate
+      - name: All three pass
+        env:
+          ADVISORIES: ${{ steps.advisories.outcome }}
+          LICENCES: ${{ steps.licences.outcome }}
+          NPM: ${{ steps.npm.outcome }}
+        run: |
+          echo "advisories: $ADVISORIES, licences: $LICENCES, npm audit: $NPM"
+          [ "$ADVISORIES" = success ] && [ "$LICENCES" = success ] && [ "$NPM" = success ]
 
   ui-dependencies:
     name: UI dependencies (npm audit)

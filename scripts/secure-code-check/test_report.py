@@ -114,6 +114,13 @@ class ReportTest(unittest.TestCase):
         html = (self.out / "hardwave-daw-0.266.37-secure-code-check.html").read_text()
         self.assertIn("10 of 11 checks passed", html)
 
+    def test_licences_fail_on_their_own(self):
+        data = self.build(scan_needs(**{"rust-dependencies": {"result": "failure", "outputs": {
+            "advisories": "failure", "licences": "success"}}}))
+        status = {c["id"]: c["status"] for c in data["checks"]}
+        self.assertEqual(status["rust-dependencies"], "failed")
+        self.assertEqual(status["licences"], "passed")
+
     def test_unsigned_installer_is_not_called_signed(self):
         self.authenticode.write_text("[]")
         data = self.build()
