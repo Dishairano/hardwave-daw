@@ -459,17 +459,36 @@ struct RenderFormat {
     ogg_quality: f32,
 }
 
+/// The WAV header for a render. It has to say what `write_sample_dithered`
+/// writes: 16- and 24-bit integers, and 32-bit float for anything else. A
+/// bounce, freeze or consolidate asks for 32 bits and was written as float
+/// samples under a header that said 32-bit integers, so the file read back
+/// as loud distortion in place of the part.
 fn spec_for(bit_depth: u32, sample_rate: u32) -> WavSpec {
-    let (bits, format) = if bit_depth == 0 {
-        (32u16, SampleFormat::Float)
-    } else {
-        (bit_depth as u16, SampleFormat::Int)
+    let (bits, format) = match bit_depth {
+        16 | 24 => (bit_depth as u16, SampleFormat::Int),
+        _ => (32u16, SampleFormat::Float),
     };
     WavSpec {
         channels: 2,
         sample_rate,
         bits_per_sample: bits,
         sample_format: format,
+    }
+}
+
+/// How a bounce, freeze or consolidate is written: 32-bit float WAV at the
+/// song's rate, nothing done to its level.
+fn format_for_a_track(sample_rate: u32) -> RenderFormat {
+    RenderFormat {
+        sample_rate,
+        bit_depth: 32,
+        normalize: NormalizeMode::Off,
+        normalize_target_db: -1.0,
+        dither: DitherMode::None,
+        mp3_bitrate_kbps: 320,
+        mp3_vbr_quality: None,
+        ogg_quality: 0.5,
     }
 }
 
@@ -1561,16 +1580,7 @@ pub async fn consolidate_track_range(
             let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
             let out_path = dir.join(format!("{safe} consolidated {stamp}.wav"));
 
-            let fmt = RenderFormat {
-                sample_rate,
-                bit_depth: 32,
-                normalize: NormalizeMode::parse("off"),
-                normalize_target_db: -1.0,
-                dither: DitherMode::parse("none"),
-                mp3_bitrate_kbps: 320,
-                mp3_vbr_quality: None,
-                ogg_quality: 0.5,
-            };
+            let fmt = format_for_a_track(sample_rate);
 
             let target = track_id.clone();
             let instruments = instrument_ids(&engine_guard);
@@ -1706,16 +1716,7 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
             let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
             let out_path = dir.join(format!("{safe} {stamp}.wav"));
 
-            let fmt = RenderFormat {
-                sample_rate,
-                bit_depth: 32,
-                normalize: NormalizeMode::parse("off"),
-                normalize_target_db: -1.0,
-                dither: DitherMode::parse("none"),
-                mp3_bitrate_kbps: 320,
-                mp3_vbr_quality: None,
-                ogg_quality: 0.5,
-            };
+            let fmt = format_for_a_track(sample_rate);
 
             let target = track_id.clone();
             let completed = render_unlocked(
@@ -2062,16 +2063,7 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
         let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
         let out_path = dir.join(format!("{safe} frozen {stamp}.wav"));
 
-        let fmt = RenderFormat {
-            sample_rate,
-            bit_depth: 32,
-            normalize: NormalizeMode::parse("off"),
-            normalize_target_db: -1.0,
-            dither: DitherMode::parse("none"),
-            mp3_bitrate_kbps: 320,
-            mp3_vbr_quality: None,
-            ogg_quality: 0.5,
-        };
+        let fmt = format_for_a_track(sample_rate);
 
         let target = track_id.clone();
         let completed = render_unlocked(
@@ -2681,6 +2673,117 @@ mod stem_and_freeze_tests {
             .tick_to_samples(placed.position_ticks + placed.length_ticks, SR as f64);
         assert!(imported < end, "the import alone falls short");
         assert_eq!(plays_to, rendered, "the clip plays the whole render");
+    }
+
+    /// A bounced part plays back as it played, through the file the bounce
+    /// writes and the import that reads it back: a 24-bit stereo sample on
+    /// a centred track at 0 dB. The file's header said 32-bit integers while
+    /// it held float samples, so the bounce read back as loud distortion,
+    /// which a peak meter showed as the part coming back about 2 dB down.
+    #[test]
+    fn a_bounced_24_bit_stereo_sample_plays_back_as_it_played() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().expect("a folder");
+        let source = dir.path().join("loop.wav");
+        {
+            let spec = hound::WavSpec {
+                channels: 2,
+                sample_rate: SR,
+                bits_per_sample: 24,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut w = hound::WavWriter::create(&source, spec).expect("a file");
+            let full = 8_388_607.0f32;
+            let tau = std::f32::consts::TAU;
+            for n in 0..SR {
+                let t = n as f32 / SR as f32;
+                // A different sound on each side, one dying away to the
+                // very quiet samples a reverb tail ends in.
+                let l = (tau * 110.0 * t).sin() * 0.55;
+                let r = (tau * 165.0 * t).sin() * 0.45 * (-6.0 * t).exp();
+                w.write_sample((l * full).round() as i32).expect("a sample");
+                w.write_sample((r * full).round() as i32).expect("a sample");
+            }
+            w.finalize().expect("the file");
+        }
+
+        // Imported onto a track, as the app does.
+        let engine = parking_lot::Mutex::new(DawEngine::new());
+        let loop_id = {
+            let e = engine.lock();
+            let (source_id, info) = e.load_audio_file(&source).expect("it imports");
+            let mut p = e.project.lock();
+            let id = p.add_audio_track("Loop".into());
+            let mut clip = audio("loop", &source_id, info.total_frames, &id);
+            clip.length_ticks = p.tempo_map.samples_to_tick(info.total_frames, SR as f64);
+            p.track_mut(&id).unwrap().clips.push(clip);
+            id
+        };
+        let len = engine.lock().project_end_samples(SR);
+        let mix = |e: &DawEngine| -> Vec<f32> {
+            let mut out = Vec::new();
+            e.render_offline_with(
+                SR,
+                len,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend_from_slice(b);
+                    true
+                },
+            )
+            .expect("it renders");
+            out
+        };
+        let before = mix(&engine.lock());
+
+        // The bounce: the command's render, written the way it writes it,
+        // read back and placed the way it places it.
+        let bounced = dir.path().join("bounce.wav");
+        let end = super::song_end_ticks(&engine.lock().project.lock());
+        let target = loop_id.clone();
+        let finished = super::render_unlocked(
+            engine.lock(),
+            &bounced,
+            super::format_for_a_track(SR),
+            len,
+            0,
+            &Arc::new(AtomicBool::new(false)),
+            |_, _| {},
+            true,
+            move |p: &mut Project| super::isolate_track_for_render(p, &target, true, &|_| true),
+        )
+        .expect("it bounces");
+        assert!(finished);
+        {
+            let e = engine.lock();
+            let (source_id, info) = e.load_audio_file(&bounced).expect("the bounce imports");
+            let mut p = e.project.lock();
+            let id = p.add_audio_track("Loop (bounced)".into());
+            let clip = audio("bounced", &source_id, info.total_frames, &id);
+            p.track_mut(&id).unwrap().clips.push(clip);
+            super::fit_render_clip(&mut p, &id, "bounced", 0, end);
+            p.track_mut(&loop_id).unwrap().muted = true;
+        }
+        let after = mix(&engine.lock());
+
+        let peak_db = |s: &[f32]| 20.0 * s.iter().fold(0.0f32, |m, v| m.max(v.abs())).log10();
+        let rms_db = |s: &[f32]| {
+            let sum: f64 = s.iter().map(|&v| (v as f64) * (v as f64)).sum();
+            10.0 * (sum / s.len() as f64).log10() as f32
+        };
+        let (peak_before, peak_after) = (peak_db(&before), peak_db(&after));
+        assert!(
+            (peak_before - peak_after).abs() < 0.1,
+            "the bounce peaks where the part did: {peak_before:.2} dB before, {peak_after:.2} dB after"
+        );
+        let (rms_before, rms_after) = (rms_db(&before), rms_db(&after));
+        assert!(
+            (rms_before - rms_after).abs() < 0.1,
+            "and is as loud all through: {rms_before:.2} dB before, {rms_after:.2} dB after"
+        );
     }
 
     /// A muted track, or one silenced by a solo elsewhere, renders as it
