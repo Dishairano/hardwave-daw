@@ -45,14 +45,12 @@ confidence-threshold = 0.9
 [licenses.private]
 ignore = true
 
-# The one licence exception left, waiting on the founder (9 Nov 2026).
-# Ableton Link: rusty_link and the Link SDK it builds and links statically
-# into the engine are GPL-2.0-or-later. A verbal permission from Ableton
-# (2026-10-07) is not a licence on paper, and it would not cover
-# rusty_link's own GPL code, which is not Ableton's. The options (a
-# written Ableton licence with our own bindings, a permissively licensed
-# Link implementation, or Link out of the shipped build) are in the PR
-# that removed the other exceptions. This entry goes with that decision.
+# The one licence exception, kept by the founder's decision (9 Nov 2026):
+# Ableton Link. rusty_link and the Link SDK it builds and links statically
+# into the engine are GPL-2.0-or-later. The founder states that Ableton has
+# allowed Hardwave to use Link in the DAW (permission given 2026-10-07).
+# Keep a written copy of that permission with the company records for
+# auditors and buyers.
 [[licenses.exceptions]]
 crate = "rusty_link"
 allow = ["GPL-2.0-or-later"]
