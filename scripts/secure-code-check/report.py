@@ -200,6 +200,45 @@ def public_key(repo: pathlib.Path) -> dict:
     return {"public_key": f"{key_type} {blob}", "fingerprint": f"SHA256:{fingerprint}"}
 
 
+def history(repo: pathlib.Path, today: dt.date) -> dict:
+    """The product's vulnerability history, from the checked-in
+    security/vulnerability-history.json, with the days worked out for
+    today: days open run from the later of the day the advisory was
+    published and the first release that shipped it, to the day it was
+    resolved (or today, while it is open)."""
+    data = read_json(repo / "security" / "vulnerability-history.json", {})
+    entries = []
+    for entry in data.get("entries", []):
+        start = max(dt.date.fromisoformat(entry["published"]),
+                    dt.date.fromisoformat(entry.get("first_shipped_date") or entry["published"]))
+        end = dt.date.fromisoformat(entry["resolved"]) if entry.get("resolved") else today
+        entries.append({**entry, "days_open": max(0, (end - start).days)})
+    entries.sort(key=lambda e: (e["published"], e["id"]), reverse=True)
+    fixed = sorted(e["days_open"] for e in entries if e["status"] == "fixed")
+    median = None
+    if fixed:
+        mid = len(fixed) // 2
+        median = fixed[mid] if len(fixed) % 2 else (fixed[mid - 1] + fixed[mid]) / 2
+    last = max((dt.date.fromisoformat(e["published"]) for e in entries), default=None)
+    return {
+        "about": data.get("about", ""),
+        "sources": data.get("sources", []),
+        "summary": {
+            "total": len(entries),
+            "open": sum(1 for e in entries if e["status"] == "open"),
+            "fixed": len(fixed),
+            "accepted": sum(1 for e in entries if e["status"] == "accepted"),
+            "no_longer_shipped": sum(1 for e in entries if e["status"] == "no_longer_shipped"),
+            "median_days_to_fix": median,
+            "last_published": last.isoformat() if last else None,
+            "days_since_last": (today - last).days if last else None,
+            "as_of": today.isoformat(),
+        },
+        "entries": entries,
+        "not_counted": data.get("not_counted", []),
+    }
+
+
 # ---------------------------------------------------------------- checks
 
 def combined(results: list) -> str:
@@ -244,8 +283,12 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
     advisory_count = len(exc["advisories"])
     licence_count = exc["licences"]["count"]
 
-    fuzz = outputs(needs, "fuzz")
-    targets = fuzz.get("targets", "").split()
+    fuzz = outputs(needs, "fuzz-targets") or outputs(needs, "fuzz")
+    raw = fuzz.get("targets", "")
+    try:
+        targets = json.loads(raw) if raw.startswith("[") else raw.split()
+    except json.JSONDecodeError:
+        targets = []
     seconds = as_int(fuzz.get("seconds"), 60)
     secrets = outputs(needs, "secrets")
     sa = outputs(needs, "static-analysis")
@@ -306,7 +349,8 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
             "id": "fuzzing", "name": "Fuzzing", "tool": TOOLS["cargo_fuzz"],
             "what": (f"{len(targets)} readers of outside input, {seconds} s each: {', '.join(targets)}"
                      if targets else "Every reader of outside input"),
-            "status": job_status(needs, "fuzz"),
+            "status": job_status(needs, "fuzz-targets", "fuzz") if "fuzz-targets" in needs
+                      else job_status(needs, "fuzz"),
             "controls": ["8.29"],
         },
         {
@@ -387,6 +431,7 @@ def iso_controls(checks: list, exc: dict, release: bool, files: list) -> list:
         evidence["8.8"].append("dependency checks against the advisory databases on this commit")
         if exc["advisories"]:
             evidence["8.8"].append("recorded exceptions with their reasons")
+    evidence["8.8"].append("the product's vulnerability history with days to fix")
     evidence["8.25"].append("these checks run on every push and again on the release tag; "
                             "a failed check stops the release")
     if "static-analysis" in ok:
@@ -547,6 +592,7 @@ def build(args) -> dict:
         "sbom": sbom_out,
         "release_files": files,
         "iso_controls": iso_controls(checks, exc, release, files),
+        "vulnerability_history": history(repo, dt.datetime.now(dt.timezone.utc).date()),
         "signing": {**SIGNING, **public_key(repo)},
         "tools": TOOLS,
         "notice": NOTICE,

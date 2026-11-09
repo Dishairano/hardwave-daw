@@ -13,7 +13,9 @@ name: Secure Code Check
 # - Secrets in the whole git history (gitleaks).
 # - The source itself for known flaw patterns (Semgrep, free rules).
 #   A high finding fails; lower ones are listed in the report.
-# - Every reader of outside input fed generated input (cargo fuzz).
+# - Every reader of outside input fed generated input (cargo fuzz), one
+#   job per target: a minute each on pushes and pull requests, ten on a
+#   release and on the Monday run.
 # - The built UI loaded under the app's content policy.
 # - An SBOM in CycloneDX for what ships: the DAW and launcher crates and
 #   their npm packages.
@@ -243,13 +245,40 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
-  fuzz:
-    name: Fuzz the readers of outside input
+  fuzz-targets:
+    name: Fuzz targets
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     outputs:
-      targets: ${{ steps.run.outputs.targets }}
-      seconds: ${{ steps.run.outputs.seconds }}
+      targets: ${{ steps.list.outputs.targets }}
+      seconds: ${{ steps.list.outputs.seconds }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: One job per target
+        id: list
+        env:
+          SECONDS_EACH: ${{ inputs.fuzz-seconds }}
+        run: |
+          targets=$(find fuzz/fuzz_targets -maxdepth 1 -name '*.rs' -printf '%f\n' | sed 's/\.rs$//' | sort \
+            | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().split()))')
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "seconds=$SECONDS_EACH" >> "$GITHUB_OUTPUT"
+          echo "$targets, $SECONDS_EACH s each"
+
+  # One job per target, side by side, so the full ten minutes per target
+  # on a release and on Monday costs about a quarter of an hour of wall
+  # time instead of eighty minutes. Pushes and pull requests get one
+  # minute per target.
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    needs: fuzz-targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -266,30 +295,24 @@ jobs:
       # needs the headers and pkg-config; the runner image has neither.
       - name: System libraries the audio crates link
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev pkg-config
-      - name: Build the targets
-        working-directory: fuzz
-        run: cargo +nightly fuzz build -O --target x86_64-unknown-linux-gnu
-      - name: Run every target
-        id: run
+      - name: Build the target
         working-directory: fuzz
         env:
-          SECONDS_EACH: ${{ inputs.fuzz-seconds }}
-        run: |
-          set -e
-          targets=$(cargo +nightly fuzz list)
-          echo "targets=$(printf '%s' "$targets" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
-          echo "seconds=$SECONDS_EACH" >> "$GITHUB_OUTPUT"
-          for target in $targets; do
-            echo "::group::$target"
-            cargo +nightly fuzz run -O --target x86_64-unknown-linux-gnu "$target" -- \
-              -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10
-            echo "::endgroup::"
-          done
+          TARGET: ${{ matrix.target }}
+        run: cargo +nightly fuzz build -O --target x86_64-unknown-linux-gnu "$TARGET"
+      - name: Run it
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_EACH: ${{ needs.fuzz-targets.outputs.seconds }}
+        run: >-
+          cargo +nightly fuzz run -O --target x86_64-unknown-linux-gnu "$TARGET" --
+          -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10
       - name: Keep what broke it
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: fuzz-crashes
+          name: fuzz-crashes-${{ matrix.target }}
           path: fuzz/artifacts
           retention-days: 30
 
@@ -363,6 +386,7 @@ jobs:
       - ui-content-policy
       - secrets
       - static-analysis
+      - fuzz-targets
       - fuzz
       - sbom
     runs-on: ubuntu-latest

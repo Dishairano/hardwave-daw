@@ -154,6 +154,29 @@ class ReportTest(unittest.TestCase):
         self.assertIn('href="../0.266.38/"', html)
         self.assertTrue((out.parent / "index.html").exists())
 
+    def test_vulnerability_history(self):
+        hist = report.history(REPO, report.dt.date(2026, 11, 9))
+        s = hist["summary"]
+        self.assertEqual(s["total"], len(hist["entries"]))
+        self.assertEqual(s["last_published"], "2026-11-02")
+        self.assertEqual(s["days_since_last"], 7)
+        tokio = next(e for e in hist["entries"] if e["id"] == "RUSTSEC-2026-0386")
+        self.assertEqual((tokio["status"], tokio["fixed_release"], tokio["days_open"]), ("fixed", "v0.266.21", 0))
+        for e in hist["entries"]:
+            self.assertIn(e["status"], ("fixed", "accepted", "open", "no_longer_shipped"), e["id"])
+            if e["status"] in ("accepted", "open", "no_longer_shipped"):
+                self.assertTrue(e.get("reason"), e["id"])
+        open_ids = [e["id"] for e in hist["entries"] if e["status"] == "open"]
+        later = report.history(REPO, report.dt.date(2026, 12, 9))
+        for e in later["entries"]:
+            if e["id"] in open_ids:
+                before = next(x for x in hist["entries"] if x["id"] == e["id"])
+                self.assertEqual(e["days_open"], before["days_open"] + 30)
+        self.build()
+        html = (self.out / "hardwave-daw-0.266.37-secure-code-check.html").read_text()
+        self.assertIn("Vulnerability history", html)
+        self.assertIn("RUSTSEC-2026-0386", html)
+
     def test_no_certificate_or_compliance_claims(self):
         self.build()
         base = self.out / "hardwave-daw-0.266.37-secure-code-check"
@@ -163,6 +186,9 @@ class ReportTest(unittest.TestCase):
             text = text.replace(report.NOTICE, "")
             text = text.replace(report.NOTICE.split(". ", 1)[1], "").replace("This is not a certificate.", "")
             text = text.replace("not a certificate", "")
+            # Advisory titles are RustSec's words about other people's crates.
+            for entry in report.history(REPO, report.dt.date.today())["entries"]:
+                text = text.replace(entry["summary"], "")
             for word in ("certificate", "certified", "compliant", "compliance"):
                 self.assertIsNone(re.search(word, text, re.I), f"{path.name} says {word!r}")
 

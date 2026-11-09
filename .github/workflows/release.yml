@@ -188,7 +188,8 @@ jobs:
     name: Secure Code Check
     uses: ./.github/workflows/secure-code-check.yml
     with:
-      fuzz-seconds: 60
+      # The full run: ten minutes per target, side by side.
+      fuzz-seconds: 600
 
   # The release report must be signed, and the evidence job only runs
   # after the installers are public. So the key is checked here, before

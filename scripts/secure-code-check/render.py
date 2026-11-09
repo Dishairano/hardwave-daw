@@ -107,6 +107,8 @@ pre .c { color: var(--faint); }
 .hist a { text-decoration: none; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: 13.5px; }
 .hist a b { display: block; } .hist a span { color: var(--muted); font-size: 12px; }
 .hist a.on { border-color: var(--accent); }
+.hstats { grid-template-columns: repeat(4, 1fr); margin: 0 0 16px; }
+@media (max-width: 860px) { .hstats { grid-template-columns: 1fr 1fr; } }
 .findings { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
 .hero > *, .cards > *, .steps > li, .facts > * { min-width: 0; }
 footer { padding: 36px 0 56px; color: var(--faint); font-size: 13px; }
@@ -297,6 +299,64 @@ def results(report: dict, public: bool) -> str:
   </section>"""
 
 
+HISTORY_STATUS = {
+    "fixed": ("pass", "Fixed"),
+    "accepted": ("exc", "Accepted"),
+    "no_longer_shipped": ("na", "No longer shipped"),
+    "open": ("fail", "Open"),
+}
+
+
+def history_section(report: dict) -> str:
+    hist = report.get("vulnerability_history") or {}
+    entries = hist.get("entries") or []
+    if not entries:
+        return ""
+    s = hist["summary"]
+    median = s["median_days_to_fix"]
+    median_text = "none fixed" if median is None else f"{median:g}"
+    rows = []
+    for e in entries:
+        cls, word = HISTORY_STATUS.get(e["status"], ("na", e["status"]))
+        aliases = ", ".join(a for a in e.get("aliases", []) if a.startswith("CVE-"))
+        resolved = plain_date(e.get("resolved")) if e.get("resolved") else "not yet"
+        if e.get("resolved_by"):
+            resolved += (f'<small class="mono"><a href="{escape(repo_url(report))}/commit/{escape(e["resolved_by"])}">'
+                         f'{escape(e["resolved_by"])}</a></small>')
+        reason = f"<small>{escape(e['reason'])}</small>" if e.get("reason") else ""
+        rows.append(
+            f'<tr><td class="mono">{escape(e["id"])}<small>{escape(e["crate"])} {escape(", ".join(e["versions"]))}'
+            f'{"; " + escape(aliases) if aliases else ""}</small></td>'
+            f'<td>{escape(e["summary"])}<small>{escape(e["kind"])}; {escape(", ".join(e["platforms"]))}</small>{reason}</td>'
+            f'<td>{plain_date(e["published"])}</td><td>{resolved}</td>'
+            f'<td>{e["days_open"]}</td><td class="mono">{escape(e.get("fixed_release") or "")}</td>'
+            f'<td><span class="st {cls}">{word}</span></td></tr>')
+    not_counted = "".join(f"<li><span class=\"mono\">{escape(n['id'])}</span> ({escape(n['crate'])}): {escape(n['why'])}</li>"
+                          for n in hist.get("not_counted", []))
+    not_counted_html = (f"<h3>Looked at and not counted</h3><ul class=\"findings\">{not_counted}</ul>"
+                        if not_counted else "")
+    sources = "".join(f"<li>{escape(x)}</li>" for x in hist.get("sources", []))
+    return f"""
+  <section>
+    <h2>Vulnerability history</h2>
+    <p class="lead">{escape(hist.get('about', ''))} Source: <a href="{escape(repo_url(report))}/blob/{escape(report['source']['commit'])}/security/vulnerability-history.json"><span class="mono">security/vulnerability-history.json</span></a>.</p>
+    <div class="stats hstats">
+      <div class="stat"><b>{s['total']}</b><span>advisories that reached a shipped build</span></div>
+      <div class="stat"><b>{s['open']}</b><span>open now</span></div>
+      <div class="stat"><b>{median_text}</b><span>median days to fix ({s['fixed']} fixed)</span></div>
+      <div class="stat"><b>{s['days_since_last'] if s['days_since_last'] is not None else '-'}</b><span>days since the last one was published</span></div>
+    </div>
+    <p class="lead">Days open count from the later of the day the advisory was published and the first release that carried it, to the day it was fixed, accepted or stopped shipping (today, {plain_date(s['as_of'])}, while open). {s['accepted']} accepted with a reason, {s['no_longer_shipped']} ended when the Linux and macOS builds were paused.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>Advisory</th><th>What it was</th><th>Published</th><th>Resolved</th><th>Days open</th><th>Release</th><th>Status</th></tr></thead>
+      <tbody>{''.join(rows)}</tbody>
+    </table></div>
+    {not_counted_html}
+    <h3>How this list is made</h3>
+    <ul class="findings">{sources}</ul>
+  </section>"""
+
+
 def sbom_table(report: dict, link: bool) -> str:
     if not report["sbom"]:
         return ""
@@ -439,6 +499,7 @@ def report_html(report: dict) -> str:
     body = f"""<main class="wrap">
   {hero(report, f"Secure Code Check · {kind}", badge=False)}
   {results(report, public=False)}
+  {history_section(report)}
   {sbom_table(report, link=False)}
   {files_table(report)}
   {iso_table(report)}
@@ -513,6 +574,7 @@ def page_html(report: dict, history: list) -> str:
   <div class="crumbs"><a href="{SITE}/security">Security</a> / <a href="../../">Release evidence</a> / <a href="../">{escape(product['name'])}</a> / v{escape(version)}</div>
   {hero(report, "Secure Code Check · release evidence", badge=True)}
   {results(report, public=True)}
+  {history_section(report)}
   {downloads(report)}
   {files_table(report)}
   {iso_table(report)}
