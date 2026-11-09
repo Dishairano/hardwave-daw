@@ -63,7 +63,9 @@ rubato = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 hound = "3.5"
 flacenc = "0.5"
-shine-rs = "0.1"
+# MP3 export. Pure Rust and Apache-2.0, so it can be built into a closed
+# program; shine-rs (LGPL) did MP3 before 9 Nov 2026.
+rusty_mp3 = "1.0.5"
 vorbis_rs = "0.5"
 
 # Plugin hosting

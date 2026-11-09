@@ -16,33 +16,10 @@ yanked = "deny"
 # come in under Tauri or GTK are reported but cannot be replaced from
 # here; they go when the framework moves on.
 unmaintained = "workspace"
-ignore = [
-    # Every zip release below 9.0.3 was yanked (October 2026) over three
-    # high advisories in ZipArchive::extract and ZipStreamReader::extract:
-    # symlinks that point outside the destination, permissions applied
-    # through symlinks, and SUID/SGID bits kept (GHSA-4v9h-p7m9-rh26,
-    # GHSA-4684-h2q9-2vcp, GHSA-vv5m-jxxh-4627). Nothing of ours uses zip;
-    # tauri-plugin-updater does, on Windows only, and even its newest
-    # release (2.14.0) asks for zip ^4. It unpacks the update archive only
-    # after checking it against the DAW's minisign signature, so the
-    # archive is ours; and Windows has no Unix permission bits. Remove this
-    # when the updater moves to zip 9 or the updater artifacts stop being
-    # zips.
-    { crate = "zip@4.6.1", reason = "yanked; only under tauri-plugin-updater, which unpacks archives signed by us (see comment)" },
-    # The same three issues, published as RustSec advisories on the night
-    # of 17 Oct (they stopped that night's release). Same reasons as above.
-    { id = "RUSTSEC-2026-0367", reason = "SUID/SGID bits kept on extract: Unix only; the updater unpacks our own signed archive on Windows" },
-    { id = "RUSTSEC-2026-0368", reason = "symlinks outside the destination on extract: the updater unpacks our own signed archive" },
-    { id = "RUSTSEC-2026-0369", reason = "Unix permissions applied through symlinks on extract: Unix only; our own signed archive" },
-    # Published 2 Nov (it stopped v0.266.35); accepted by the founder on 2 Nov:
-    # ZipArchive::extract aborts the process on a symlink entry with a huge
-    # declared size. Our own code never calls extract (FL packages, sample
-    # packs and DAWproject files are read entry by entry with our own size
-    # caps, and links are refused); the only caller is the updater, on our own
-    # signed archive. Our direct use moves to zip 9 separately; remove this
-    # when the updater moves too.
-    { id = "RUSTSEC-2026-0429", reason = "abort on a crafted symlink entry in extract: we never call extract; the updater unpacks our own signed archive (founder accepted 2 Nov)" },
-]
+# No advisory is ignored. A flaw in something we ship is fixed by moving
+# off it (the zip advisories of October and November 2026 went with zip 9
+# and tauri-plugin-updater 2.14.1), not by listing it here.
+ignore = []
 
 [licenses]
 # Licences that let us ship a closed-source, sold product.
@@ -68,23 +45,15 @@ confidence-threshold = 0.9
 [licenses.private]
 ignore = true
 
-# Copyleft that is in the build today and needs the founder's decision.
-# They are allowed here so the gate checks everything else, and listed
-# in the security audit as an open legal question, not a solved one.
+# The one licence exception, kept by the founder's decision (9 Nov 2026):
+# Ableton Link. rusty_link and the Link SDK it builds and links statically
+# into the engine are GPL-2.0-or-later. The founder states that Ableton has
+# allowed Hardwave to use Link in the DAW (permission given 2026-10-07).
+# Keep a written copy of that permission with the company records for
+# auditors and buyers.
 [[licenses.exceptions]]
-# Ableton Link. The SDK is GPL-2.0-or-later unless Ableton grants a
-# commercial licence. 2026-10-07: the founder has Ableton's permission
-# by phone, through a contact in their legal team; the written
-# confirmation belongs with the company's licence records.
 crate = "rusty_link"
 allow = ["GPL-2.0-or-later"]
-
-[[licenses.exceptions]]
-# MP3 export (shine). LGPL: allowed in a closed-source program if
-# people can swap in their own build of the library, which a statically
-# linked Rust binary does not offer as it stands.
-crate = "shine-rs"
-allow = ["LGPL-2.0"]
 
 [bans]
 multiple-versions = "allow"

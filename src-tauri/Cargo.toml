@@ -37,7 +37,9 @@ log.workspace = true
 env_logger.workspace = true
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
+# 2.14.1 is the first release that unpacks update archives with zip 9, which
+# has the fixes for RUSTSEC-2026-0367/0368/0369/0429; every zip 4 is yanked.
+tauri-plugin-updater = "2.14.1"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
 
@@ -57,13 +59,19 @@ url = "2"
 
 hound.workspace = true
 flacenc.workspace = true
-shine-rs.workspace = true
+rusty_mp3.workspace = true
 # Used by Project Info dialog handlers to stamp modified_at on metadata
 # changes (RFC3339). chrono is already a workspace dep — wire it through.
 chrono.workspace = true
 vorbis_rs.workspace = true
 trash = "5"
-zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+# Sample packs, DAWproject files and FL's zipped packages come from anyone.
+# zip 9 has the fix for RUSTSEC-2026-0429 and the three extract advisories
+# before it. The updater (2.14.1 and later) uses this same zip 9, without
+# features of its own: deflate-flate2 here is also what lets it unpack a
+# compressed update archive on Windows. Only Stored and Deflated are read or
+# written, so no other compression method is built in.
+zip = { version = "9.2.2", default-features = false, features = ["deflate-flate2"] }
 # zip turns flate2 on without a backend; this picks the pure-Rust one. On
 # Linux another crate happened to pick it, so only the Windows build failed.
 flate2 = "1"
@@ -95,6 +103,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
 
 [dev-dependencies]
 # The mock runtime, so a test can call commands the way a page does and
