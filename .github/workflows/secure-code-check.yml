@@ -133,7 +133,10 @@ jobs:
   # Semgrep Community Edition with the free rules from semgrep-rules, both
   # pinned: the image by digest, the rules by commit. Only the security
   # rules for the languages we write (Rust, TypeScript, JavaScript), so a
-  # finding means a possible flaw and not a style opinion. Severity ERROR
+  # finding means a possible flaw and not a style opinion. Left out:
+  # unsafe-usage, which flags every unsafe block; the plug-in host needs
+  # them for the CLAP and VST3 C interfaces, and Clippy and review cover
+  # them. The report says so. Severity ERROR
   # is "high" and fails the run; WARNING and INFO are listed in the report
   # for review. The scan runs with metrics off: nothing about our code
   # leaves the runner.
@@ -165,7 +168,7 @@ jobs:
           mkdir rules
           find semgrep-rules/rust semgrep-rules/typescript semgrep-rules/javascript \
             -path '*/security/*' \( -name '*.yaml' -o -name '*.yml' \) \
-            ! -name '*.test.*' ! -name '*.fixed.*' -print0 \
+            ! -name '*.test.*' ! -name '*.fixed.*' ! -name 'unsafe-usage.*' -print0 \
             | while IFS= read -r -d '' rule; do
                 install -D -m644 "$rule" "rules/${rule#semgrep-rules/}"
               done

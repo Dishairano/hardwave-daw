@@ -281,7 +281,8 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
             "id": "static-analysis", "name": "Static analysis", "tool": TOOLS["semgrep"],
             "what": (f"{as_int(sa.get('files'))} Rust, TypeScript and JavaScript files against "
                      f"{as_int(sa.get('rules'))} security rules from semgrep-rules "
-                     f"{TOOLS['semgrep_rules'][:7]}; a high finding fails"),
+                     f"{TOOLS['semgrep_rules'][:7]} (all but unsafe-usage, which flags every unsafe "
+                     "block); a high finding fails"),
             "status": job_status(needs, "static-analysis"),
             "high": as_int(sa.get("high")),
             "lower": as_int(sa.get("medium")) + as_int(sa.get("low")),
@@ -436,7 +437,7 @@ def semgrep_findings(path: pathlib.Path) -> dict:
     findings = []
     for finding in data.get("results", [])[:200]:
         findings.append({
-            "rule": finding.get("check_id", ""),
+            "rule": re.sub(r"^rules\.", "", finding.get("check_id", "")),
             "severity": finding.get("extra", {}).get("severity", ""),
             "path": finding.get("path", ""),
             "line": finding.get("start", {}).get("line"),

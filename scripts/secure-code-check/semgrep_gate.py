@@ -27,6 +27,14 @@ def level(severity: str) -> str:
     return "low"
 
 
+SOURCE = (".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+
+
+def rule_id(finding: dict) -> str:
+    """The rule's own id, without the folder the rules were copied into."""
+    return re.sub(r"^rules\.", "", finding.get("check_id", ""))
+
+
 def count_rules(rules_dir: pathlib.Path) -> int:
     total = 0
     for path in rules_dir.rglob("*"):
@@ -45,13 +53,13 @@ def main() -> int:
         where = f"{finding.get('path')}:{finding.get('start', {}).get('line')}"
         if lvl == "high":
             print(f"::error file={finding.get('path')},line={finding.get('start', {}).get('line')}::"
-                  f"{finding.get('check_id')}: {finding.get('extra', {}).get('message', '').strip()[:300]}")
+                  f"{rule_id(finding)}: {finding.get('extra', {}).get('message', '').strip()[:300]}")
         else:
-            print(f"{lvl:6} {finding.get('check_id')}  {where}")
-    files = len(data.get("paths", {}).get("scanned", []))
+            print(f"{lvl:6} {rule_id(finding)}  {where}")
+    files = sum(1 for path in data.get("paths", {}).get("scanned", []) if path.endswith(SOURCE))
     rules = count_rules(rules_dir)
     errors = data.get("errors", [])
-    print(f"Semgrep: {rules} rules over {files} files; "
+    print(f"Semgrep: {rules} rules over {files} source files; "
           f"{counts['high']} high, {counts['medium']} medium, {counts['low']} low; "
           f"{len(errors)} files it could not fully read")
     out = os.environ.get("GITHUB_OUTPUT")
