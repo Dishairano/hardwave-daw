@@ -98,8 +98,7 @@ class ReportTest(unittest.TestCase):
 
     def test_exceptions_come_from_deny_toml(self):
         data = self.build()
-        ids = [a["id"] for a in data["exceptions"]["advisories"]]
-        self.assertIn("RUSTSEC-2026-0429", ids)
+        # Every advisory exception deny.toml carries is listed with its reason (since 9 Nov there are none).
         for advisory in data["exceptions"]["advisories"]:
             self.assertTrue(advisory["reason"], advisory["id"])
         self.assertGreaterEqual(data["exceptions"]["licences"]["count"], 1)
