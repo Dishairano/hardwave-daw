@@ -47,3 +47,5 @@ jobs:
     uses: ./.github/workflows/secure-code-check.yml
     with:
       fuzz-seconds: ${{ github.event_name == 'schedule' && 600 || 60 }}
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}

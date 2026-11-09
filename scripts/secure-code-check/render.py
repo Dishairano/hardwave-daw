@@ -444,7 +444,7 @@ def report_html(report: dict) -> str:
   {iso_table(report)}
   <section class="last">
     <h2>Signature</h2>
-    <p class="lead">{'This file and its JSON twin are signed by our build with an Ed25519 key that only the release workflow holds. The public key is in the source repository and on the public page.' if report.get('release') else 'Previews are not signed. Only release reports are.'}</p>
+    <p class="lead">{'This file and its JSON twin are signed by our build with an Ed25519 key that only the release workflow holds. The public key is in the source repository and on the public page.' if report.get('release') else 'Release reports are always signed by our build. A preview of a push or pull request is signed too when the run holds the key: look for the .sig file next to this one.'}</p>
     <dl class="facts">
       <dt>Method</dt><dd>{escape(signing['method'])}</dd>
       <dt>Identity</dt><dd class="mono">{escape(signing['identity'])}</dd>

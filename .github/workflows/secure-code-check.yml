@@ -30,6 +30,10 @@ on:
         description: Seconds each fuzz target runs
         type: number
         default: 60
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY:
+        description: Signs the report; without it (a fork) the preview stays unsigned
+        required: false
 
 permissions:
   contents: read
@@ -389,8 +393,23 @@ jobs:
           python3 scripts/secure-code-check/report.py --repo . --scan-dir scc --record-scan
           python3 scripts/secure-code-check/report.py --repo . --scan-dir scc --out-dir scc/preview
           echo "Preview: secure-code-check-results artifact, preview/"
+      - name: Sign the report
+        env:
+          SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+        run: |
+          if [ -z "$SECURE_CODE_CHECK_SIGNING_KEY" ]; then
+            echo "No signing key in this run (a fork); the preview stays unsigned."
+            exit 0
+          fi
+          scripts/secure-code-check/sign.sh sign scc/preview/*-secure-code-check.json scc/preview/*-secure-code-check.html
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: secure-code-check-results
           path: scc
+          retention-days: 90
+      # The report, its signatures and the SBOMs, on their own for reading.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secure-code-check-report
+          path: scc/preview
           retention-days: 90
