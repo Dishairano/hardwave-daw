@@ -181,11 +181,37 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace -- --include-ignored
 
+  # The same checks as the Security run, again on the tag itself: a new
+  # advisory published since that run still stops this release. Nothing
+  # is built until every one of them is green.
+  secure-code-check:
+    name: Secure Code Check
+    uses: ./.github/workflows/secure-code-check.yml
+    with:
+      # The full run: ten minutes per target, side by side.
+      fuzz-seconds: 600
+
+  # The release report must be signed, and the evidence job only runs
+  # after the installers are public. So the key is checked here, before
+  # anything is built: a missing or wrong key stops the release while
+  # there is still nothing to take back.
+  signing-key:
+    name: Report signing key
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The key is set and matches the public key in the repository
+        env:
+          SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+        run: scripts/secure-code-check/sign.sh check
+
   build:
     # Publishes the release, so it alone may write.
     permissions:
       contents: write
-    needs: [frontend, changelog, lint-and-test, ui-tests]
+    needs: [frontend, changelog, lint-and-test, ui-tests, secure-code-check, signing-key]
     strategy:
       fail-fast: false
       matrix:
@@ -490,6 +516,40 @@ jobs:
           files: |
             HardwaveDAW-Setup.exe
 
+      # For the Secure Code Check report: the Windows signature of every
+      # installer this leg published, read on the machine that signed
+      # them. Matched to the release files by SHA-256. It never fails the
+      # build; a file it could not read shows as "not verified".
+      - name: Record the Windows signatures (Windows)
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          $files = @(Get-Item HardwaveDAW-Setup.exe)
+          $files += Get-ChildItem -Path "target/$env:RUST_TARGET/release/bundle/nsis", "src-tauri/target/$env:RUST_TARGET/release/bundle/nsis" -Filter "*-setup.exe" -File -ErrorAction SilentlyContinue
+          $records = foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            [pscustomobject]@{
+              file   = $f.Name
+              sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+              status = [string]$sig.Status
+              signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "" }
+            }
+          }
+          ConvertTo-Json -InputObject @($records) | Set-Content -Encoding utf8 authenticode.json
+          Get-Content authenticode.json
+
+      - name: Keep the signature record (Windows)
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: authenticode
+          path: authenticode.json
+          retention-days: 90
+
       - name: Build Tauri app (macOS)
         if: matrix.platform == 'macos-latest'
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
@@ -511,6 +571,90 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.tauri-bundles }}
+
+  # Secure Code Check evidence for this release: the report (HTML and
+  # JSON) built from this run's results, signed with our key, the SBOMs,
+  # and the public page as files ready to publish. All attached to the
+  # GitHub release. Runs after the build, because the report lists the
+  # SHA-256 of every file the release carries.
+  evidence:
+    name: Secure Code Check evidence
+    needs: [secure-code-check, lint-and-test, ui-tests, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The date each exception was recorded comes from deny.toml's history.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: secure-code-check-results
+          path: scc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: authenticode
+          path: authenticode
+      - name: The release files, as people download them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          if ! [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ]]; then
+            echo "::error::'$TAG_NAME' is not a release tag"; exit 1
+          fi
+          mkdir -p assets
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --dir assets
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq .publishedAt > released-at.txt
+          # Earlier releases that carry a report, for the page's history.
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq \
+            '[.[] | select(.draft | not) | select(any(.assets[]; .name | endswith("-secure-code-check.json")))
+              | {version: (.tag_name | ltrimstr("v")), released_at: .published_at}]' > history.json
+          ls -l assets
+      - name: Write the report
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          printf '%s' "$NEEDS_JSON" > release-needs.json
+          # Without the build's signature record the installers show as
+          # "not verified" rather than signed.
+          extra=()
+          if [ -f authenticode/authenticode.json ]; then
+            extra=(--authenticode authenticode/authenticode.json)
+          fi
+          python3 scripts/secure-code-check/report.py --repo . --scan-dir scc --out-dir evidence \
+            --tag "$TAG_NAME" --released-at "$(cat released-at.txt)" \
+            --release-needs release-needs.json --assets-dir assets "${extra[@]}"
+      - name: Sign the report
+        env:
+          SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+        run: scripts/secure-code-check/sign.sh sign evidence/*-secure-code-check.json evidence/*-secure-code-check.html
+      - name: Build the public page
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          version="${TAG_NAME#v}"
+          python3 scripts/secure-code-check/page.py \
+            --report "evidence/hardwave-daw-$version-secure-code-check.json" \
+            --files evidence --repo . --site-dir site --history history.json
+          tar -C site -czf "evidence/hardwave-daw-$version-security-page.tar.gz" security
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release upload "$TAG_NAME" evidence/* --repo "$GITHUB_REPOSITORY" --clobber
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-page
+          path: site
+          retention-days: 90
 
   discord-changelog:
     needs: [build]

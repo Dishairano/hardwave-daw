@@ -1,0 +1,439 @@
+name: Secure Code Check
+
+# The security checks, as one reusable workflow. security.yml calls it on
+# every push, pull request and Monday; release.yml calls it again on the
+# release tag, and a release builds only when every job here is green.
+#
+# What it checks:
+# - Rust dependencies of the DAW and of the launcher: known
+#   vulnerabilities, yanked crates, licences and download sources, per
+#   deny.toml (cargo deny). A vulnerability fails; there is no warn.
+# - npm dependencies of the UI (build tools included) and the packages
+#   the launcher ships (npm audit).
+# - Secrets in the whole git history (gitleaks).
+# - The source itself for known flaw patterns (Semgrep, free rules).
+#   A high finding fails; lower ones are listed in the report.
+# - Every reader of outside input fed generated input (cargo fuzz), one
+#   job per target: a minute each on pushes and pull requests, ten on a
+#   release and on the Monday run.
+# - The built UI loaded under the app's content policy.
+# - An SBOM in CycloneDX for what ships: the DAW and launcher crates and
+#   their npm packages.
+#
+# Last, it collects the results into secure-code-check-results, which the
+# release turns into the signed report and the public page. Tools are
+# pinned to a version and checked against a published hash or an image
+# digest; actions are pinned to a commit. Runs with a read-only token.
+
+on:
+  workflow_call:
+    inputs:
+      fuzz-seconds:
+        description: Seconds each fuzz target runs
+        type: number
+        default: 60
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY:
+        description: Signs the report; without it (a fork) the preview stays unsigned
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Advisories and licences run as separate steps so the report can say
+  # which of the two failed; the job fails if either does.
+  rust-dependencies:
+    name: Rust dependencies (cargo deny)
+    runs-on: ubuntu-latest
+    outputs:
+      advisories: ${{ steps.advisories.outcome }}
+      licences: ${{ steps.licences.outcome }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Advisories, yanked crates, bans and sources
+        id: advisories
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories bans sources
+      - name: Licences
+        id: licences
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check licenses
+      - name: Both pass
+        env:
+          ADVISORIES: ${{ steps.advisories.outcome }}
+          LICENCES: ${{ steps.licences.outcome }}
+        run: |
+          echo "advisories: $ADVISORIES, licences: $LICENCES"
+          [ "$ADVISORIES" = success ] && [ "$LICENCES" = success ]
+
+  # The launcher under installer/ has lock files of its own, and it is no
+  # small thing: it downloads and runs the DAW's installer, and it is the
+  # DAW's uninstaller. It went unchecked until rustls 0.23.45 and a
+  # yanked zip sat in its lock while the DAW's own were clean.
+  launcher-dependencies:
+    name: Launcher and uninstaller dependencies
+    runs-on: ubuntu-latest
+    outputs:
+      advisories: ${{ steps.advisories.outcome }}
+      licences: ${{ steps.licences.outcome }}
+      npm: ${{ steps.npm.outcome }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Advisories, yanked crates, bans and sources
+        id: advisories
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: installer/src-tauri/Cargo.toml
+          arguments: --config deny.toml
+          command: check advisories bans sources
+      - name: Licences
+        id: licences
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: installer/src-tauri/Cargo.toml
+          arguments: --config deny.toml
+          command: check licenses
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      # What ships in the launcher. Its build tools (vite 5, tailwind 3)
+      # need major upgrades to clear their advisories and are audited
+      # once those are done.
+      - name: Audit the shipped packages
+        id: npm
+        continue-on-error: true
+        working-directory: installer
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: All three pass
+        env:
+          ADVISORIES: ${{ steps.advisories.outcome }}
+          LICENCES: ${{ steps.licences.outcome }}
+          NPM: ${{ steps.npm.outcome }}
+        run: |
+          echo "advisories: $ADVISORIES, licences: $LICENCES, npm audit: $NPM"
+          [ "$ADVISORIES" = success ] && [ "$LICENCES" = success ] && [ "$NPM" = success ]
+
+  ui-dependencies:
+    name: UI dependencies (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - name: Audit the lockfile
+        working-directory: packages/daw-ui
+        run: npm audit --audit-level=moderate
+
+  ui-content-policy:
+    name: App window content policy
+    # Pinned: ubuntu-latest became Ubuntu 26.04 on 21 Oct 2026, and Playwright
+    # 1.58 cannot install Chromium there, which failed this check on every
+    # commit. Move back to ubuntu-latest once Playwright supports 26.04.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - name: Build the UI
+        working-directory: packages/daw-ui
+        run: npm ci && npm run build
+      - name: Browser for the check
+        working-directory: packages/daw-ui
+        run: npx playwright install --with-deps chromium
+      - name: Load the build under the app's policy; anything blocked fails
+        working-directory: packages/daw-ui
+        run: npm run check:csp
+
+  secrets:
+    name: Secrets in history (gitleaks)
+    runs-on: ubuntu-latest
+    outputs:
+      commits: ${{ steps.scan.outputs.commits }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch gitleaks, checked against its published hash
+        run: >-
+          curl -sSLo gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          && echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz" | sha256sum -c -
+          && tar xzf gitleaks.tgz gitleaks
+      - name: Scan every commit
+        id: scan
+        run: |
+          echo "commits=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+          ./gitleaks git --redact --no-banner --exit-code 1 .
+
+  # Semgrep Community Edition with the free rules from semgrep-rules, both
+  # pinned: the image by digest, the rules by commit. Only the security
+  # rules for the languages we write (Rust, TypeScript, JavaScript), so a
+  # finding means a possible flaw and not a style opinion. Left out:
+  # unsafe-usage, which flags every unsafe block; the plug-in host needs
+  # them for the CLAP and VST3 C interfaces, and Clippy and review cover
+  # them. The report says so. Severity ERROR
+  # is "high" and fails the run; WARNING and INFO are listed in the report
+  # for review. The scan runs with metrics off: nothing about our code
+  # leaves the runner.
+  static-analysis:
+    name: Static analysis (Semgrep)
+    runs-on: ubuntu-latest
+    outputs:
+      high: ${{ steps.gate.outputs.high }}
+      medium: ${{ steps.gate.outputs.medium }}
+      low: ${{ steps.gate.outputs.low }}
+      rules: ${{ steps.gate.outputs.rules }}
+      files: ${{ steps.gate.outputs.files }}
+    env:
+      SEMGREP_IMAGE: semgrep/semgrep:1.182.1@sha256:451b3d875c00dac7ed5db5293e584a07de11449a409c10b3c2d2652f429630b6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: src
+          persist-credentials: false
+      - name: Free rules, pinned to a commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: semgrep/semgrep-rules
+          ref: 16b9e6d45f10649f6a531ec4838ed9924372c3bc
+          path: semgrep-rules
+          persist-credentials: false
+      - name: Pick the security rules for our languages
+        run: |
+          mkdir rules
+          find semgrep-rules/rust semgrep-rules/typescript semgrep-rules/javascript \
+            -path '*/security/*' \( -name '*.yaml' -o -name '*.yml' \) \
+            ! -name '*.test.*' ! -name '*.fixed.*' ! -name 'unsafe-usage.*' -print0 \
+            | while IFS= read -r -d '' rule; do
+                install -D -m644 "$rule" "rules/${rule#semgrep-rules/}"
+              done
+          echo "$(find rules -type f | wc -l) rule files"
+      # The source and rules are mounted read-only (the image expects the
+      # code at /src) and the results come back on stdout, so the
+      # container never writes into the workspace.
+      - name: Scan the source
+        run: >-
+          docker run --rm -v "$PWD/src:/src:ro" -v "$PWD/rules:/rules:ro" -w /src -e HOME=/tmp
+          "$SEMGREP_IMAGE" semgrep scan --config /rules --metrics off --disable-version-check
+          --json > semgrep.json
+      - name: High findings fail
+        id: gate
+        run: python3 src/scripts/secure-code-check/semgrep_gate.py semgrep.json rules
+      - name: Keep the findings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: semgrep-results
+          path: semgrep.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  fuzz-targets:
+    name: Fuzz targets
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+      seconds: ${{ steps.list.outputs.seconds }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: One job per target
+        id: list
+        env:
+          SECONDS_EACH: ${{ inputs.fuzz-seconds }}
+        run: |
+          targets=$(find fuzz/fuzz_targets -maxdepth 1 -name '*.rs' -printf '%f\n' | sed 's/\.rs$//' | sort \
+            | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().split()))')
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "seconds=$SECONDS_EACH" >> "$GITHUB_OUTPUT"
+          echo "$targets, $SECONDS_EACH s each"
+
+  # One job per target, side by side, so the full ten minutes per target
+  # on a release and on Monday costs about a quarter of an hour of wall
+  # time instead of eighty minutes. Pushes and pull requests get one
+  # minute per target.
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    needs: fuzz-targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Nightly Rust (libFuzzer needs it)
+        run: rustup toolchain install nightly --profile minimal
+      - name: Fetch cargo-fuzz, checked against its published hash
+        run: >-
+          curl -sSLo cargo-fuzz.tgz https://github.com/rust-fuzz/cargo-fuzz/releases/download/0.13.2/cargo-fuzz-0.13.2-x86_64-unknown-linux-musl.tar.gz
+          && echo "b5b704018b63e0f151c17a057ac53b5111e1db545d1b9f72fee79f08a545931c  cargo-fuzz.tgz" | sha256sum -c -
+          && mkdir -p cargo-fuzz-bin && tar xzf cargo-fuzz.tgz -C cargo-fuzz-bin
+          && install -m755 "$(find cargo-fuzz-bin -name cargo-fuzz -type f | head -1)" "$HOME/.cargo/bin/cargo-fuzz"
+      # The audio crates link ALSA through alsa-sys, whose build script
+      # needs the headers and pkg-config; the runner image has neither.
+      - name: System libraries the audio crates link
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev pkg-config
+      - name: Build the target
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo +nightly fuzz build -O --target x86_64-unknown-linux-gnu "$TARGET"
+      - name: Run it
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_EACH: ${{ needs.fuzz-targets.outputs.seconds }}
+        run: >-
+          cargo +nightly fuzz run -O --target x86_64-unknown-linux-gnu "$TARGET" --
+          -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10
+      - name: Keep what broke it
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: fuzz/artifacts
+          retention-days: 30
+
+  # What ships, as CycloneDX 1.5 JSON, one file per part. Rust: the
+  # CycloneDX project's own cargo-cyclonedx, from the lock files, for the
+  # Windows target the release builds and with every feature on, the same
+  # graph cargo deny checks. npm: the CycloneDX project's cyclonedx-npm,
+  # from the lock files, runtime packages only (what the bundle carries).
+  # 1.5 because it is the newest version cargo-cyclonedx writes, and one
+  # version across the files is easier for a buyer's tools to take in.
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    outputs:
+      summary: ${{ steps.summary.outputs.summary }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - name: Fetch cargo-cyclonedx, checked against its published hash
+        run: >-
+          curl -sSLo cyclonedx.txz https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-0.5.9/cargo-cyclonedx-x86_64-unknown-linux-gnu.tar.xz
+          && echo "fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8  cyclonedx.txz" | sha256sum -c -
+          && mkdir -p cyclonedx-bin && tar xJf cyclonedx.txz -C cyclonedx-bin
+          && install -m755 "$(find cyclonedx-bin -name cargo-cyclonedx -type f | head -1)" "$HOME/.cargo/bin/cargo-cyclonedx"
+      - name: Rust crates of the DAW and the launcher
+        run: |
+          set -e
+          mkdir -p sbom
+          for manifest in Cargo.toml installer/src-tauri/Cargo.toml; do
+            cargo cyclonedx --manifest-path "$manifest" --format json --spec-version 1.5 \
+              --target x86_64-pc-windows-msvc --all-features -q
+          done
+          mv src-tauri/hardwave-daw.cdx.json sbom/app-crates.cdx.json
+          mv crates/hardwave-plugin-bridge/hardwave-plugin-bridge.cdx.json sbom/plugin-bridge-crates.cdx.json
+          mv installer/src-tauri/hardwave-daw-installer.cdx.json sbom/launcher-crates.cdx.json
+      - name: Pinned npm SBOM tool, every package checked against its lockfile hash
+        working-directory: scripts/secure-code-check/sbom-tool
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: npm packages of the UI and the launcher
+        env:
+          CYCLONEDX_NPM: ${{ github.workspace }}/scripts/secure-code-check/sbom-tool/node_modules/.bin/cyclonedx-npm
+        run: |
+          set -e
+          (cd packages/daw-ui && "$CYCLONEDX_NPM" --package-lock-only --omit dev --spec-version 1.5 \
+            --output-reproducible --output-file "$GITHUB_WORKSPACE/sbom/ui-npm.cdx.json")
+          (cd installer && "$CYCLONEDX_NPM" --package-lock-only --omit dev --spec-version 1.5 \
+            --output-reproducible --output-file "$GITHUB_WORKSPACE/sbom/launcher-npm.cdx.json")
+      - name: Count what is in them
+        id: summary
+        run: python3 scripts/secure-code-check/sbom_summary.py sbom
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: sbom
+          retention-days: 90
+
+  # Writes down what every job above found, also when one failed, so a
+  # red run still says which check stopped it. The release adds its own
+  # results to this and signs it.
+  results:
+    name: Collect the results
+    if: always()
+    needs:
+      - rust-dependencies
+      - launcher-dependencies
+      - ui-dependencies
+      - ui-content-policy
+      - secrets
+      - static-analysis
+      - fuzz-targets
+      - fuzz
+      - sbom
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The date each exception was recorded comes from deny.toml's history.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The report scripts' own tests
+        run: python3 -m unittest discover -s scripts/secure-code-check -p 'test_*.py'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: sbom
+          path: scc/sbom
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: semgrep-results
+          path: scc
+      - name: Write the results and a preview of the report
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -e
+          printf '%s' "$NEEDS_JSON" > scc/scan-needs.json
+          python3 scripts/secure-code-check/report.py --repo . --scan-dir scc --record-scan
+          python3 scripts/secure-code-check/report.py --repo . --scan-dir scc --out-dir scc/preview
+          echo "Preview: secure-code-check-results artifact, preview/"
+      - name: Sign the report
+        env:
+          SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+        run: |
+          if [ -z "$SECURE_CODE_CHECK_SIGNING_KEY" ]; then
+            echo "No signing key in this run (a fork); the preview stays unsigned."
+            exit 0
+          fi
+          scripts/secure-code-check/sign.sh sign scc/preview/*-secure-code-check.json scc/preview/*-secure-code-check.html
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secure-code-check-results
+          path: scc
+          retention-days: 90
+      # The report, its signatures and the SBOMs, on their own for reading.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secure-code-check-report
+          path: scc/preview
+          retention-days: 90

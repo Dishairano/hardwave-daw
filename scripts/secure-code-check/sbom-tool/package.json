@@ -1,0 +1,8 @@
+{
+  "name": "secure-code-check-sbom-tool",
+  "private": true,
+  "description": "Pinned SBOM generator for the npm parts of the build. Installed with npm ci, so every package is checked against the hash in package-lock.json.",
+  "dependencies": {
+    "@cyclonedx/cyclonedx-npm": "6.0.1"
+  }
+}
