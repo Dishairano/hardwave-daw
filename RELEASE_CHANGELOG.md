@@ -1,8 +1,118 @@
+### New features
+- feat: live rooms: two producers on one song. Tempo changes, the channel rack, markers, arrangements, macros and VCAs are shared, each part on its own, so two people editing at the same moment both keep their change
+- feat: Settings, MIDI: with Control surface on, pick the desk's protocol (Mackie Control or HUI) and its MIDI input; a desk found by its name (X-Touch, Mackie, iCON, FaderPort and others) is picked by itself
+- feat: Apply in Settings > Audio plays a short test tone on the device, left then right, and names it; Test sound plays it again
+- feat: a MIDI controller plugged in later turns on by itself, with a message and Turn off (remembered per device); a control surface is offered as one instead
+- feat: one first-run window: start screen, sound card with a test tone, your controller (only when found), then the Hardstyle starter; it no longer comes back after New project
+
 ### Bug fixes
-- fix: 24-bit WAV samples, the depth most sample packs use, came in silent in any song (drag-in, sampler, FL import); they now play, as do 8-bit and 64-bit float WAVs
-- fix: FL samples fitted to the tempo with FL's TIME knob play at the length FL gives them and start where FL starts them (they played at about half speed, and trimmed loops started in the wrong place)
-- fix: Import FL Studio project now also opens FL's zipped loop package (.zip): it unpacks into a folder next to the zip, refuses unsafe archives, and the song plays the samples in that folder
+- fix: MP3 export uses a new encoder; VBR is real VBR now and exports play at exactly the rendered length
+- fix: a song taken from a room plays at its own tempo, the window shows it, and Ctrl+Z can no longer send your old song into the other person's song
+- fix: in a room, an edit that loses to a newer one is sent back so both songs end the same, and a tempo or marker change right after taking the song reaches the other side
+- fix: the other person's new track shows up in your playlist and mixer, and their cursor goes when they leave
+- fix: a song too large for a room is not sent and the host is told why, instead of the room closing; songs up to about 12 MB now fit
+- fix: a change to hundreds of tracks at once reaches the other person whole, the room panel counts what it receives, and a first-time guest is told to get the song
+- fix: deleting several selected clips at once is one undo step, and one undo brings them all back
+- fix: clicking a clip no longer adds an undo step that changes nothing; a resize, a group move, a move onto another track and a fade-handle drag are each one undo step
+- fix: moving or resizing clips, ripple moves, warp and unwarp, consolidate, audio to MIDI, send to launcher, section and insert/delete time edits, and markers now mark the song as changed, so closing asks to save and autosave runs
+- fix: insert time, delete time and moving or repeating a section move the markers on screen too
+- fix: splitting a clip no longer puts a fade-out and fade-in dip at the cut (comping had the same dip)
+- fix: a fade on a clip after a tempo change lasts as long as it is drawn
+- fix: a reversed clip plays the right audio when it is repitched in resample mode, sits on a pitched track, or is bounced at another sample rate
+- fix: dragging a clip to another track never deletes it
+- fix: an audio clip on a MIDI channel can be copied and pasted
+- fix: with Control surface on, only the desk's own MIDI input is read as the desk: a keyboard next to it no longer arms, solos or mutes tracks with its low notes, presses Stop/Play/Record with G6 to B6, or moves fader 1 with its pitch wheel
+- fix: a sample clicked in the browser plays while the song is stopped (it was only heard while the song played)
+- fix: a synth played on the keyboard with the song stopped is heard through its bus, reverb return and sends
+- fix: sound routed or sent to an instrument track is heard instead of disappearing
+- fix: scrolling far along the mixer shows the channels instead of an empty area
+- fix: a bounced, frozen or consolidated part plays back as the part instead of as loud distortion (the file said integer samples while it held float ones), no longer comes back quieter, and no longer gets the master fader a second time; parts bounced with earlier builds need bouncing again
+- fix: a frozen track plays as it did live (its fader, pan, automation, VCA and channel settings were applied twice)
+- fix: with the reference switched on, an export, stem, freeze or bounce is the mix, not the reference record
+- fix: exports no longer run a frozen track's plug-ins again on top of its render (effects were doubled, a frozen instrument exported silent)
+- fix: stem export makes files only for tracks that play something (it rendered all 500 empty inserts of a new song)
+- fix: a track routed into a bus has sound in its stem, every stem keeps its send reverb, and the stems add up to the mix
+- fix: freezing a track again replaces its old render instead of playing both
+- fix: bouncing or freezing a muted track, or while another track is soloed, renders the part instead of silence
+- fix: a loop or range export's tail holds only reverb, delay and release, not the next bar's music
+- fix: in a song with a tempo change, a frozen or bounced part plays to the end of the song
+- fix: keys or controller moves made during an export stay out of the file
+- fix: dither works for 16-bit FLAC exports
 
 ### Improvements
-- fix(audio): 24-bit WAV samples play instead of coming in silent
-- fix(fl import): a project shared as FL's zipped loop package opens with its samples
+- fix(bounce): a bounced, frozen or consolidated part plays back as the part, not as distortion
+- fix(first-run): the first-run window builds on Windows (two files differed only by case)
+- fix(export): a 16-bit FLAC export is dithered when dither is chosen
+- fix(export): a key played while an export runs stays out of the file
+- fix(bounce): a frozen or bounced part plays to the end of a song with a tempo change
+- fix(export): a loop or range export's tail holds the reverb, not the next bar
+- fix(freeze): freezing a track again replaces its old render
+- fix(stems): a track routed into a bus or sending to a return is heard in its stem
+- fix(stems): only tracks that play something get a stem
+- fix(export): a frozen track's plug-ins stay out of an export
+- fix(export): an export is the mix even with the reference switched on
+-12 dB, panned twice as far. The frozen track also ran the render through
+- fix(bounce): a bounced, frozen or consolidated part comes back as loud as it played
+- fix(rooms): a guest coming into a room for the first time is told to get the song, not that they were away too long
+- fix(rooms): the room panel counts the tracks, tempo and markers it receives
+- fix(rooms): a change to hundreds of tracks at once reaches the other side whole
+- fix(room service): a song part costs a connection's allowance by its size, as a track does
+- fix(rooms): a song too large for a room is not sent, and the host is told why instead of the room closing
+- fix(rooms): a song up to about 12 MB fits through a room once the room service is updated
+- fix(mixer): sound routed or sent to an instrument track comes out of it
+- fix(mixer): a synth played with the song stopped is heard through its bus and sends
+- fix(mixer): scrolling far along the mixer shows the channels instead of an empty area
+- feat(setup): one first-run window, from the start screen to a song that plays
+- feat(midi): a controller plugged in later turns on by itself, with Turn off
+- feat(audio): Apply in Settings > Audio plays a test tone and names the device
+- fix(browser): a sample clicked in the browser plays while the song is stopped
+- feat(settings): pick the desk's protocol and MIDI input beside the control surface switch
+- fix(control-surface): a keyboard beside the desk keeps its notes
+- fix(playlist): an audio clip on a MIDI channel can be copied and pasted
+- fix(playlist): dragging a clip to another track never deletes it
+- fix(playlist): a reversed clip plays the right audio when it plays faster or slower
+- fix(playlist): a fade after a tempo change lasts as long as it is drawn
+- fix(playlist): a split clip keeps its fades on the outer edges, with no dip at the cut
+- fix(markers): inserting or deleting time, or moving a section, moves the markers on screen too
+- fix(playlist): rearranging the playlist counts as a change to save
+- fix(playlist): a clip drag is one undo step, and a click on a clip is none
+- fix(playlist): deleting several clips at once is one undo step
+- fix(rooms): a track the other person adds shows up in your playlist and mixer
+- fix(rooms): the other person's cursor goes when they leave
+- fix(rooms): a tempo change or marker made right after taking the song reaches the other side
+- fix(rooms): when an edit loses to a newer one, the newer one is sent back so both songs end the same
+- fix(rooms): after taking the song from the room, the window shows it
+- fix(rooms): a song taken from the room plays at its own tempo, and undo cannot send your old song into the room
+- A tempo from the room is one the engine can play: not finite is
+- A part too large to send is said once and left out; it no longer
+- Taking a part is not an undo step: undoing it would only send the old
+- Arrangements taken from a room get an active one, as an opened song
+- The arrangement list, macros, modulation and VCAs read the song again
+- A marker edit still waiting to go out is sent rather than overwritten
+- feat(rooms): tempo changes, the channel rack, markers and arrangements reach the other side
+- feat(security): signed Secure Code Check report and public page generator
+- feat(security): Secure Code Check workflow, run by Security and by the release
+- fix(security): Semgrep results come back on stdout from a read-only mount
+- fix(security): mount the source where the Semgrep image expects it
+- fix(security): Semgrep leaves out unsafe-usage and names rules by their own id
+- fix(security): cargo deny reports advisories and licences separately
+- fix(security): sign the report on every run that holds the key, and clear the yanked async-executor
+- feat(security): the DAW's vulnerability history in the report and page, and fuzzing per target
+---------
+- fix(security): the DAW reads zips with zip 9, which has the extract fix
+- enclosed_name now turns "/x" or "C:\x" into a path inside the folder instead of refusing it. A sample pack refuses those paths itself again.
+- zip now stops a file that unpacks to more than it says with an error, before our own check sees the extra byte. The DAWproject import would have left the part already written in the song's samples folder; it removes it on any failed copy now. FL packages and sample packs still call such a file damaged or unsafe.
+- by_name now looks through every entry for a name that is not in the zip, so a DAWproject naming 200,000 missing samples could hang the import. Entries are now found by the name's bytes in one step, then read as before.
+- The updater unpacks with zip 9, and deny.toml ignores no advisory
+- tauri-plugin-updater 2.14.1 needs tauri 2.12, so tauri goes from 2.10.3 to 2.12.5 (tauri-build 2.7.4, wry 0.57, tao 0.37). The pinned Tauri CLI (2.11.5) is not touched.
+- The CLI refuses to build when an npm package and its crate differ in major or minor version, so @tauri-apps/api goes to 2.12.4 and @tauri-apps/plugin-updater to 2.14.1.
+- The generated capability schemas pick up the new plugin permissions.
+- async-executor 1.14.0 was yanked upstream and failed the advisories check on the main line too; it is now 1.14.1.
+- MP3 export uses rusty_mp3, so the LGPL shine-rs exception goes
+- CBR keeps the chosen bitrate, snapped to the nearest one the format allows, at the same nine sample rates; other rates are refused with the same message as before (without the dash).
+- VBR is now real VBR at the LAME-style 0 to 9 quality. Before, the render was cut into 2-second pieces and each piece was encoded as its own CBR stream at one of three bitrates.
+- The first frame is an Info/Xing tag with the encoder delay and padding, so players that read it play the export at exactly the rendered length.
+- chore(deny): Ableton Link stays, with the founder's decision as its reason
+- fix(security): anyhow 1.0.104 and rand 0.8.8, past their unsoundness advisories
+- security: every release now comes with a signed Secure Code Check report, a component list (SBOM) and its vulnerability history, at hardwavestudios.com/security/releases; a failed check stops the release
+- security: the updater, sample packs, DAWproject and FL zip packages use the fixed zip library, and the anyhow and rand advisories are closed: no open advisories in shipped code
