@@ -19,6 +19,10 @@ use std::path::Path;
 /// whether a person would ever press Ctrl+Z expecting that change back.
 const ALLOWED: &[(&str, &str)] = &[
     (
+        "cancel_export",
+        "only raises the cancel flag of a running export; the song does not change",
+    ),
+    (
         "save_song_template",
         "writes a copy of the song to a template file; the song itself does not change",
     ),
