@@ -37,7 +37,9 @@ log.workspace = true
 env_logger.workspace = true
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
+# 2.14.1 is the first release that unpacks update archives with zip 9, which
+# has the fixes for RUSTSEC-2026-0367/0368/0369/0429; every zip 4 is yanked.
+tauri-plugin-updater = "2.14.1"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
 
@@ -65,9 +67,10 @@ vorbis_rs.workspace = true
 trash = "5"
 # Sample packs, DAWproject files and FL's zipped packages come from anyone.
 # zip 9 has the fix for RUSTSEC-2026-0429 and the three extract advisories
-# before it; the updater keeps its own zip 4 for our signed archives (see
-# deny.toml). Only Stored and Deflated are read or written, so no other
-# compression method is built in.
+# before it. The updater (2.14.1 and later) uses this same zip 9, without
+# features of its own: deflate-flate2 here is also what lets it unpack a
+# compressed update archive on Windows. Only Stored and Deflated are read or
+# written, so no other compression method is built in.
 zip = { version = "9.2.2", default-features = false, features = ["deflate-flate2"] }
 # zip turns flate2 on without a backend; this picks the pure-Rust one. On
 # Linux another crate happened to pick it, so only the Windows build failed.
@@ -101,14 +104,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-# Not used by our code, which reads zips with zip 9 above. tauri-plugin-updater
-# asks for zip 4 without features (on Windows, as declared here) and unpacks
-# the update archive with it; it got deflate through our own zip 4 until our
-# code moved to zip 9. This line keeps the updater's zip 4.6.1 built exactly as
-# before, so a compressed update archive still unpacks and nobody is left on
-# an old version. Remove it when the updater moves to zip 9.
-[target.'cfg(target_os = "windows")'.dependencies]
-zip4 = { package = "zip", version = "=4.6.1", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 # The mock runtime, so a test can call commands the way a page does and
