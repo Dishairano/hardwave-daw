@@ -9399,6 +9399,7 @@ mod track_render_tests {
                 length_ticks: LEN_TICKS,
                 lane: 0,
                 color: None,
+                row: None,
             });
             p.channel_rack_state = Some(r#"{"patterns":[{"id":"p"}],"activeId":"p"}"#.into());
             p.refresh_step_rack();

@@ -3194,6 +3194,7 @@ mod placing_tests {
             length_ticks: len,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 
