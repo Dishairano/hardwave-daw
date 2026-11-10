@@ -1242,7 +1242,7 @@ impl GraphBuilder {
 
     /// Creates one TrackNode per non-master track, a MasterNode, and wires them together.
     /// A track's audio clips as the regions its node plays, with fades,
-    /// stretch, warp and treatment worked out, and overlaps crossfaded.
+    /// stretch, warp and treatment worked out.
     /// Audio tracks play these in their own node; a MIDI track plays them
     /// beside its synth, so a consolidated part or a dropped sample on a
     /// channel is heard through the same inserts and fader.
@@ -1254,12 +1254,13 @@ impl GraphBuilder {
         track_pitch_factor: f64,
         silent_rows: &hardwave_project::layout::SilentRows,
     ) -> Vec<ClipRegion> {
-        // Convert clip placements to sample-based ClipRegions.
-        // Clips are visited in their project-defined order, then any overlap between
-        // adjacent audio clips is promoted to an equal-length crossfade: the earlier
-        // clip gets a fade-out across the overlap and the later clip gets a fade-in.
-        // User-authored fades take precedence when they are already longer than the
-        // auto-computed value.
+        // Convert clip placements to sample-based ClipRegions. Clips that
+        // overlap each play in full, each with only its own fades, as
+        // separate items do in FL. Every overlap used to be turned into a
+        // crossfade as long as the overlap: a clap dropped on a long beat
+        // faded the beat out from the clap to the beat's end. A crossfade
+        // is the clips' own fades, set where the user wants one; a split or
+        // a comp leaves its pieces end to end, so they never needed one.
         // Frozen: the render, and nothing else. Live: everything but
         // the render, which is parked on its own lane.
         // A clip on a playlist row that is switched off (or not soloed
@@ -1269,7 +1270,7 @@ impl GraphBuilder {
             let on_track = if track.frozen { is_freeze } else { !is_freeze };
             on_track && !silent_rows.has(clip.row)
         });
-        let mut regions: Vec<ClipRegion> = clips_to_play
+        clips_to_play
             .filter_map(|clip| match &clip.content {
                 hardwave_project::clip::ClipContent::Audio(audio_clip) => {
                     // The clip's sample, looked up once: its rate, length
@@ -1502,33 +1503,7 @@ impl GraphBuilder {
                 }
                 _ => None,
             })
-            .collect();
-
-        // Apply auto-crossfade across overlapping, unmuted audio clips.
-        // We sort indices by timeline_start so adjacency maps to timeline order,
-        // without losing the original positions inside `regions`.
-        let mut order: Vec<usize> = (0..regions.len()).collect();
-        order.sort_by_key(|&i| regions[i].timeline_start);
-        for w in order.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            if regions[a].muted || regions[b].muted {
-                continue;
-            }
-            if regions[b].timeline_start < regions[a].timeline_end {
-                let overlap = regions[a]
-                    .timeline_end
-                    .saturating_sub(regions[b].timeline_start);
-                if overlap > 0 {
-                    if regions[a].fade_out_samples < overlap {
-                        regions[a].fade_out_samples = overlap;
-                    }
-                    if regions[b].fade_in_samples < overlap {
-                        regions[b].fade_in_samples = overlap;
-                    }
-                }
-            }
-        }
-        regions
+            .collect()
     }
 }
 
