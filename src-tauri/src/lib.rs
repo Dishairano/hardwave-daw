@@ -1105,6 +1105,9 @@ pub fn run() {
                 // engine's processing anew without the song's plug-ins, which
                 // were then gone until the song was opened again.
                 let mut seen_starts = 0u64;
+                // The undo steps as last told: the History panel reads its
+                // list again when they change, instead of every second.
+                let mut seen_history = 0u64;
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(33));
                     tick = tick.wrapping_add(1);
@@ -1129,6 +1132,15 @@ pub fn run() {
                             Err(e) => {
                                 log::error!("Audio health check failed: {e}");
                                 let _ = app_handle.emit("audio-device-error", e);
+                            }
+                        }
+                        // A few times a second is soon enough for a list,
+                        // and a fader dragged on a desk is told once a turn.
+                        if tick.is_multiple_of(6) {
+                            let history = eng.history_version();
+                            if history != seen_history {
+                                seen_history = history;
+                                let _ = app_handle.emit("daw:historyChanged", ());
                             }
                         }
                         let starts = eng.start_count();
