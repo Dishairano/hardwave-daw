@@ -3401,6 +3401,7 @@ mod placing_tests {
                 target: AutomationTarget::SendLevel { send_index: 0 },
                 points: Vec::new(),
                 visible: true,
+                row: None,
             });
             (id, verb, delay)
         };
