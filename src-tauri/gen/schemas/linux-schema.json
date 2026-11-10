@@ -1485,6 +1485,12 @@
           "markdownDescription": "Enables the get_tempo_entries command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_test_tone command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-test-tone",
+          "markdownDescription": "Enables the get_test_tone command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_timeline_state command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-timeline-state",
@@ -1705,6 +1711,12 @@
           "type": "string",
           "const": "allow-list-macros",
           "markdownDescription": "Enables the list_macros command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_midi_input_kinds command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-midi-input-kinds",
+          "markdownDescription": "Enables the list_midi_input_kinds command without any pre-configured scope."
         },
         {
           "description": "Enables the list_midi_inputs command without any pre-configured scope.",
@@ -1981,6 +1993,12 @@
           "type": "string",
           "const": "allow-play",
           "markdownDescription": "Enables the play command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the play_test_tone command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-play-test-tone",
+          "markdownDescription": "Enables the play_test_tone command without any pre-configured scope."
         },
         {
           "description": "Enables the plugin_cache_path command without any pre-configured scope.",
@@ -2331,6 +2349,12 @@
           "markdownDescription": "Enables the set_channel_rack_state command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_check_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-check-voice",
+          "markdownDescription": "Enables the set_check_voice command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_click_output command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-click-output",
@@ -2407,6 +2431,12 @@
           "type": "string",
           "const": "allow-set-control-surface-enabled",
           "markdownDescription": "Enables the set_control_surface_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_control_surface_input command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-control-surface-input",
+          "markdownDescription": "Enables the set_control_surface_input command without any pre-configured scope."
         },
         {
           "description": "Enables the set_control_surface_protocol command without any pre-configured scope.",
@@ -4353,6 +4383,12 @@
           "markdownDescription": "Denies the get_tempo_entries command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_test_tone command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-test-tone",
+          "markdownDescription": "Denies the get_test_tone command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_timeline_state command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-timeline-state",
@@ -4573,6 +4609,12 @@
           "type": "string",
           "const": "deny-list-macros",
           "markdownDescription": "Denies the list_macros command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_midi_input_kinds command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-midi-input-kinds",
+          "markdownDescription": "Denies the list_midi_input_kinds command without any pre-configured scope."
         },
         {
           "description": "Denies the list_midi_inputs command without any pre-configured scope.",
@@ -4849,6 +4891,12 @@
           "type": "string",
           "const": "deny-play",
           "markdownDescription": "Denies the play command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the play_test_tone command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-play-test-tone",
+          "markdownDescription": "Denies the play_test_tone command without any pre-configured scope."
         },
         {
           "description": "Denies the plugin_cache_path command without any pre-configured scope.",
@@ -5199,6 +5247,12 @@
           "markdownDescription": "Denies the set_channel_rack_state command without any pre-configured scope."
         },
         {
+          "description": "Denies the set_check_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-check-voice",
+          "markdownDescription": "Denies the set_check_voice command without any pre-configured scope."
+        },
+        {
           "description": "Denies the set_click_output command without any pre-configured scope.",
           "type": "string",
           "const": "deny-set-click-output",
@@ -5275,6 +5329,12 @@
           "type": "string",
           "const": "deny-set-control-surface-enabled",
           "markdownDescription": "Denies the set_control_surface_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_control_surface_input command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-control-surface-input",
+          "markdownDescription": "Denies the set_control_surface_input command without any pre-configured scope."
         },
         {
           "description": "Denies the set_control_surface_protocol command without any pre-configured scope.",
