@@ -18,7 +18,7 @@ const DEFAULT_STEPS: u32 = 16;
 
 type Rows = HashMap<String, Vec<f64>>;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 struct PatternJson {
     id: String,
     /// This pattern's own length in steps, when set.
@@ -74,7 +74,7 @@ fn auto_length(p: &PatternJson) -> u32 {
 }
 
 /// The rack, ready to turn into notes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StepRack {
     active: Option<PatternJson>,
     swing: f64,

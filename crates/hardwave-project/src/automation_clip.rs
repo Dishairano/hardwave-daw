@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// One automation clip placed on a track. The clip's lane stores
 /// points in `clip-local` tick space; `timeline_tick_to_clip(t)`
 /// converts the playhead's timeline tick into the clip's coordinate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutomationClip {
     pub id: String,
     pub target: AutomationTarget,

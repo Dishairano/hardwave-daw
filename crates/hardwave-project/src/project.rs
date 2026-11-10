@@ -13,7 +13,7 @@ pub enum RecordSource {
     Track(TrackId),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectMetadata {
     pub name: String,
     pub author: String,
@@ -73,7 +73,7 @@ pub struct VideoTrack {
     pub muted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Project {
     pub version: u32,
     pub metadata: ProjectMetadata,
@@ -167,7 +167,7 @@ pub struct Project {
 /// string tag (e.g. "vst3", "clap", "native") that lets the host
 /// decide whether to even try restoring if the plugin's format
 /// changed between saves.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginStateEntry {
     pub plugin_instance_id: String,
     pub format_hint: String,
