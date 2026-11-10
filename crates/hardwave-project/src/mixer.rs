@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::track::TrackId;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Send {
     pub target: TrackId,
     pub gain_db: f64,

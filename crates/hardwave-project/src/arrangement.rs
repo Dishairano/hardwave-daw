@@ -18,7 +18,7 @@ use crate::clip::ClipPlacement;
 use crate::Project;
 
 /// One track's timeline content within an arrangement.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TrackTimeline {
     #[serde(default)]
     pub clips: Vec<ClipPlacement>,
@@ -27,7 +27,7 @@ pub struct TrackTimeline {
 }
 
 /// A named arrangement: a snapshot of every (non-empty) track's timeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Arrangement {
     pub id: String,
     pub name: String,

@@ -14,7 +14,7 @@ pub enum FadeCurve {
     Logarithmic,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioClip {
     pub id: ClipId,
     pub name: String,
@@ -434,20 +434,20 @@ impl AudioClip {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MidiClipRef {
     pub id: ClipId,
     pub clip: hardwave_midi::MidiClip,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ClipContent {
     Audio(AudioClip),
     Midi(MidiClipRef),
 }
 
 /// A clip placed on a track at a specific position.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClipPlacement {
     pub content: ClipContent,
     pub track_id: TrackId,

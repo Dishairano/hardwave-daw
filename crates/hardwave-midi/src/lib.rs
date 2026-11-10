@@ -159,7 +159,7 @@ impl Default for MidiNote {
 }
 
 /// A MIDI clip containing notes and CC data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MidiClip {
     pub id: String,
     pub name: String,
@@ -200,7 +200,7 @@ pub enum MidiControlKind {
 /// `value` is 0..=1 for a control change and channel pressure, and -1..=1
 /// for pitch bend, so a lane can draw any of them without knowing the MIDI
 /// byte layout.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MidiControlPoint {
     pub tick: u64,
     pub channel: u8,

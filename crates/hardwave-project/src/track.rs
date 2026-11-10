@@ -20,7 +20,7 @@ impl InputChannel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TrackKind {
     Audio,
     Midi,
@@ -53,7 +53,7 @@ impl TrackKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginSlot {
     pub id: String,
     pub plugin_id: String,
@@ -183,7 +183,7 @@ pub struct SessionSlot {
     pub notes: Option<Vec<hardwave_midi::MidiNote>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Track {
     pub id: TrackId,
     pub name: String,
