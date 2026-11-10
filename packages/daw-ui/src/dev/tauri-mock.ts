@@ -712,6 +712,9 @@ const mock: TauriInternals = {
       case 'get_plugins':
         // A harness shot can seed the scan (window.__hwMockPlugins).
         return (window as unknown as { __hwMockPlugins?: unknown[] }).__hwMockPlugins ?? []
+      case 'get_rack_groups':
+        // A harness shot can seed the song's rack groups.
+        return (window as unknown as { __hwMockRackGroups?: string[] }).__hwMockRackGroups ?? ['Unsorted']
       case 'get_tracks':
       case 'find_missing_plugins':
         return []

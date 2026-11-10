@@ -42,6 +42,7 @@ import { StemsDialog } from '../components/arrangement/StemsDialog'
 import { useCollabStore } from '../stores/collabStore'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
+import { FL_SONG_CHANNELS, FL_SONG_GROUPS } from './flSongRack'
 import { PianoRoll } from '../components/piano-roll/PianoRoll'
 import { MixerPanel } from '../components/mixer/MixerPanel'
 import { useTrackStore, type TrackWithClips, type ClipInfo } from '../stores/trackStore'
@@ -102,6 +103,30 @@ function RackShot() {
 /** A new song as it opens: Kick (the kick synth), Clap, Hat and Snare on the
  *  first rows, the samplers naming the drums installed with the app, and
  *  nothing open in the piano roll. */
+/** The channel rack with the founder's FL song as the FL import makes it:
+ *  106 channels in FL's groups, the group filter over them. */
+function FlRackShot() {
+  React.useState(() => {
+    const kinds: Record<string, string> = { Sampler: 'Midi', Instrument: 'Midi', AudioClip: 'Audio', Automation: 'Automation' }
+    const song = [
+      track('fl-master', 'Master', '#a1a1aa', [], 'Master'),
+      ...FL_SONG_CHANNELS.map(([name, color, group, kind], i) => ({
+        ...track(`fl-ch-${i}`, name, color, [], kinds[kind] ?? 'Audio'),
+        volume_db: 0,
+        muted: kind === 'Instrument',
+        rackGroup: group,
+        mixerNumber: null,
+      })),
+    ]
+    const w = window as unknown as { __hwMockTracks?: unknown[]; __hwMockRackGroups?: string[] }
+    w.__hwMockTracks = song
+    w.__hwMockRackGroups = FL_SONG_GROUPS
+    useTrackStore.setState({ tracks: song, tracksById: Object.fromEntries(song.map((t) => [t.id, t])) } as never)
+    return null
+  })
+  return <ChannelRack />
+}
+
 function seedNewSong() {
   const sampler = (id: string, file: string) => [{
     id: `slot-${id}`, pluginId: 'hardwave.native.sampler', pluginName: 'Hardwave Sampler',
@@ -417,6 +442,9 @@ function Harness() {
       return <Full><MixerPanel /></Full>
     case 'channelrack':
       return <Full><RackShot /></Full>
+    case 'flrack':
+    case 'flrackauto':
+      return <Full><FlRackShot /></Full>
     case 'newsong':
       seedNewSong()
       return <NewSongShot />
