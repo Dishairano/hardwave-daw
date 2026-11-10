@@ -22,6 +22,8 @@ import { useDropTarget } from '../../lib/pointerDrag'
 import { sendToChannel } from '../browser/fileActions'
 import { KickSynthEditor } from '../KickSynthEditor'
 import { ChannelNameTip, channelTip } from './ChannelNameTip'
+import { InsertBox } from './InsertBox'
+import { rackChannels } from '../../lib/mixerNumbers'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -140,19 +142,12 @@ export function ChannelRack() {
         .catch(report('The sample did not load'))
     },
   })
-  // Channels are decoupled from playlist inserts. The 500 pre-allocated
-  // `insert-NNN` tracks are mixer/playlist slots, not channels — they
-  // don't belong in the Channel Rack. Channels start empty; the user
-  // creates them via the [+] button.
-  // Instrument tracks are channels wherever they sit: a starter song puts
-  // its instruments on the first playlist rows, and they belong here too.
-  const allChannels = tracks.filter(t =>
-    t.kind !== 'Master' && (!t.id.startsWith('insert-') || (t.kind || '').toLowerCase() === 'midi'))
-  // Each track's number in the mixer, counted the way the mixer counts its
-  // strips, for the column saying where a channel's sound goes.
-  const stripNumber = useMemo(() => new Map(
-    tracks.filter((t) => t.kind !== 'Master' && t.kind !== 'Automation').map((t, i) => [t.id, i + 1]),
-  ), [tracks])
+  // The rack lists the song's channels: every track in a rack group, in
+  // the song's order, as FL lists its channels. It guessed from ids before
+  // (not an "insert-NNN" track, or a MIDI one), so an FL song's audio clip
+  // channels never showed. A song made before opens with the same tracks
+  // in its one group, Unsorted.
+  const allChannels = rackChannels(tracks)
   // Channels picked with Ctrl-click (one more) or Shift-click (a range) on
   // their names, for the Channels menu. With none picked the selected
   // channel is what "selected" means, as in FL.
@@ -959,19 +954,10 @@ export function ChannelRack() {
                 />
               </div>
 
-              {/* 4. Mixer track #: the strip its sound goes to, as FL shows
-                  the insert. It showed the channel's place in the rack. */}
-              <div
-                title={ch.outputBus
-                  ? tf('Plays into mixer track {n}', { n: stripNumber.get(ch.outputBus) ?? '?' })
-                  : tf('Plays through its own mixer track ({n}) into the master', { n: stripNumber.get(ch.id) ?? '?' })}
-                style={{
-                  width: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 11, color: ch.outputBus ? hw.textSecondary : hw.textMuted,
-                  fontFamily: "'JetBrains Mono', Consolas, monospace",
-                }}
-              >
-                {stripNumber.get(ch.outputBus ?? ch.id) ?? '-'}
+              {/* 4. The insert it plays into, by the mixer's number (M for the
+                  master); click, drag or scroll on it to route the channel. */}
+              <div style={{ width: 34, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <InsertBox trackId={ch.id} name={ch.name} />
               </div>
 
               {/* 5. Channel name, with what it plays on the right */}

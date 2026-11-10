@@ -1,0 +1,88 @@
+/* The channel rack's insert box and its list (mockup M3). */
+.cr-ins {
+  width: 32px;
+  height: 22px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 5px;
+  background: #17171c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font: 700 11px 'JetBrains Mono', Consolas, monospace;
+  color: #fafafa;
+  cursor: ns-resize;
+  user-select: none;
+  touch-action: none;
+}
+.cr-ins:hover { border-color: rgba(255, 255, 255, 0.3); }
+.cr-ins.m { color: #d4d4d8; }
+.cr-ins.none { color: #52525b; border-style: dashed; cursor: default; }
+.cr-ins.open,
+.cr-ins.stepping { border-color: #ef4444; box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25); }
+
+.cr-ins-pop {
+  position: fixed;
+  z-index: 10000;
+  width: 318px;
+  background: #121217;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+  font: 12px Inter, 'Segoe UI', system-ui, sans-serif;
+  color: #e4e4e7;
+}
+.cr-ins-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font: 700 10px Inter, 'Segoe UI', system-ui, sans-serif;
+  letter-spacing: 0.1em;
+  color: #a1a1a6;
+}
+.cr-ins-pop-head input {
+  margin-left: auto;
+  width: 62px;
+  height: 22px;
+  box-sizing: border-box;
+  border-radius: 5px;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  background: #0b0b0f;
+  font: 700 11px 'JetBrains Mono', monospace;
+  color: #fff;
+  padding: 0 7px;
+  outline: none;
+}
+.cr-ins-pop-list { max-height: 286px; overflow-y: auto; }
+.cr-ins-pop-list div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: #e4e4e7;
+  cursor: pointer;
+}
+.cr-ins-pop-list div:hover { background: rgba(220, 38, 38, 0.16); }
+.cr-ins-pop-list b {
+  width: 24px;
+  text-align: right;
+  font: 700 10.5px 'JetBrains Mono', monospace;
+  color: #a1a1a6;
+  flex: none;
+}
+.cr-ins-pop-list i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.cr-ins-pop-list span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cr-ins-pop-list small { color: #86efac; font-size: 10px; }
+.cr-ins-pop-list div.emp span { color: #71717a; }
+.cr-ins-pop-foot {
+  padding: 7px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 10.5px;
+  color: #8b8b93;
+  line-height: 1.45;
+}
