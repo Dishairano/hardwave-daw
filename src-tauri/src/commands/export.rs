@@ -475,7 +475,17 @@ fn write_sample_dithered(
             let v = (x.clamp(-1.0, 1.0) * max).round() as i32;
             wav.write_sample(v)
         }
-        _ => wav.write_sample(s.clamp(-1.0, 1.0)),
+        // Float keeps everything above full scale: a freeze, bounce or
+        // consolidate is played back through the track's fader, and a part
+        // that runs hot is turned down there. Clamped at 1.0, a snare at
+        // +7.5 dBFS came back flattened to 0 dBFS. Only a sample that is
+        // not a number at all is left out, as silence.
+        // Float keeps everything above full scale: a freeze, bounce or
+        // consolidate is played back through the track's fader, and a part
+        // that runs hot is turned down there. Clamped at 1.0, a snare at
+        // +7.5 dBFS came back flattened to 0 dBFS. Only a sample that is
+        // not a number at all is left out, as silence.
+        _ => wav.write_sample(if s.is_finite() { s } else { 0.0 }),
     }
 }
 
@@ -3544,6 +3554,79 @@ mod placing_tests {
         assert!(engine.undo());
         assert!(!engine.project.lock().track(&id).unwrap().frozen);
         assert_eq!(clip_ids(&engine, &id), ["a", "b"], "and leaves no render");
+    }
+
+    /// A freeze keeps a part that runs over full scale as it played. The
+    /// render file is 32-bit float but every sample was clamped to 1.0, so
+    /// a snare with +12 dB of clip gain at +7.5 dBFS came back at 0 dBFS,
+    /// flattened, and the frozen track sounded quieter and distorted.
+    #[test]
+    fn a_frozen_part_above_full_scale_comes_back_as_it_played() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let engine = parking_lot::Mutex::new(DawEngine::new());
+        let sr = engine.lock().current_sample_rate();
+        let (id, len) = {
+            let e = engine.lock();
+            sine_source(&e, sr as usize);
+            let mut p = e.project.lock();
+            let id = p.add_audio_track("Snare".into());
+            let mut c = sine_clip("hot", &id, 0, 1920, sr as u64);
+            if let ClipContent::Audio(a) = &mut c.content {
+                a.gain_db = 12.0;
+            }
+            p.track_mut(&id).unwrap().clips.push(c);
+            let len = p.tempo_map.tick_to_samples(1920, sr as f64);
+            (id, len)
+        };
+        let freeze_render = |target: String| {
+            move |p: &mut hardwave_project::Project| {
+                super::isolate_track_for_render(p, &target, true, &|_| true);
+                super::leave_the_fader_out(p, &target);
+            }
+        };
+
+        let mut live = Vec::new();
+        engine
+            .lock()
+            .prepare_offline_render(sr, 0, None, freeze_render(id.clone()))
+            .for_a_track()
+            .run(len, |b| {
+                live.extend_from_slice(b);
+                true
+            });
+
+        let out = dir.path().join("frozen.wav");
+        let done = super::render_unlocked(
+            engine.lock(),
+            &out,
+            super::format_for_a_track(sr),
+            len,
+            0,
+            &Arc::new(AtomicBool::new(false)),
+            |_, _| {},
+            super::RenderAs::ATrack,
+            freeze_render(id.clone()),
+        )
+        .unwrap();
+        assert!(done, "the freeze finished");
+        let file: Vec<f32> = hound::WavReader::open(&out)
+            .unwrap()
+            .samples::<f32>()
+            .map(|s| s.unwrap())
+            .collect();
+
+        let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak(&live) > 1.5, "the part runs hot: {}", peak(&live));
+        assert_eq!(file.len(), live.len());
+        let diff = worst_difference(&file, &live);
+        assert!(
+            diff < 1e-6,
+            "the frozen render is the live one, peak {} for {}: off by {diff}",
+            peak(&file),
+            peak(&live)
+        );
     }
 }
 
