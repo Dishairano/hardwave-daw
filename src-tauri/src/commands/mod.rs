@@ -33,6 +33,7 @@ pub mod plugin_presets;
 pub mod plugins;
 pub mod project;
 pub mod reference;
+pub mod rows;
 pub mod scripts;
 pub mod sends;
 pub mod session;

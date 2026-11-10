@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-automation-clip-row"
+description = "Enables the set_automation_clip_row command without any pre-configured scope."
+commands.allow = ["set_automation_clip_row"]
+
+[[permission]]
+identifier = "deny-set-automation-clip-row"
+description = "Denies the set_automation_clip_row command without any pre-configured scope."
+commands.deny = ["set_automation_clip_row"]

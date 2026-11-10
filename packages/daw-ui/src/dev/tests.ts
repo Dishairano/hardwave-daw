@@ -2282,7 +2282,7 @@ export const TESTS: TestDef[] = [
       useTrackStore.getState().selectClip(clip.id, trackId)
       useTrackStore.getState().copySelectedClips()
       const pasteAt = 960 * 8 // bar 3
-      await useTrackStore.getState().pasteClipsAtPosition(pasteAt, trackId)
+      await useTrackStore.getState().pasteClipsAtPosition(pasteAt)
       const after = await invoke<any[]>('get_track_clips', { trackId })
       const ok = after.length === 2 && after.some((c) => c.position_ticks === pasteAt)
       log(ok ? 'pass' : 'fail', 'paste', { expected: `2 clips, one at ${pasteAt}`, actual: `${after.length} clips` })

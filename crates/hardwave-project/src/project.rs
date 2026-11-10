@@ -57,10 +57,14 @@ pub struct ProjectMetadata {
 /// 3: where things show in FL's three lists: the playlist's rows, each
 ///    clip's row, the mixer's numbers and the rack's groups. Display only;
 ///    a song from before is laid out on opening exactly as it looked.
+/// 4: the same fields, now kept up to date by every edit (the playlist
+///    draws its rows). A format 3 song was saved by a build that left new
+///    clips without a row and rows behind when tracks were added or
+///    moved, so it is laid out again on opening, as a format 2 song is.
 ///
 /// A file claiming a higher number than this is refused on load instead of
 /// being read as whatever happens to line up.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// A film or a game capture, played in time with the song.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -370,11 +374,13 @@ impl Project {
     /// values. Format 2 to 3 fills in where everything shows in FL's three
     /// lists, laid out exactly as the playlist, mixer and rack showed the
     /// song before (`lay_out_as_before`); nothing that makes sound is
-    /// touched. Each step is keyed on the version it starts from, and the
-    /// version is stamped at the end so the next save writes the current
-    /// format.
+    /// touched. Format 3 to 4 lays it out the same way again: the builds
+    /// that wrote format 3 did not keep the layout up to date, and none of
+    /// them could edit it, so nothing made by hand is lost. Each step is
+    /// keyed on the version it starts from, and the version is stamped at
+    /// the end so the next save writes the current format.
     fn migrate(&mut self) {
-        if self.version < 3 {
+        if self.version < 4 {
             self.lay_out_as_before();
         }
         self.version = FORMAT_VERSION;
@@ -503,7 +509,20 @@ impl Project {
                 // always listed MIDI tracks.
                 fresh.mixer_number = slot.mixer_number;
                 fresh.rack_group = if instrument { Some(0) } else { slot.rack_group };
+                // The playlist row of that insert, laid out with the song,
+                // takes the track's name and colour, as the row of a track
+                // always showed them.
+                let shown = slot.name.clone();
                 *slot = fresh;
+                let color = slot.color.clone();
+                if let Some(r) = row
+                    .checked_sub(1)
+                    .and_then(|r| self.rows.get_mut(r))
+                    .filter(|r| r.name == shown)
+                {
+                    r.name = name.to_string();
+                    r.color = Some(color);
+                }
                 id
             }
             None if instrument => self.add_midi_track(name.to_string()),

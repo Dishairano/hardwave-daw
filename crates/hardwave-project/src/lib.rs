@@ -23,6 +23,7 @@ pub mod multiplayer_apply;
 pub mod note_expression;
 pub mod project;
 pub mod recording_session;
+pub mod row_edit;
 pub mod sanitize;
 pub mod scripting_api;
 pub mod sidechain_routing;

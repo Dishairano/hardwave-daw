@@ -9,7 +9,7 @@ const { useProjectStore } = await import('../projectStore')
 
 /** The commands sent, in order, without the reads that follow an edit. */
 function sent(): string[] {
-  const reads = new Set(['get_tracks_with_clips', 'get_tracks', 'get_track_with_clips', 'get_undo_history'])
+  const reads = new Set(['get_tracks_with_clips', 'get_tracks', 'get_track_with_clips', 'get_undo_history', 'get_playlist_rows'])
   return invokeMock.mock.calls.map(([cmd]) => cmd as string).filter(cmd => !reads.has(cmd))
 }
 
@@ -83,6 +83,43 @@ describe('clip edits and undo', () => {
       'label_undo_step',
     ])
     expect(labelsSent()).toEqual(['Move 3 clips'])
+  })
+
+  it('a drag to other rows moves and re-rows the clips in one step, on their own channels', async () => {
+    await useTrackStore.getState().commitClipDrag(
+      [
+        { trackId: 'a', clipId: 'c1', fromPositionTicks: 0, positionTicks: 480, fromRow: 0, row: 2 },
+        { trackId: 'b', clipId: 'c3', fromPositionTicks: 0, positionTicks: 480, fromRow: 1, row: 3 },
+      ],
+      'Move 2 clips',
+    )
+    expect(sent()).toEqual([
+      'begin_history_group',
+      'move_clip', 'move_clip',
+      'set_clip_rows',
+      'end_history_group',
+      'label_undo_step',
+    ])
+    const rows = invokeMock.mock.calls.find(([cmd]) => cmd === 'set_clip_rows')?.[1]
+    expect(rows).toEqual({ moves: [{ trackId: 'a', clipId: 'c1', row: 2 }, { trackId: 'b', clipId: 'c3', row: 3 }] })
+    expect(sent()).not.toContain('move_clip_to_track')
+  })
+
+  it('a drag straight down sends only the rows', async () => {
+    await useTrackStore.getState().commitClipDrag(
+      [{ trackId: 'a', clipId: 'c1', fromPositionTicks: 0, positionTicks: 0, fromRow: 0, row: 2 }],
+      'Move clip to row 3',
+    )
+    expect(sent()).toEqual(['begin_history_group', 'set_clip_rows', 'end_history_group', 'label_undo_step'])
+    expect(labelsSent()).toEqual(['Move clip to row 3'])
+  })
+
+  it('a placed copy is one command on the copied clip\'s channel', async () => {
+    invokeMock.mockResolvedValue('new')
+    await useTrackStore.getState().placeClipCopy('b', 'c3', 7, 3840)
+    expect(sent()).toEqual(['place_clip_copy', 'label_undo_step'])
+    expect(invokeMock.mock.calls.find(([cmd]) => cmd === 'place_clip_copy')?.[1])
+      .toEqual({ trackId: 'b', clipId: 'c3', positionTicks: 3840, row: 7 })
   })
 
   it('a drag that already opened its step keeps it open until the release closes it', async () => {

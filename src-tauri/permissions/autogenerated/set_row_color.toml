@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-row-color"
+description = "Enables the set_row_color command without any pre-configured scope."
+commands.allow = ["set_row_color"]
+
+[[permission]]
+identifier = "deny-set-row-color"
+description = "Denies the set_row_color command without any pre-configured scope."
+commands.deny = ["set_row_color"]

@@ -36,7 +36,8 @@ export async function takeRoomSong(name: string): Promise<void> {
   await useTrackStore.getState().fetchTracks()
 }
 
-/** The same for the VCA store, which lives outside any one window. */
+/** The same for the VCA store and the playlist's rows, which live outside
+ *  any one window. */
 let started = false
 export function startSongPartSync(): void {
   if (started) return
@@ -46,6 +47,10 @@ export function startSongPartSync(): void {
       listen<string>('daw:songChanged', (ev) => {
         if (ev.payload === 'vcas') {
           void import('./vcaStore').then(({ useVcaStore }) => useVcaStore.getState().fetch())
+        }
+        // A row renamed, coloured or switched by the other person.
+        if (ev.payload === 'rows') {
+          void import('./playlistRowsStore').then(({ usePlaylistRowsStore }) => usePlaylistRowsStore.getState().fetch())
         }
       }),
       listen<{ name: string }>('daw:songTaken', (ev) => {
