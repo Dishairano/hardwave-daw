@@ -1832,9 +1832,12 @@ fn place_bounce(
         let bus = project
             .track(source_track_id)
             .and_then(|t| t.output_bus.clone());
+        let (sends, send_lanes) = sends_for_the_bounce(&project, source_track_id);
         let id = project.add_audio_track(format!("{track_name} (bounced)"));
         if let Some(t) = project.track_mut(&id) {
             t.output_bus = bus;
+            t.sends = sends;
+            t.automation_lanes.extend(send_lanes);
         }
         id
     };
@@ -2198,6 +2201,84 @@ fn place_freeze(
     }
     engine.rebuild_graph();
     Ok(())
+}
+
+/// The original track's sends, for the new track its bounce plays on, and
+/// the automation lanes that move their levels. The bounce leaves the sends'
+/// returns out, and the new track had no sends, so a bounced lead lost its
+/// reverb and delay.
+///
+/// The bounce already went through the fader, so a send after the fader is
+/// copied as it is. A send before the fader reads the part ahead of the
+/// fader, which the bounce has only as the fader left it: it is copied, at
+/// its level less the fader's, only when the fader stands still, the pan is
+/// in the middle, and the level that takes fits the send. Otherwise it is
+/// left out.
+fn sends_for_the_bounce(
+    project: &Project,
+    source_track_id: &str,
+) -> (
+    Vec<hardwave_project::mixer::Send>,
+    Vec<hardwave_project::automation::AutomationLane>,
+) {
+    use hardwave_project::automation::AutomationTarget;
+    use hardwave_project::modulation::ModTarget;
+    let Some(track) = project.track(source_track_id) else {
+        return (Vec::new(), Vec::new());
+    };
+    let (vca_db, vca_muted) = hardwave_project::vca::offset_for(&project.vcas, source_track_id);
+    let level_db = track.volume_db + vca_db;
+    let moves = |t: &AutomationTarget| {
+        matches!(
+            t,
+            AutomationTarget::TrackVolume
+                | AutomationTarget::TrackPan
+                | AutomationTarget::TrackMute
+        )
+    };
+    let fader_still = !vca_muted
+        && level_db > -100.0
+        && track.pan.abs() < 1e-9
+        && !track.automation_lanes.iter().any(|l| moves(&l.target))
+        && !track.automation_clips.iter().any(|c| moves(&c.target))
+        && !project.modulations.iter().any(|r| {
+            r.track_id == source_track_id
+                && matches!(r.target, ModTarget::TrackVolume | ModTarget::TrackPan)
+        });
+    let mut sends = Vec::new();
+    let mut lanes = Vec::new();
+    for (index, send) in track.sends.iter().enumerate() {
+        let send_lanes: Vec<_> = track
+            .automation_lanes
+            .iter()
+            .filter(|l| matches!(l.target, AutomationTarget::SendLevel { send_index } if send_index == index))
+            .collect();
+        let copy = if !send.pre_fader {
+            Some(send.clone())
+        } else {
+            let gain_db = send.gain_db - level_db;
+            // A lane draws the send's level outright, so it cannot be moved
+            // by the fader's level.
+            let lanes_fit = send_lanes.is_empty() || level_db.abs() < 1e-9;
+            (fader_still && gain_db <= 6.0 && lanes_fit).then(|| hardwave_project::mixer::Send {
+                gain_db: gain_db.max(-100.0),
+                ..send.clone()
+            })
+        };
+        let Some(copy) = copy else {
+            continue;
+        };
+        for lane in send_lanes {
+            let mut lane = lane.clone();
+            lane.id = uuid::Uuid::new_v4().to_string();
+            lane.target = AutomationTarget::SendLevel {
+                send_index: sends.len(),
+            };
+            lanes.push(lane);
+        }
+        sends.push(copy);
+    }
+    (sends, lanes)
 }
 
 /// Move a freeze render onto the track's freeze lane and freeze the track.
@@ -3118,6 +3199,78 @@ mod placing_tests {
             diff < 1e-3,
             "the glued part plays as the pieces did: off by {diff}"
         );
+    }
+
+    fn send(target: &str, gain_db: f64, pre_fader: bool) -> hardwave_project::mixer::Send {
+        hardwave_project::mixer::Send {
+            target: target.into(),
+            gain_db,
+            pre_fader,
+            enabled: true,
+        }
+    }
+
+    /// A bounce keeps the original's sends, so its reverb and delay stay.
+    /// The new track had none, and the original is muted: the returns fell
+    /// silent. A send after the fader goes over as it is; one before the
+    /// fader goes over less the fader's level, which the bounce already has.
+    #[test]
+    fn a_bounce_keeps_the_sends_to_the_reverb_and_the_delay() {
+        use hardwave_project::automation::{AutomationLane, AutomationTarget};
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let (id, verb, delay) = {
+            let mut p = engine.project.lock();
+            let verb = p.add_audio_track("Verb".into());
+            let delay = p.add_audio_track("Delay".into());
+            let id = p.add_audio_track("Lead".into());
+            let t = p.track_mut(&id).unwrap();
+            t.volume_db = -6.0;
+            t.sends.push(send(&verb, -3.0, false));
+            t.sends.push(send(&delay, -10.0, true));
+            t.automation_lanes.push(AutomationLane {
+                id: "throw".into(),
+                target: AutomationTarget::SendLevel { send_index: 0 },
+                points: Vec::new(),
+                visible: true,
+            });
+            (id, verb, delay)
+        };
+        let bounced = place_bounce(&engine, &id, "Lead", &file, 1920).unwrap();
+        let p = engine.project.lock();
+        let t = p.track(&bounced).unwrap();
+        let sends: Vec<(&str, f64, bool)> = t
+            .sends
+            .iter()
+            .map(|s| (s.target.as_str(), s.gain_db, s.pre_fader))
+            .collect();
+        assert_eq!(
+            sends,
+            [(verb.as_str(), -3.0, false), (delay.as_str(), -4.0, true)],
+            "the reverb as it was, the delay less the fader the bounce has in it"
+        );
+        assert!(
+            t.automation_lanes
+                .iter()
+                .any(|l| matches!(l.target, AutomationTarget::SendLevel { send_index: 0 })),
+            "the reverb throw goes with it"
+        );
+        drop(p);
+
+        // Panned, the part before the fader is not in the bounce: the
+        // send before the fader stays behind.
+        engine.project.lock().track_mut(&id).unwrap().pan = 0.4;
+        let bounced = place_bounce(&engine, &id, "Lead", &file, 1920).unwrap();
+        let p = engine.project.lock();
+        let targets: Vec<&str> = p
+            .track(&bounced)
+            .unwrap()
+            .sends
+            .iter()
+            .map(|s| s.target.as_str())
+            .collect();
+        assert_eq!(targets, [verb.as_str()]);
     }
 
     /// Bouncing, freezing and consolidating are one undo step each. Each
