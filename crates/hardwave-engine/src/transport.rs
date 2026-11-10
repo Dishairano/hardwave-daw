@@ -37,6 +37,10 @@ pub struct TransportState {
     /// How long the pattern pattern mode loops is, in ticks: the channel
     /// rack's pattern length. It looped four bars whatever the pattern was.
     pub pattern_len_ticks: Arc<AtomicU64>,
+    /// Whether pattern mode starts the pattern again at its end. Always,
+    /// except in an export of the pattern, which plays it once and then
+    /// only what still sounds.
+    pub pattern_wraps: Arc<AtomicBool>,
 
     /// When true, live input on armed+monitored tracks is routed directly to
     /// the master bus, bypassing the track's FX chain and fader. Gives the
@@ -103,6 +107,7 @@ impl Default for TransportState {
             time_sig: Arc::new(AtomicU64::new(pack_time_sig(4, 4))),
             pattern_mode: Arc::new(AtomicBool::new(false)),
             pattern_len_ticks: Arc::new(AtomicU64::new(16 * hardwave_midi::PPQ)),
+            pattern_wraps: Arc::new(AtomicBool::new(true)),
             direct_monitoring: Arc::new(AtomicBool::new(false)),
             pdc_enabled: Arc::new(AtomicBool::new(true)),
             wait_for_input: Arc::new(AtomicBool::new(false)),
@@ -131,6 +136,9 @@ impl TransportState {
         // Pattern mode: loop the channel rack's pattern at the current tempo.
         // Song mode: use the user's loop region if looping is enabled.
         if self.pattern_mode.load(Ordering::Relaxed) {
+            if !self.pattern_wraps.load(Ordering::Relaxed) {
+                return;
+            }
             let sr = self.sample_rate.load(Ordering::Relaxed) as f64;
             let bpm = self.bpm.load(Ordering::Relaxed).max(1.0);
             let ticks = self.pattern_len_ticks.load(Ordering::Relaxed).max(1) as f64;
@@ -205,6 +213,18 @@ mod tests {
             "pattern mode should wrap at 4-bar boundary, got {}",
             pos
         );
+    }
+
+    #[test]
+    fn a_pattern_played_once_runs_on_past_its_end() {
+        let t = TransportState::default();
+        t.pattern_mode.store(true, Ordering::Relaxed);
+        t.pattern_wraps.store(false, Ordering::Relaxed);
+        t.bpm.store(120.0, Ordering::Relaxed);
+        t.sample_rate.store(48000, Ordering::Relaxed);
+        t.set_position(380000);
+        t.advance(10000);
+        assert_eq!(t.position(), 390000);
     }
 
     #[test]
