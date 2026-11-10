@@ -290,3 +290,72 @@ fn an_fl_songs_undo_history() {
         mb(history_bytes(&engine))
     );
 }
+
+/// What reading the history list costs on a big song: the History panel
+/// and every undo and redo ask for it. 50 edits nobody named (so each is
+/// described from the song), then the list read as the app reads it: the
+/// first time, again with nothing changed, after one more edit, and after
+/// an undo and a redo.
+#[test]
+#[ignore = "a measurement with a song from outside the repository"]
+fn an_fl_songs_history_list() {
+    let Some((engine, song)) = open_song() else {
+        return;
+    };
+    let busiest = (0..song.tracks.len())
+        .max_by_key(|&i| song.tracks[i].clips.len())
+        .unwrap();
+    *engine.project.lock() = song;
+    engine.reset_history();
+    let mut steps = Vec::new();
+    let mut edit = |n: u64| {
+        let start = std::time::Instant::now();
+        engine.snapshot_before_mutation();
+        steps.push(start.elapsed());
+        let mut p = engine.project.lock();
+        match n % 3 {
+            0 => p.tracks[busiest].clips[(n as usize * 7) % 400].position_ticks += 96,
+            1 => p.tracks[busiest].volume_db = -(n as f64 % 12.0),
+            _ => p.tempo_map.entries[0].bpm += 1.0,
+        }
+    };
+    let read = || {
+        let start = std::time::Instant::now();
+        let (rows, cursor, _) = DawEngine::history_entries(&engine.project, &engine.history);
+        (rows, cursor, start.elapsed())
+    };
+    for n in 0..50 {
+        edit(n);
+    }
+    let (rows, cursor, first) = read();
+    assert_eq!((rows.len(), cursor), (50, 50));
+    let texts: Vec<String> = rows.iter().map(|r| r.change.text()).collect();
+    eprintln!("the rows read: {texts:?}");
+    let (_, _, again) = read();
+    edit(50);
+    let (rows, _, one_more) = read();
+    assert_eq!(rows.len(), 51);
+    assert_eq!(
+        rows[..50]
+            .iter()
+            .map(|r| r.change.text())
+            .collect::<Vec<_>>(),
+        texts
+    );
+    eprintln!("taking a step before each edit: {}", spread(&mut steps));
+    assert!(engine.undo());
+    let (_, cursor, after_undo) = read();
+    assert_eq!(cursor, 50);
+    assert!(engine.redo());
+    let (_, cursor, after_redo) = read();
+    assert_eq!(cursor, 51);
+    eprintln!(
+        "the history list of 50 edits: first read {:.2} ms; again with nothing changed {:.3} ms; \
+         after one more edit {:.3} ms; after an undo {:.3} ms; after a redo {:.3} ms",
+        ms(first),
+        ms(again),
+        ms(one_more),
+        ms(after_undo),
+        ms(after_redo)
+    );
+}
