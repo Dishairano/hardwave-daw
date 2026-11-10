@@ -1,5 +1,3 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A small engine: tracks, clips and notes, enough for the calls the empty
@@ -105,10 +103,15 @@ describe('the empty piano roll', () => {
 describe("the roll's list of Hardwave instruments", () => {
   // The plug-ins the factory makes, read from their descriptors: an effect
   // in this list (the sub bass is one) would add a channel that plays nothing.
-  const src = join(__dirname, '../../../../crates/hardwave-native-plugins/src')
+  // Read through Vite's glob, not node:fs, so the app's typecheck (which has
+  // no Node types) accepts this file.
+  const sources = import.meta.glob<string>('../../../../crates/hardwave-native-plugins/src/*.rs', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  })
   const instruments = new Set<string>()
-  for (const file of readdirSync(src).filter(f => f.endsWith('.rs'))) {
-    const text = readFileSync(join(src, file), 'utf8')
+  for (const text of Object.values(sources)) {
     const id = /const ID: &'static str = "([^"]+)"|const ID: &str = "([^"]+)"/.exec(text)
     if (id && /PluginCategory::Instrument/.test(text)) instruments.add(id[1] ?? id[2])
   }
