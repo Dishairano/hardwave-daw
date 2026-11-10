@@ -17,6 +17,7 @@ pub mod lfo;
 pub mod macros;
 pub mod marketplace;
 pub mod mixer;
+pub mod mixer_numbers;
 pub mod modulation;
 pub mod multiplayer;
 pub mod multiplayer_apply;

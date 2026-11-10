@@ -118,6 +118,9 @@ impl Project {
             .map(|i| i + 1)
             .unwrap_or(self.tracks.len());
         self.tracks.insert(at, track);
+        // It is a new track here: the mixer number it was saved with may
+        // be taken in this song.
+        self.list_new_track(&new_id);
         new_id
     }
 }

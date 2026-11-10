@@ -514,18 +514,21 @@ impl Project {
     pub fn add_audio_track(&mut self, name: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.tracks.push(Track::new_audio(id.clone(), name));
+        self.list_new_track(&id);
         id
     }
 
     pub fn add_midi_track(&mut self, name: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.tracks.push(Track::new_midi(id.clone(), name));
+        self.list_new_track(&id);
         id
     }
 
     pub fn add_automation_track(&mut self, name: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.tracks.push(Track::new_automation(id.clone(), name));
+        self.list_new_track(&id);
         id
     }
 
