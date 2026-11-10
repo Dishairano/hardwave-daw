@@ -360,6 +360,16 @@ pub struct Track {
     /// guitar on input 2. None is the input chosen in Audio settings.
     #[serde(default)]
     pub input_channel: Option<InputChannel>,
+    /// Its number in the mixer: 0 for the master, n for insert n, none for
+    /// a channel that is not in the mixer. Display only: where a track's
+    /// sound goes is `output_bus`.
+    #[serde(default)]
+    pub mixer_number: Option<u16>,
+    /// The channel rack's filter group it is listed in (an index into
+    /// `Project::rack_groups`), or none for a track that is not a channel
+    /// (an insert, the master). Display only.
+    #[serde(default)]
+    pub rack_group: Option<u16>,
 }
 
 impl Track {
@@ -382,6 +392,8 @@ impl Track {
             monitor_auto: false,
             input_source: None,
             input_channel: None,
+            mixer_number: None,
+            rack_group: None,
             phase_invert: false,
             swap_lr: false,
             stereo_separation: 1.0,
@@ -456,7 +468,8 @@ mod field_order_tests {
 
     /// Songs saved before format 2 are positional arrays. The monitoring and
     /// input fields were first put in the middle of the struct, which
-    /// shifted every field after them, and such a song did not open.
+    /// shifted every field after them, and such a song did not open. The
+    /// fields FL's three lists added come after them, at the very end.
     #[test]
     fn a_track_saved_before_the_newest_fields_still_opens() {
         let mut t = Track::new_audio("a".into(), "A".into());
@@ -468,39 +481,42 @@ mod field_order_tests {
             first: 2,
             mono: true,
         });
+        t.mixer_number = Some(7);
+        t.rack_group = Some(1);
         let packed = rmp_serde::to_vec(&t).unwrap();
         let mut fields: Vec<serde_json::Value> = rmp_serde::from_slice(&packed).unwrap();
-        // The newest fields are the last three in the file...
+        // The newest fields are the last five in the file...
         let n = fields.len();
-        assert_eq!(
-            fields[n - 3],
-            serde_json::json!(true),
-            "monitor_auto is third to last"
-        );
-        assert_eq!(
-            fields[n - 2],
-            serde_json::json!("master"),
-            "input_source is second to last"
-        );
-        assert_eq!(
-            fields[n - 1],
-            serde_json::json!([2, true]),
-            "input_channel is last"
-        );
+        let newest = [
+            (serde_json::json!(true), "monitor_auto"),
+            (serde_json::json!("master"), "input_source"),
+            (serde_json::json!([2, true]), "input_channel"),
+            (serde_json::json!(7), "mixer_number"),
+            (serde_json::json!(1), "rack_group"),
+        ];
+        for (k, (value, name)) in newest.iter().enumerate() {
+            assert_eq!(
+                fields[n - 5 + k],
+                *value,
+                "{name} is {} from the end",
+                5 - k
+            );
+        }
         // ...so a file from before them is the same array without them.
-        for newest in 1..=3 {
-            let old = rmp_serde::to_vec(&fields[..n - newest]).unwrap();
+        for gone in 1..=5 {
+            let old = rmp_serde::to_vec(&fields[..n - gone]).unwrap();
             let back: Track = rmp_serde::from_slice(&old).expect("an older track opens");
             assert!(
                 back.phase_invert && back.swap_lr,
                 "every field lands where it was"
             );
-            assert_eq!(back.input_channel, None);
+            assert_eq!(back.rack_group, None);
         }
-        fields.truncate(n - 3);
+        fields.truncate(n - 5);
         let old = rmp_serde::to_vec(&fields).unwrap();
         let back: Track = rmp_serde::from_slice(&old).expect("an older track opens");
         assert!(!back.monitor_auto);
         assert_eq!(back.input_source, None);
+        assert_eq!(back.mixer_number, None);
     }
 }

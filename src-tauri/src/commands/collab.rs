@@ -137,6 +137,8 @@ pub async fn start_collab(
     // The song as it is now is what both sides start from; from here on
     // only the tracks that change are sent.
     collab.remember_tracks(&engine.lock().project.lock());
+    // Before anything else, which project format this side has.
+    collab.send_control(collab.format_message());
 
     // Whatever was missed, before anything new arrives.
     for message in &missed {
@@ -442,6 +444,17 @@ fn apply_one(
     if !collab.is_current(generation) {
         return;
     }
+    // A build that would drop this side's fields ends the room before
+    // anything of it is taken; the other side's format needs nothing more.
+    match collab.check_peer(&message.kind) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(why) => {
+            log::warn!("room: {why}");
+            collab.stop(&why);
+            return;
+        }
+    }
     collab.count_received(&message.kind);
     match &message.kind {
         SyncKind::TrackState {
@@ -495,6 +508,8 @@ fn apply_one(
     match &message.kind {
         SyncKind::MembersChanged { names } => {
             collab.set_members(names.clone());
+            // Whoever arrived hears this side's project format.
+            collab.send_control(collab.format_message());
             return;
         }
         SyncKind::PresenceUpdate(presence) => {

@@ -96,6 +96,7 @@ fn stretch_preserves_pitch() {
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -287,6 +288,7 @@ fn pitch_shift_preserves_duration() {
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -381,6 +383,7 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -456,6 +459,7 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -599,6 +603,7 @@ fn a_recorded_take_comes_back_in_the_bounce_at_its_position() {
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -678,6 +683,7 @@ fn render_rate_does_not_detune_audio_clips() {
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -773,6 +779,7 @@ fn a_warped_clip_keeps_its_pitch() {
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }

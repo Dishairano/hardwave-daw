@@ -164,6 +164,7 @@ pub(super) fn midi_clip(
         length_ticks: length,
         lane: 0,
         color: None,
+        row: None,
     }
 }
 
@@ -420,6 +421,48 @@ mod tests {
             hardwave_project::project::DEFAULT_INSERT_COUNT + 1,
             "no rows added past the end, where nobody sees them"
         );
+    }
+
+    /// A starter saved by a build from before FL's three lists (format 2)
+    /// opens laid out as it looked, and plays sample for sample as it did.
+    #[test]
+    fn a_starter_saved_before_the_three_lists_opens_and_plays_as_it_did() {
+        let render = |project: hardwave_project::Project| {
+            let engine = hardwave_engine::DawEngine::new();
+            *engine.project.lock() = project;
+            let mut out = Vec::new();
+            engine
+                .render_offline(48_000, 48_000 * 6, |block| {
+                    out.extend_from_slice(block);
+                    true
+                })
+                .expect("the starter renders");
+            out
+        };
+        for id in ["hardstyle", "rawstyle", "frenchcore", "uptempo"] {
+            let genre = genre(id).unwrap();
+            let mut song = hardwave_project::Project::default();
+            song.tempo_map.entries[0].bpm = genre.bpm;
+            build_into(&mut song, &genre, &sections());
+            let bytes = song.older_format_bytes();
+            let mut before = hardwave_project::Project::read_as_saved(&bytes).unwrap();
+            assert!(before.tracks.iter().all(|t| t.mixer_number.is_none()));
+            before.make_safe().unwrap();
+            let after = hardwave_project::Project::from_bytes(&bytes).unwrap();
+            let kick = after.track("insert-001").unwrap();
+            assert_eq!(kick.mixer_number, Some(1), "{id}: the kick is insert 1");
+            assert_eq!(after.rows[0].name, "Kick", "{id}: on the first row");
+            assert!(kick.clips.iter().all(|c| c.row == Some(0)));
+            let heard = render(before);
+            assert!(heard.iter().any(|s| s.abs() > 0.05), "{id} plays");
+            let now = render(after);
+            assert_eq!(heard.len(), now.len());
+            let differs = heard
+                .iter()
+                .zip(&now)
+                .position(|(a, b)| a.to_bits() != b.to_bits());
+            assert_eq!(differs, None, "{id}: the same sound, sample for sample");
+        }
     }
 
     #[test]

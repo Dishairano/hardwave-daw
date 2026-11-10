@@ -206,6 +206,7 @@ fn apply_clip(project: &mut Project, clip: &ClipSync) -> Applied {
                 length_ticks: length,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
         ClipOp::Move {

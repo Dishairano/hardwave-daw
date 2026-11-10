@@ -795,6 +795,7 @@ impl Importer {
                 length_ticks: beats_to_ticks(length).max(1),
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -910,6 +911,7 @@ impl Importer {
                 length_ticks: beats_to_ticks(end - start).max(1),
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
         self.audio.push(ImportedAudio {
@@ -1020,6 +1022,7 @@ impl Importer {
                 target,
                 points: out,
                 visible: true,
+                row: None,
             });
         }
     }
@@ -1267,6 +1270,7 @@ mod tests {
             length_ticks: 960 * 4,
             lane: 0,
             color: None,
+            row: None,
         });
         lead.automation_lanes.push(AutomationLane {
             id: "a".into(),
@@ -1286,6 +1290,7 @@ mod tests {
                 },
             ],
             visible: true,
+            row: None,
         });
         let mut drums = Track::new_audio("drums".into(), "Drums".into());
         drums.sends.push(Send {
@@ -1330,6 +1335,7 @@ mod tests {
             length_ticks: 960 * 2,
             lane: 0,
             color: None,
+            row: None,
         });
         p.tracks.insert(1, drums);
         p.tracks.insert(1, lead);

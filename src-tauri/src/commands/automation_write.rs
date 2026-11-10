@@ -342,6 +342,7 @@ fn bake_into_lane(
                 target,
                 points,
                 visible: true,
+                row: None,
             };
             let id = lane.id.clone();
             track.automation_lanes.push(lane);

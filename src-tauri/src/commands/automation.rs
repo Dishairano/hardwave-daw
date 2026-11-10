@@ -87,6 +87,7 @@ pub fn add_automation_lane(
             target: target.into(),
             points: Vec::new(),
             visible: true,
+            row: None,
         });
     }
     state.engine.lock().rebuild_graph();
@@ -366,6 +367,7 @@ pub fn add_param_automation_lane(
                     target,
                     points: Vec::new(),
                     visible: true,
+                    row: None,
                 });
                 track.automation_lanes.len() - 1
             }

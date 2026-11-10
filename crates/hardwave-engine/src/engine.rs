@@ -2863,6 +2863,24 @@ impl DawEngine {
         }
     }
 
+    /// How long building the audio graph for the song takes, `runs` times
+    /// over. The graph is rebuilt on the audio thread after every edit, so
+    /// this is how long a block waits after one. The plug-ins are left out;
+    /// clips, notes, automation and routing are all there.
+    #[doc(hidden)]
+    pub fn graph_build_times(&self, runs: usize) -> Vec<std::time::Duration> {
+        let mut callback =
+            self.offline_callback(48_000, 512, 0, None, |_| {}, Arc::new(Mutex::new(None)));
+        (0..runs)
+            .map(|_| {
+                callback.needs_rebuild = true;
+                let started = std::time::Instant::now();
+                callback.rebuild_graph();
+                started.elapsed()
+            })
+            .collect()
+    }
+
     /// How long each block of the project takes to compute, block by
     /// block, at a given buffer size.
     ///
@@ -4130,6 +4148,7 @@ impl EngineCallback {
         tempo_map: &hardwave_project::TempoMap,
         sample_rate: f64,
         track_pitch_factor: f64,
+        silent_rows: &hardwave_project::layout::SilentRows,
     ) -> Vec<ClipRegion> {
         // Convert clip placements to sample-based ClipRegions.
         // Clips are visited in their project-defined order, then any overlap between
@@ -4139,13 +4158,12 @@ impl EngineCallback {
         // auto-computed value.
         // Frozen: the render, and nothing else. Live: everything but
         // the render, which is parked on its own lane.
+        // A clip on a playlist row that is switched off (or not soloed
+        // while another is) is left out, as FL's track switch does.
         let clips_to_play = track.clips.iter().filter(|clip| {
             let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
-            if track.frozen {
-                is_freeze
-            } else {
-                !is_freeze
-            }
+            let on_track = if track.frozen { is_freeze } else { !is_freeze };
+            on_track && !silent_rows.has(clip.row)
         });
         let mut regions: Vec<ClipRegion> = clips_to_play
             .filter_map(|clip| match &clip.content {
@@ -4498,6 +4516,41 @@ impl EngineCallback {
                 .as_ref()
                 .is_some_and(|heard| !heard.contains(&track.id) && !track.solo_safe)
         };
+        // Playlist rows switched off, or not soloed while one is: what sits
+        // on them (clips, notes, automation) is left out below. Rows never
+        // route sound, so the channels and their effects keep running.
+        let silent_rows = hardwave_project::layout::SilentRows::of(&project.rows);
+        let audible_lanes = |track: &hardwave_project::track::Track| {
+            track
+                .automation_lanes
+                .iter()
+                .filter(|lane| !silent_rows.has(lane.row))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // Automation clips that move another track's knob (FL's automation
+        // clip channels), gathered once the way MIDI routes are: the target
+        // track's node plays them as its own. A clip with no target moves
+        // the track it sits on, as every clip did before.
+        let mut handed: HashMap<&str, Vec<&hardwave_project::automation_clip::AutomationClip>> =
+            HashMap::new();
+        for source in &project.tracks {
+            for clip in &source.automation_clips {
+                if let Some(target) = clip.target_track.as_deref() {
+                    if target != source.id && !silent_rows.has(clip.row) {
+                        handed.entry(target).or_default().push(clip);
+                    }
+                }
+            }
+        }
+        let audible_automation_clips = |track: &hardwave_project::track::Track| {
+            let own = track.automation_clips.iter().filter(|clip| {
+                clip.target_track.as_deref().is_none_or(|t| t == track.id)
+                    && !silent_rows.has(clip.row)
+            });
+            let theirs = handed.get(track.id.as_str()).into_iter().flatten().copied();
+            own.chain(theirs).cloned().collect::<Vec<_>>()
+        };
 
         // Reconcile the per-track meter map with the current tracks: reuse existing
         // Arcs where possible, create new ones, drop meters for removed tracks.
@@ -4587,8 +4640,8 @@ impl EngineCallback {
                     hardwave_project::vca::offset_for(&project.vcas, &track.id);
                 midi_node.set_volume_db(track.volume_db + vca_gain_db);
                 midi_node.set_pan(track.pan);
-                midi_node.set_automation_lanes(track.automation_lanes.clone());
-                midi_node.set_automation_clips(track.automation_clips.clone());
+                midi_node.set_automation_lanes(audible_lanes(track));
+                midi_node.set_automation_clips(audible_automation_clips(track));
                 midi_node.set_stereo_separation(track.stereo_separation);
                 // The mixer strip's polarity, swap and delay and the rack's
                 // filter, as an audio track has them.
@@ -4693,6 +4746,7 @@ impl EngineCallback {
                             length_ticks: rack.length_ticks(),
                             lane: 0,
                             color: None,
+                            row: None,
                         }
                     })
                 } else {
@@ -4713,8 +4767,8 @@ impl EngineCallback {
                         continue;
                     };
                     // A muted clip contributes nothing, the same way a muted
-                    // audio clip is skipped.
-                    if midi_ref.clip.muted {
+                    // audio clip is skipped; nor does one on a silent row.
+                    if midi_ref.clip.muted || silent_rows.has(clip.row) {
                         continue;
                     }
                     // MIDI effects sit between the clip and the
@@ -4796,7 +4850,13 @@ impl EngineCallback {
                 let midi_pitch_factor = 2.0_f64.powf(
                     (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0,
                 );
-                let audio = self.audio_regions(track, tempo_map, sample_rate, midi_pitch_factor);
+                let audio = self.audio_regions(
+                    track,
+                    tempo_map,
+                    sample_rate,
+                    midi_pitch_factor,
+                    &silent_rows,
+                );
                 if !audio.is_empty() {
                     midi_node.set_audio_clips(self.audio_pool.clone(), audio);
                 }
@@ -4887,8 +4947,8 @@ impl EngineCallback {
             // so process() never has to walk the project tree under a
             // lock. Empty list is the no-automation steady state.
             node.set_prefs(self.audio_prefs.clone());
-            node.set_automation_lanes(track.automation_lanes.clone());
-            node.set_automation_clips(track.automation_clips.clone());
+            node.set_automation_lanes(audible_lanes(track));
+            node.set_automation_clips(audible_automation_clips(track));
             // Reattach the plug-in chain stashed at the top of this
             // rebuild. Tracks that didn't exist before fall through to
             // the default-empty chain that TrackNode::new gave them.
@@ -4951,7 +5011,13 @@ impl EngineCallback {
                 2.0_f64.powf(track_pitch_offset)
             };
 
-            let regions = self.audio_regions(track, tempo_map, sample_rate, track_pitch_factor);
+            let regions = self.audio_regions(
+                track,
+                tempo_map,
+                sample_rate,
+                track_pitch_factor,
+                &silent_rows,
+            );
             node.set_clips(regions);
 
             // This track's row of the launcher grid. Lengths are in
@@ -6224,13 +6290,19 @@ pub fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> 
 }
 
 /// A track with nothing in it and nothing reaching it: an empty insert of
-/// a new song. It makes no sound, so the graph leaves it out.
+/// a new song, or a bus or return nothing plays into (an FL insert that
+/// has a name and no effects). It makes no sound, so the graph leaves it
+/// out.
 fn is_placeholder(
     track: &hardwave_project::Track,
     reached: &std::collections::HashSet<&str>,
 ) -> bool {
-    matches!(track.kind, hardwave_project::TrackKind::Audio)
-        && track.clips.is_empty()
+    matches!(
+        track.kind,
+        hardwave_project::TrackKind::Audio
+            | hardwave_project::TrackKind::Bus
+            | hardwave_project::TrackKind::Return
+    ) && track.clips.is_empty()
         && track.inserts.is_empty()
         && track.automation_lanes.is_empty()
         && track.automation_clips.is_empty()
@@ -6469,6 +6541,7 @@ mod offline_insert_tests {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             });
             t.inserts.push(PluginSlot {
                 id: "slot1".into(),
@@ -6605,6 +6678,7 @@ mod offline_insert_tests {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -6688,6 +6762,7 @@ mod offline_insert_tests {
                     length_ticks: 4 * beat,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             project.tempo_map.tick_to_samples(8 * beat, sr as f64)
@@ -6789,6 +6864,7 @@ mod offline_insert_tests {
                     length_ticks: lengths.1,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -6901,6 +6977,7 @@ mod offline_insert_tests {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -7163,6 +7240,7 @@ mod offline_insert_tests {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             let path = dir.join("song.hwp");
@@ -7252,6 +7330,7 @@ mod offline_insert_tests {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             };
             if let Some(t) = project.track_mut(&id) {
                 t.clips.push(clip("clip-live"));
@@ -7260,6 +7339,7 @@ mod offline_insert_tests {
                 id: "arr-b".into(),
                 name: "B".into(),
                 timelines: Default::default(),
+                rows: Vec::new(),
             };
             arrangement.timelines.insert(
                 id.clone(),
@@ -7326,6 +7406,7 @@ mod offline_insert_tests {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             };
             ghost.track_id = id2.clone();
             if let Some(t) = project.track_mut(&id2) {
@@ -8065,6 +8146,46 @@ mod rt_safety_tests {
         assert!(cb.deferred_insert_commands.is_empty());
     }
 
+    /// An insert nothing plays into and with no effects (FL's named but
+    /// unused inserts) builds no node, bus or return; one something
+    /// reaches, or with an effect on it, does.
+    #[test]
+    fn an_empty_bus_builds_no_node() {
+        use hardwave_project::track::{PluginSlot, Track};
+        let mut project = Project::default();
+        project.tracks.truncate(1);
+        project
+            .tracks
+            .push(Track::new_bus("empty".into(), "KICK REVERB".into()));
+        let mut ret = Track::new_bus("ret".into(), "Return".into());
+        ret.kind = hardwave_project::TrackKind::Return;
+        project.tracks.push(ret);
+        project
+            .tracks
+            .push(Track::new_bus("fed".into(), "Fed".into()));
+        let mut fx = Track::new_bus("fx".into(), "With effect".into());
+        fx.inserts.push(PluginSlot {
+            id: "s".into(),
+            plugin_id: "test.gain".into(),
+            enabled: true,
+            state: None,
+            sidechain_source: None,
+            wet: 1.0,
+        });
+        project.tracks.push(fx);
+        let mut source = Track::new_audio("src".into(), "Source".into());
+        source.output_bus = Some("fed".into());
+        project.tracks.push(source);
+        let (cb, _cmd_tx) = make_callback(Arc::new(Mutex::new(project)));
+        assert!(!cb.track_id_to_node.contains_key("empty"));
+        assert!(!cb.track_id_to_node.contains_key("ret"));
+        assert!(
+            cb.track_id_to_node.contains_key("fed"),
+            "something plays into it"
+        );
+        assert!(cb.track_id_to_node.contains_key("fx"), "it has an effect");
+    }
+
     #[test]
     fn insert_command_for_pending_track_is_parked_not_dropped() {
         let mut project = Project::default();
@@ -8708,6 +8829,7 @@ mod monitoring_tests {
                         },
                         points: Vec::new(),
                         visible: true,
+                        row: None,
                     });
             }
             song
@@ -8808,6 +8930,7 @@ mod monitoring_tests {
             length_ticks: 1920,
             lane: 0,
             color: None,
+            row: None,
         });
         p.tracks.push(beat);
         let mut rec = hardwave_project::Track::new_audio("rec".into(), "Resample".into());
@@ -9107,6 +9230,7 @@ mod track_render_tests {
             length_ticks: LEN_TICKS,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

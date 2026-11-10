@@ -463,6 +463,13 @@ pub struct ClipPlacement {
     /// was back to its track's colour after a reload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// The playlist row it is drawn on, counting from 0 (`Project::rows`).
+    /// Where it sits, never how it sounds: it plays through the track it
+    /// is on. None for a clip made by something not yet taught about
+    /// rows; the playlist puts it on its track's row, and the engine never
+    /// silences it.
+    #[serde(default)]
+    pub row: Option<u32>,
 }
 
 /// The lane a freeze render sits on.
@@ -486,6 +493,7 @@ mod color_tests {
             length_ticks: 3840,
             lane: 0,
             color: color.map(str::to_string),
+            row: None,
         }
     }
 

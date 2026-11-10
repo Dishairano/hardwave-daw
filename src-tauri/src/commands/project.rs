@@ -956,6 +956,7 @@ mod save_folder_tests {
                 length_ticks: 3840,
                 lane: 0,
                 color: None,
+                row: None,
             });
         song
     }

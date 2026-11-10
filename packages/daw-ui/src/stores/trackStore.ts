@@ -153,6 +153,9 @@ export interface ClipInfo {
   /** The fades in time, at the tempo where the clip sits. */
   fadeInMs?: number
   fadeOutMs?: number
+  /** The playlist row it is drawn on, from 0; null for a clip made before
+   *  rows were kept. Not used by the playlist yet. */
+  row?: number | null
 }
 
 export interface InsertInfo {
@@ -219,6 +222,12 @@ export interface TrackInfo {
    *  meaning "use engine default for this layer". Only meaningful
    *  when `instrument === 'kick_synth'`. */
   kickPatch?: { layers: (KickLayerPatch | null)[]; drive: number }
+  /** Its number in the mixer (0 the master); null for a channel not in the
+   *  mixer. Not used by the mixer yet. */
+  mixerNumber?: number | null
+  /** The channel rack group it is listed in; null for an insert or the
+   *  master. Not used by the rack yet. */
+  rackGroup?: number | null
 }
 
 export interface KickLayerPatch {
@@ -257,6 +266,8 @@ export interface AutomationLaneInfo {
   target: AutomationTargetInfo
   points: AutomationPointInfo[]
   visible: boolean
+  /** The playlist row it is drawn on. Not used by the playlist yet. */
+  row?: number | null
 }
 
 export interface AutomationClipInfo {
@@ -266,6 +277,10 @@ export interface AutomationClipInfo {
   lengthTicks: number
   colorArgb: number
   points: AutomationPointInfo[]
+  /** The playlist row it is drawn on. Not used by the playlist yet. */
+  row?: number | null
+  /** The track whose knob it moves, when not the one it sits on. */
+  targetTrack?: string | null
 }
 
 export interface TrackWithClips extends TrackInfo {

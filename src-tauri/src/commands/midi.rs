@@ -143,6 +143,7 @@ pub fn create_midi_clip(
         length_ticks: len,
         lane: 0,
         color: None,
+        row: None,
     };
 
     {
