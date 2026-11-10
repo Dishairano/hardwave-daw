@@ -1,0 +1,48 @@
+# Secure Code Check: what the report says about this product. What the
+# checks cover is set by the inputs in .github/workflows/security.yml
+# and release.yml; the format is described in
+# scripts/secure-code-check/config.py.
+
+[product]
+id = "hardwave-daw"
+name = "Hardwave DAW"
+platforms = "Windows x64"
+repository = "Dishairano/hardwave-daw"
+
+sbom_target = "x86_64-pc-windows-msvc"
+sbom_note = "Rust crates for the Windows build with every feature on; npm packages that the interface carries at run time."
+
+[[sbom]]
+file = "app-crates.cdx.json"
+part = "DAW app: Rust crates"
+cargo = "Cargo.toml"
+output = "src-tauri/hardwave-daw.cdx.json"
+
+[[sbom]]
+file = "plugin-bridge-crates.cdx.json"
+part = "Plug-in bridge: Rust crates"
+cargo = "Cargo.toml"
+output = "crates/hardwave-plugin-bridge/hardwave-plugin-bridge.cdx.json"
+
+[[sbom]]
+file = "launcher-crates.cdx.json"
+part = "Launcher and uninstaller: Rust crates"
+cargo = "installer/src-tauri/Cargo.toml"
+output = "installer/src-tauri/hardwave-daw-installer.cdx.json"
+
+[[sbom]]
+file = "ui-npm.cdx.json"
+part = "DAW interface: npm packages"
+npm = "packages/daw-ui"
+
+[[sbom]]
+file = "launcher-npm.cdx.json"
+part = "Launcher interface: npm packages"
+npm = "installer"
+
+[release]
+test_jobs = ["lint-and-test", "ui-tests"]
+tests_tool = "cargo fmt, Clippy, cargo test, Playwright"
+tests_what = "Formatting; Clippy with warnings as errors; the whole workspace's tests including the long engine tests; the interface suite in a browser"
+windows_signing = "Azure Trusted Signing"
+files_note = "Built on GitHub-hosted runners."
