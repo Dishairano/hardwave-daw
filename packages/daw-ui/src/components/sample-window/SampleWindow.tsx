@@ -33,6 +33,7 @@ import { rgbColour } from '../../lib/waveformColour'
 import { t, tf, useLanguage } from '../../i18n'
 import { NotesView, ViewSwitch } from './NotesView'
 import './sampleWindow.css'
+import { insertBoxText, insertName, insertOf } from '../../lib/mixerNumbers'
 
 // ------------------------------------------------------------------ shared
 
@@ -172,35 +173,28 @@ function Frame({ name, color, hasEnvelope, page, onPage, top, children }: {
   )
 }
 
-/** The track's number and where it plays into, for the Track box. */
-/** A mixer insert's number (insert-007 is 7), or null for a track that
- *  is not one of the mixer's numbered inserts. */
-export function insertNumber(id: string): number | null {
-  const m = /^insert-(\d+)$/.exec(id)
-  return m ? Number(m[1]) : null
-}
-
 /** What FL's TRACK box says: the mixer insert this channel's sound goes
- *  through. A channel that is itself an insert (the starter song's Kick is
- *  insert 1) shows its own number; any other channel shows the insert it
- *  is routed to, or M when it plays straight into the master. It used to
- *  count the channel's place among all tracks, so a channel added after
- *  the 500 inserts read "501". */
+ *  through, by the number the mixer and the channel rack show (one
+ *  numbering for all three). A channel routed to an insert shows that
+ *  insert's number; one routed nowhere shows its own insert, or M when it
+ *  plays straight into the master. It read the number out of an
+ *  "insert-007" id before, so it disagreed with the mixer and the rack. */
 export function trackBoxValue(track: TrackInfo, tracks: TrackInfo[]): { value: string; name: string } {
-  const own = insertNumber(track.id)
-  const output = track.outputBus ? tracks.find((t) => t.id === track.outputBus) : null
-  if (own !== null) return { value: String(own), name: output?.name ?? 'Master' }
-  if (!output || output.kind === 'Master') return { value: 'M', name: 'Master' }
-  const routed = insertNumber(output.id)
-  return { value: routed !== null ? String(routed) : '-', name: output.name }
+  const byId: Record<string, TrackInfo> = {}
+  for (const t of tracks) byId[t.id] = t
+  const number = insertOf(track, byId)
+  if (number == null) return { value: insertBoxText(null), name: track.outputBus ? (byId[track.outputBus]?.name ?? 'Master') : 'Master' }
+  if (number === 0) return { value: 'M', name: 'Master' }
+  const insert = track.outputBus && byId[track.outputBus]?.mixerNumber === number ? byId[track.outputBus] : track
+  return { value: String(number), name: insertName(number, insert) }
 }
 
 function TrackBox({ track, tracks }: { track: TrackInfo; tracks: TrackInfo[] }) {
   useLanguage()
   const { value, name } = trackBoxValue(track, tracks)
-  const hint = name === 'Master'
-    ? tf('{track} plays into the master; route it in the mixer', { track: track.name })
-    : tf('{track} plays into {name}; route it in the mixer', { track: track.name, name })
+  const hint = value === 'M'
+    ? tf('{track} plays into the master; route it in the mixer or the channel rack', { track: track.name })
+    : tf('{track} plays into insert {n}, {name}; route it in the mixer or the channel rack', { track: track.name, n: value, name })
   return <FlatBox label={t('Track')} value={value} small={name} hint={hint} />
 }
 

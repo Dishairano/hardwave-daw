@@ -630,6 +630,8 @@ pub fn run() {
             commands::tracks::set_track_filter_cutoff,
             commands::tracks::set_track_filter_resonance,
             commands::tracks::set_track_output_bus,
+            commands::mixer_numbers::make_insert,
+            commands::mixer_numbers::route_to_insert,
             // Sends
             commands::sends::get_sends,
             commands::sends::list_sends,

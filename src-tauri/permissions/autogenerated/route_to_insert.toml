@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-route-to-insert"
+description = "Enables the route_to_insert command without any pre-configured scope."
+commands.allow = ["route_to_insert"]
+
+[[permission]]
+identifier = "deny-route-to-insert"
+description = "Denies the route_to_insert command without any pre-configured scope."
+commands.deny = ["route_to_insert"]

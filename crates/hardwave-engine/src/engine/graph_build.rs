@@ -303,12 +303,17 @@ impl GraphBuilder {
         // route. A track nothing reaches and that has nothing of its own is
         // an empty insert, and gets no node (see `is_placeholder`).
         let mut reached: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // Of those, the ones sound plays into: in a song with FL's inserts
+        // they pass a centred sound at 0 dB (`Project::inserts_unity_at_centre`).
+        let mut inserts: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for t in &project.tracks {
             if let Some(bus) = t.output_bus.as_deref() {
                 reached.insert(bus);
+                inserts.insert(bus);
             }
             for send in t.sends.iter().filter(|s| s.enabled) {
                 reached.insert(send.target.as_str());
+                inserts.insert(send.target.as_str());
             }
             for target in &t.midi_route_to {
                 reached.insert(target.as_str());
@@ -659,6 +664,13 @@ impl GraphBuilder {
             // so process() never has to walk the project tree under a
             // lock. Empty list is the no-automation steady state.
             node.set_prefs(self.audio_prefs.clone());
+            node.set_unity_centre(
+                project.inserts_unity_at_centre
+                    && (matches!(
+                        track.kind,
+                        hardwave_project::TrackKind::Bus | hardwave_project::TrackKind::Return
+                    ) || inserts.contains(track.id.as_str())),
+            );
             node.set_automation_lanes(audible_lanes(track));
             node.set_automation_clips(audible_automation_clips(track));
             // The plug-in chain is moved over from the node this one

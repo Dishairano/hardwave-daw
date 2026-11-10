@@ -20,10 +20,26 @@ import { create } from 'zustand'
  */
 interface MixerSelectionState {
   selectedTrackId: string | null
+  /** An empty insert number picked in the mixer (no track behind it yet),
+   *  so an effect can be put on it; null while a track is selected. */
+  selectedEmptyNumber: number | null
   selectTrack: (id: string | null) => void
+  selectEmptyNumber: (n: number) => void
+  /** The insert number whose name is being edited on its strip. */
+  renamingNumber: number | null
+  setRenamingNumber: (n: number | null) => void
+  /** A strip's right-click menu: its number and where it opened. */
+  stripMenu: { number: number; x: number; y: number } | null
+  openStripMenu: (menu: { number: number; x: number; y: number } | null) => void
 }
 
 export const useMixerSelectionStore = create<MixerSelectionState>((set) => ({
   selectedTrackId: null,
-  selectTrack: (id) => set({ selectedTrackId: id }),
+  selectedEmptyNumber: null,
+  selectTrack: (id) => set({ selectedTrackId: id, selectedEmptyNumber: null }),
+  selectEmptyNumber: (n) => set({ selectedTrackId: null, selectedEmptyNumber: n }),
+  renamingNumber: null,
+  setRenamingNumber: (n) => set({ renamingNumber: n, stripMenu: null }),
+  stripMenu: null,
+  openStripMenu: (menu) => set({ stripMenu: menu }),
 }))

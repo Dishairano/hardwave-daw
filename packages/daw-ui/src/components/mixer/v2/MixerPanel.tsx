@@ -3,6 +3,7 @@ import { MasterStrip } from './MasterStrip'
 import { StripsScroller } from './StripsScroller'
 import { FxRackPanel } from './FxRackPanel'
 import { VcaColumn } from './VcaColumn'
+import { InsertMenu } from './InsertMenu'
 import { DetachButton } from '../../FloatingWindow'
 import { useTrackStore } from '../../../stores/trackStore'
 import { useMeterStore } from '../../../stores/meterStore'
@@ -55,6 +56,7 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
   // Selection lives in its own store — see mixerSelectionStore for why.
   const masterId = tracks.find((t) => t.kind === 'Master')?.id ?? null
   const selectedId = useMixerSelectionStore((s) => s.selectedTrackId)
+  const selectedEmpty = useMixerSelectionStore((s) => s.selectedEmptyNumber)
   const selectTrack = useMixerSelectionStore((s) => s.selectTrack)
   // Seed the selection with master on first mount + on project load so
   // the FX rack always has a sensible target.
@@ -62,15 +64,30 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
   // on Master put plug-ins on the master that were meant for a channel.
   useEffect(() => {
     if (selectedId && tracks.some((t) => t.id === selectedId)) return
+    // An empty number picked in the mixer has no track to find.
+    if (selectedEmpty != null && !tracks.some((t) => t.mixerNumber === selectedEmpty)) return
     const appSelected = useTrackStore.getState().selectedTrackId
     const start = appSelected && tracks.some((t) => t.id === appSelected) ? appSelected : masterId
     if (start) selectTrack(start)
-  }, [masterId, selectedId, selectTrack, tracks])
+  }, [masterId, selectedId, selectedEmpty, selectTrack, tracks])
 
   const onSelect = useCallback((id: string) => selectTrack(id), [selectTrack])
 
+  // F2 renames the selected insert, as in FL. The mixer takes focus when
+  // clicked, so the key only reaches here while it is in use.
+  const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== 'F2' || (e.target as HTMLElement).closest('input, textarea, select')) return
+    const sel = useMixerSelectionStore.getState()
+    const number = sel.selectedEmptyNumber
+      ?? useTrackStore.getState().tracks.find((t) => t.id === sel.selectedTrackId)?.mixerNumber
+    if (number == null || number === 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    sel.setRenamingNumber(number)
+  }, [])
+
   return (
-    <div className="mx-v2-root" style={{ position: 'relative' }}>
+    <div className="mx-v2-root" style={{ position: 'relative' }} tabIndex={-1} onKeyDown={onKeyDown}>
       <div className="mx-detach" title={t('Pop the mixer into its own window (drag to another monitor)')}>
         <DetachButton panelId="mixer" />
       </div>
@@ -80,6 +97,7 @@ export const MixerPanelV2 = memo(function MixerPanelV2() {
         <VcaColumn />
         <FxRackPanel />
       </div>
+      <InsertMenu />
     </div>
   )
 })

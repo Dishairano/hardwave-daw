@@ -325,6 +325,8 @@ pub fn build_project(
 ) -> FlBuild {
     let mut project = Project::default();
     project.metadata.name = name.to_string();
+    // FL's inserts pass a centred sound at 0 dB.
+    project.inserts_unity_at_centre = true;
     if let Some(entry) = project.tempo_map.entries.get_mut(0) {
         entry.bpm = fl.bpm as f64;
         entry.time_sig_num = fl.time_sig_numerator.max(1) as u32;

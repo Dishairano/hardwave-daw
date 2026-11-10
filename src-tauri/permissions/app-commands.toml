@@ -253,6 +253,8 @@ permissions = [
   "allow-set-track-filter-cutoff",
   "allow-set-track-filter-resonance",
   "allow-set-track-output-bus",
+  "allow-make-insert",
+  "allow-route-to-insert",
   "allow-get-sends",
   "allow-list-sends",
   "allow-add-send",
