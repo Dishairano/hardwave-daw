@@ -1504,16 +1504,65 @@ fn isolate_for_stem(proj: &mut Project, target: &str) {
     }
 }
 
-/// Where the song's last clip ends, in ticks: how far a bounce or a freeze
-/// renders.
+/// Where the song's last clip ends, in ticks: where a bounce or a freeze
+/// renders up to, before its tail. The render an unfrozen track keeps on
+/// its freeze lane does not play and does not count: with its tail in it,
+/// freezing, unfreezing and freezing again would add a tail each time.
 fn song_end_ticks(project: &Project) -> u64 {
+    use hardwave_project::clip::FREEZE_LANE;
     project
         .tracks
         .iter()
-        .flat_map(|t| t.clips.iter())
+        .flat_map(|t| {
+            t.clips
+                .iter()
+                .filter(move |c| t.frozen || c.lane != FREEZE_LANE)
+        })
         .map(|c| c.position_ticks + c.length_ticks)
         .max()
         .unwrap_or(0)
+}
+
+/// How far past the end of the song a bounce or a freeze renders, at most,
+/// for what is still sounding there: a reverb, a delay, a release.
+const TAIL_CAP_SECS: f64 = 10.0;
+/// Where the tail has died away: -90 dBFS.
+const TAIL_FLOOR: f32 = 3.2e-5;
+
+/// What a bounce or a freeze renders: up to the song's end, in ticks, and
+/// how many frames with the tail. Both stopped at the last clip's end, so a
+/// reverb on a frozen track was cut off there.
+fn render_with_tail(project: &Project, sample_rate: u32) -> (u64, u64) {
+    let end_ticks = song_end_ticks(project);
+    let body = project
+        .tempo_map
+        .tick_to_samples(end_ticks, sample_rate as f64);
+    if body == 0 {
+        return (end_ticks, 0);
+    }
+    let tail = (TAIL_CAP_SECS * sample_rate as f64) as u64;
+    (end_ticks, body + tail)
+}
+
+/// Where a bounce's or a freeze's sound ends, in ticks: the song's end, or
+/// later where its tail falls below the floor. The clip that plays it ends
+/// there, rather than ten seconds of silence on.
+fn sound_end_ticks(engine: &DawEngine, source_id: &str, song_end_ticks: u64) -> u64 {
+    let Some(buffer) = engine.audio_pool.get(source_id) else {
+        return song_end_ticks;
+    };
+    let last = buffer
+        .channels
+        .iter()
+        .filter_map(|ch| ch.iter().rposition(|s| s.abs() > TAIL_FLOOR))
+        .max();
+    let Some(last) = last else {
+        return song_end_ticks;
+    };
+    let sr = engine.current_sample_rate() as f64;
+    let at = ((last + 1) as f64 / buffer.sample_rate.max(1) as f64 * sr).ceil() as u64;
+    let project = engine.project.lock();
+    (project.tempo_map.samples_to_tick(at, sr) + 1).max(song_end_ticks)
 }
 
 /// Give a rendered clip the length, in ticks, of the stretch of song it was
@@ -1738,14 +1787,13 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
-    // How far the render goes, in ticks, for the clip that plays it.
-    let end_ticks = song_end_ticks(&engine.lock().project.lock());
 
     let rendered =
-        tauri::async_runtime::spawn_blocking(move || -> Result<(String, String), String> {
+        tauri::async_runtime::spawn_blocking(move || -> Result<(String, String, u64), String> {
             let engine_guard = engine.lock();
             let sample_rate = engine_guard.current_sample_rate();
-            let total_samples = engine_guard.project_end_samples(sample_rate);
+            let (end_ticks, total_samples) =
+                render_with_tail(&engine_guard.project.lock(), sample_rate);
             if total_samples == 0 {
                 return Err("there is nothing on the timeline to bounce".into());
             }
@@ -1802,12 +1850,16 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
                 let _ = fs::remove_file(&out_path);
                 return Err("the bounce was cancelled".into());
             }
-            Ok((out_path.to_string_lossy().into_owned(), track_name))
+            Ok((
+                out_path.to_string_lossy().into_owned(),
+                track_name,
+                end_ticks,
+            ))
         })
         .await
         .map_err(|e| e.to_string())??;
 
-    let (path, track_name) = rendered;
+    let (path, track_name, end_ticks) = rendered;
 
     let state: State<AppState> = app.state();
     let engine = state.engine.lock();
@@ -1847,6 +1899,7 @@ fn place_bounce(
         path.to_string(),
         Some(0),
     )?;
+    let end_ticks = sound_end_ticks(engine, &clip.source_id, end_ticks);
     {
         let mut project = engine.project.lock();
         fit_render_clip(&mut project, &new_track_id, &clip.clip_id, 0, end_ticks);
@@ -2100,76 +2153,77 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
-    // How far the render goes, in ticks, for the clip that plays it.
-    let end_ticks = song_end_ticks(&engine.lock().project.lock());
 
-    let rendered = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let engine_guard = engine.lock();
-        let sample_rate = engine_guard.current_sample_rate();
-        let total_samples = engine_guard.project_end_samples(sample_rate);
-        if total_samples == 0 {
-            return Err("there is nothing on the timeline to freeze".into());
-        }
-        let track_name = {
-            let project = engine_guard.project.lock();
-            let track = project
-                .track(&track_id)
-                .ok_or_else(|| format!("Track not found: {track_id}"))?;
-            if track.frozen {
-                return Err("that track is already frozen".into());
+    let rendered =
+        tauri::async_runtime::spawn_blocking(move || -> Result<(String, u64), String> {
+            let engine_guard = engine.lock();
+            let sample_rate = engine_guard.current_sample_rate();
+            let (end_ticks, total_samples) =
+                render_with_tail(&engine_guard.project.lock(), sample_rate);
+            if total_samples == 0 {
+                return Err("there is nothing on the timeline to freeze".into());
             }
-            track.name.clone()
-        };
-
-        let dir = match engine_guard.project_dir() {
-            Some(d) => d.join("Freeze"),
-            None => dirs::data_dir()
-                .ok_or_else(|| "No writable folder for freezes on this system".to_string())?
-                .join("Hardwave")
-                .join("Freeze"),
-        };
-        fs::create_dir_all(&dir).map_err(|e| format!("create folder: {e}"))?;
-        let safe: String = track_name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == ' ' || c == '-' {
-                    c
-                } else {
-                    '_'
+            let track_name = {
+                let project = engine_guard.project.lock();
+                let track = project
+                    .track(&track_id)
+                    .ok_or_else(|| format!("Track not found: {track_id}"))?;
+                if track.frozen {
+                    return Err("that track is already frozen".into());
                 }
-            })
-            .collect();
-        let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
-        let out_path = dir.join(format!("{safe} frozen {stamp}.wav"));
+                track.name.clone()
+            };
 
-        let fmt = format_for_a_track(sample_rate);
+            let dir = match engine_guard.project_dir() {
+                Some(d) => d.join("Freeze"),
+                None => dirs::data_dir()
+                    .ok_or_else(|| "No writable folder for freezes on this system".to_string())?
+                    .join("Hardwave")
+                    .join("Freeze"),
+            };
+            fs::create_dir_all(&dir).map_err(|e| format!("create folder: {e}"))?;
+            let safe: String = track_name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == ' ' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+            let out_path = dir.join(format!("{safe} frozen {stamp}.wav"));
 
-        let target = track_id.clone();
-        let completed = render_unlocked(
-            engine_guard,
-            &out_path,
-            fmt,
-            total_samples,
-            0,
-            &cancel,
-            |_, _| {},
-            true,
-            // Through its own effects, which rest while it is frozen, and
-            // not through its fader, its bus or the master, which it still
-            // plays through.
-            move |proj: &mut Project| {
-                isolate_track_for_render(proj, &target, true, &|_| true);
-                leave_the_fader_out(proj, &target);
-            },
-        )?;
-        if !completed {
-            let _ = fs::remove_file(&out_path);
-            return Err("the freeze was cancelled".into());
-        }
-        Ok(out_path.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+            let fmt = format_for_a_track(sample_rate);
+
+            let target = track_id.clone();
+            let completed = render_unlocked(
+                engine_guard,
+                &out_path,
+                fmt,
+                total_samples,
+                0,
+                &cancel,
+                |_, _| {},
+                true,
+                // Through its own effects, which rest while it is frozen, and
+                // not through its fader, its bus or the master, which it still
+                // plays through.
+                move |proj: &mut Project| {
+                    isolate_track_for_render(proj, &target, true, &|_| true);
+                    leave_the_fader_out(proj, &target);
+                },
+            )?;
+            if !completed {
+                let _ = fs::remove_file(&out_path);
+                return Err("the freeze was cancelled".into());
+            }
+            Ok((out_path.to_string_lossy().into_owned(), end_ticks))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    let (rendered, end_ticks) = rendered;
 
     let state: State<AppState> = app.state();
     let engine = state.engine.lock();
@@ -2192,6 +2246,7 @@ fn place_freeze(
         path.to_string(),
         Some(0),
     )?;
+    let end_ticks = sound_end_ticks(engine, &clip.source_id, end_ticks);
     {
         let mut project = engine.project.lock();
         fit_render_clip(&mut project, track_id, &clip.clip_id, 0, end_ticks);
@@ -3271,6 +3326,62 @@ mod placing_tests {
             .map(|s| s.target.as_str())
             .collect();
         assert_eq!(targets, [verb.as_str()]);
+    }
+
+    /// A freeze or a bounce renders on past the end of the song while
+    /// something still sounds, and its clip plays to where that dies away.
+    /// Both stopped at the last clip's end, so a frozen track's reverb was
+    /// cut off there.
+    #[test]
+    fn a_frozen_track_plays_its_tail_past_the_end_of_the_song() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = DawEngine::new();
+        let sr = engine.current_sample_rate();
+        let (id, song_end) = {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Lead".into());
+            p.track_mut(&id)
+                .unwrap()
+                .clips
+                .push(clip("a", &id, 0, 1920));
+            // An old render on an unfrozen track's freeze lane plays nothing
+            // and does not make the song longer.
+            let other = p.add_audio_track("Pad".into());
+            let mut old = clip("old", &other, 0, 9600);
+            old.lane = hardwave_project::clip::FREEZE_LANE;
+            p.track_mut(&other).unwrap().clips.push(old);
+            let (end, total) = super::render_with_tail(&p, sr);
+            assert_eq!(end, 1920, "the song ends with the lead");
+            let song_end = p.tempo_map.tick_to_samples(1920, sr as f64);
+            assert_eq!(total, song_end + 10 * sr as u64, "with room for a tail");
+            (id, song_end as usize)
+        };
+        // The part, half a second of tail dying away, then silence.
+        let tail = sr as usize / 2;
+        let mut frames = Vec::new();
+        for i in 0..song_end + tail + sr as usize {
+            let v = if i < song_end {
+                0.25
+            } else if i < song_end + tail {
+                0.01
+            } else {
+                0.0
+            };
+            frames.extend_from_slice(&[v, v]);
+        }
+        let file = write_file(&engine, dir.path(), "frozen.wav", &frames);
+        place_freeze(&engine, &id, &file, 1920).unwrap();
+        let p = engine.project.lock();
+        let render = p.track(&id).unwrap().clips.last().unwrap();
+        let plays_to = p
+            .tempo_map
+            .tick_to_samples(render.position_ticks + render.length_ticks, sr as f64)
+            as usize;
+        assert!(
+            plays_to >= song_end + tail && plays_to < song_end + tail + sr as usize / 100,
+            "the clip plays the tail and stops where it dies away: {plays_to} for {}",
+            song_end + tail
+        );
     }
 
     /// Bouncing, freezing and consolidating are one undo step each. Each

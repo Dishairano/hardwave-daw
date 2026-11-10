@@ -27,7 +27,9 @@ pub struct ImportedClip {
     /// imported to move it onto the freeze lane.
     pub(crate) clip_id: String,
     name: String,
-    source_id: String,
+    /// Where its audio is in the pool: a bounce or a freeze reads it for
+    /// where its tail dies away.
+    pub(crate) source_id: String,
     duration_secs: f64,
     sample_rate: u32,
     channels: u16,
