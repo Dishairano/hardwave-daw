@@ -9,6 +9,7 @@
  * production bundle (index.html → main.tsx) never imports this.
  */
 import { MOCK_DRUM_FOLDER } from './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
+import { flSongTracks } from './flSongSeed'
 import '../fonts'
 import '../mockup.css' // the real top bar uses the fl-* classes from here
 import '../rework.css'
@@ -115,6 +116,7 @@ function seedNewSong() {
     { ...track('insert-004', 'Snare', '#F59E0B', [], 'Midi'), inserts: sampler('snare', 'Snare 1.wav'), insert_count: 1, volume_db: -3 },
     ...Array.from({ length: 6 }, (_, i) => track(`insert-${String(i + 5).padStart(3, '0')}`, `Insert ${i + 5}`, '#52525b', [])),
   ]
+  numberAsBefore(song)
   useTrackStore.setState({
     tracks: song,
     tracksById: Object.fromEntries(song.map((t) => [t.id, t])),
@@ -207,6 +209,18 @@ function NewControllerShot() {
 
 // ---- seed sample data -----------------------------------------------------
 
+/** Number a seeded song the way a song made before FL's three lists opens
+ *  (step 1's migration): the master 0, then every track that is not
+ *  automation 1, 2, 3 in order; every track the rack listed before (not an
+ *  "insert-NNN" row, or a MIDI one) in rack group 0. */
+function numberAsBefore(song: TrackWithClips[]) {
+  let next = 1
+  for (const t of song) {
+    t.mixerNumber = t.kind === 'Master' ? 0 : t.kind === 'Automation' ? null : next++
+    t.rackGroup = t.kind !== 'Master' && t.kind !== 'Bus' && (!t.id.startsWith('insert-') || t.kind === 'Midi') ? 0 : null
+  }
+}
+
 let clipSeq = 0
 function clip(name: string, sourceId: string, posBars: number, lenBars: number, kind = 'Audio'): ClipInfo {
   const bar = 960 * 4
@@ -276,6 +290,8 @@ tracks[0].inserts = [
 ]
 tracks[0].insert_count = 2
 
+numberAsBefore(tracks)
+
 const selected = tracks[2].clips[0].id // Crash — red selection header stands out
 useTrackStore.setState({
   tracks,
@@ -324,6 +340,19 @@ const panel = new URLSearchParams(location.search).get('panel') || 'playlist'
 // ?timesigat=16:7/8 adds a change at beat 16, so a mid-song signature change
 // can be seen rather than taken on trust.
 const params = new URLSearchParams(location.search)
+
+// ?song=fl: the founder's FL song in FL's shape (mockups M2 and M3), for the
+// mixer and channel rack shots.
+if (params.get('song') === 'fl') {
+  const song = flSongTracks()
+  useTrackStore.setState({
+    tracks: song,
+    tracksById: Object.fromEntries(song.map((t) => [t.id, t])),
+    selectedTrackId: null, selectedClipId: null, selectedClipIds: new Set(),
+    activeMidiTrackId: null, activeMidiClipId: null,
+  } as never)
+  ;(window as unknown as { __hwMockTracks?: unknown[] }).__hwMockTracks = JSON.parse(JSON.stringify(song))
+}
 
 function parseSignature(text: string | null): { num: number; den: number } | null {
   if (!text) return null

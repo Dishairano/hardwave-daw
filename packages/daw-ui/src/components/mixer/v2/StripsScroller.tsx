@@ -1,7 +1,10 @@
-import { memo, useCallback, useEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChannelStrip } from './ChannelStrip'
+import { EmptyStrip } from './EmptyStrip'
 import { useTrackStore } from '../../../stores/trackStore'
+import { useMixerSelectionStore } from '../../../stores/mixerSelectionStore'
+import { mixerSlots, mixerSlotsKey } from '../../../lib/mixerNumbers'
 import { useMultiTouchGestures } from '../../../hooks/useMultiTouchGestures'
 import { t, useLanguage } from '../../../i18n'
 
@@ -53,19 +56,27 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
   useLanguage()
   const { onSelect, selectedId } = props
 
-  // Subscribe to track ids only — adding/removing a track triggers a
-  // re-mount of the virtualizer, but field updates on individual tracks
-  // don't reach this component. Per-strip subscriptions handle those.
-  const inserts = useTrackStore((s) =>
-    s.tracks.filter((t) => t.kind !== 'Master' && t.kind !== 'Automation'),
+  // One strip per mixer number, FL's way: the inserts by their number, and
+  // the empty numbers between and after them (to 125, or the highest in
+  // use) drawn dimmed. A channel without an insert is not a strip. The
+  // strips used to be every track in list order, numbered by position, so
+  // a playlist lane was a strip and FL's insert 1 sat at strip 69.
+  // Subscribed by a key of numbers and ids only: a number coming or going
+  // re-lays the row, a fader move on one strip does not reach it.
+  const slotsKey = useTrackStore((s) => mixerSlotsKey(s.tracks))
+  const slots = useMemo(
+    () => mixerSlots(useTrackStore.getState().tracks),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [slotsKey],
   )
+  const selectedEmpty = useMixerSelectionStore((s) => s.selectedEmptyNumber)
   const addAudioTrack = useTrackStore((s) => s.addAudioTrack)
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const innerRef = useRef<HTMLDivElement | null>(null)
 
   const virtualizer = useVirtualizer({
-    count: inserts.length,
+    count: slots.length,
     getScrollElement: () => viewportRef.current,
     estimateSize: () => STRIP_W,
     overscan: OVERSCAN,
@@ -195,7 +206,7 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
       currentRef.current = max
       applyTransform()
     }
-  }, [inserts.length, applyTransform, getMaxScroll])
+  }, [slots.length, applyTransform, getMaxScroll])
 
   const visibleItems = virtualizer.getVirtualItems()
   const totalSize = virtualizer.getTotalSize()
@@ -220,11 +231,11 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
         }}
       >
         {visibleItems.map((virt) => {
-          const track = inserts[virt.index]
-          if (!track) return null
+          const slot = slots[virt.index]
+          if (!slot) return null
           return (
             <div
-              key={track.id}
+              key={slot.trackId ?? `empty-${slot.number}`}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -233,16 +244,17 @@ export const StripsScroller = memo(function StripsScroller(props: StripsScroller
                 height: '100%',
               }}
             >
-              <ChannelStrip
-                trackId={track.id}
-                index={virt.index + 1}
-                selected={selectedId === track.id}
-                onSelect={onSelect}
-                variant="insert"
-                separator={
-                  track.kind === 'Bus' || track.kind === 'Return' ? 'group' : 'none'
-                }
-              />
+              {slot.trackId ? (
+                <ChannelStrip
+                  trackId={slot.trackId}
+                  index={slot.number}
+                  selected={selectedId === slot.trackId}
+                  onSelect={onSelect}
+                  variant="insert"
+                />
+              ) : (
+                <EmptyStrip number={slot.number} selected={selectedEmpty === slot.number} />
+              )}
             </div>
           )
         })}
