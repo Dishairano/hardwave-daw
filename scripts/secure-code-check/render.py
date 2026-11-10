@@ -126,6 +126,17 @@ footer .wrap { display: flex; gap: 18px; flex-wrap: wrap; }
 }
 """
 
+# Names for [not_checked] keys in a product's config.
+CHECK_NAMES = {
+    "rust_dependencies": "Rust dependencies",
+    "npm_dependencies": "npm dependencies",
+    "secrets": "Secrets",
+    "static_analysis": "Static analysis",
+    "fuzzing": "Fuzzing",
+    "content_policy": "Window content policy",
+    "sbom": "SBOM",
+}
+
 STATUS_CLASS = {"passed": "pass", "written": "pass", "signed": "pass", "failed": "fail"}
 
 
@@ -270,7 +281,8 @@ def results(report: dict, public: bool) -> str:
     licence_line = (f'<p class="lead">Licence exceptions: {licences["count"]}, each with its reason in '
                     f'<a href="{escape(licences["source"])}"><span class="mono">deny.toml</span></a>.</p>'
                     if licences["count"] else "")
-    not_checked = "".join(f"<li><b>{escape(n['check'].replace('_', ' ').capitalize())}</b>: {escape(n['why'])}</li>"
+    not_checked = "".join(f"<li><b>{escape(CHECK_NAMES.get(n['check'], n['check'].replace('_', ' ')))}</b>: "
+                          f"{escape(n['why'])}</li>"
                           for n in report.get("not_checked", []))
     not_checked_html = (f"<h3>Not part of this product's checks</h3><ul class=\"findings\">{not_checked}</ul>"
                         if not_checked else "")

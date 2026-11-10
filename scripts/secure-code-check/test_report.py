@@ -200,7 +200,7 @@ class ReportTest(unittest.TestCase):
         self.assertIn("1 in ui (what ships)", npm["what"])
         sa = next(c for c in data["checks"] if c["id"] == "static-analysis")
         self.assertIn("Rust and TypeScript files", sa["what"])
-        self.assertIn("No fuzz targets yet.", self.html())
+        self.assertIn("<b>Fuzzing</b>: No fuzz targets yet.", self.html())
 
     def test_exceptions_come_from_deny_toml(self):
         data = self.build()
