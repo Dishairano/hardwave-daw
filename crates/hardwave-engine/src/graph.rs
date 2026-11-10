@@ -570,22 +570,20 @@ impl AudioGraph {
         }
         self.planned_latency = acc.iter().copied().max().unwrap_or(0);
         // For each edge, compute the pad samples needed so the source arrives
-        // aligned with the slowest incoming branch of the same dest.
-        // Two passes: write compensation_samples on edges, then build delay
-        // lines — separate borrows keep the borrow checker happy.
+        // aligned with the slowest incoming branch of the same dest. The
+        // slowest branch into each node is found in one pass over the
+        // edges; looking it up again for every edge made this grow with the
+        // square of the edge count (a 500-track song has over 1000 edges).
+        let mut dest_incoming_max = vec![0u32; n];
+        for e in &self.edges {
+            dest_incoming_max[e.dest] = dest_incoming_max[e.dest].max(acc[e.source]);
+        }
         let pads: Vec<u32> = self
             .edges
             .iter()
             .map(|edge| {
-                let dest_incoming_max = self
-                    .edges
-                    .iter()
-                    .filter(|e| e.dest == edge.dest)
-                    .map(|e| acc[e.source])
-                    .max()
-                    .unwrap_or(0);
                 if enabled {
-                    dest_incoming_max.saturating_sub(acc[edge.source])
+                    dest_incoming_max[edge.dest].saturating_sub(acc[edge.source])
                 } else {
                     0
                 }

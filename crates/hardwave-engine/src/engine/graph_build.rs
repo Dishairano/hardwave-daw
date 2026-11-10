@@ -820,6 +820,17 @@ impl GraphBuilder {
         // Tracks another track's output lands on. They are buses, and are
         // told so below together with the send targets.
         let mut bus_targets: Vec<String> = Vec::new();
+        // Where each track's output goes, looked up by id while walking a
+        // chain of buses. Searching the track list for every step made the
+        // walk grow with the square of the track count. The first track
+        // with an id wins, as the search did.
+        let mut output_of: HashMap<&str, Option<&str>> =
+            HashMap::with_capacity(project.tracks.len());
+        for t in &project.tracks {
+            output_of
+                .entry(t.id.as_str())
+                .or_insert(t.output_bus.as_deref());
+        }
         for track in &project.tracks {
             if !track.kind.is_audio_bearing() {
                 continue;
@@ -839,7 +850,7 @@ impl GraphBuilder {
                     // back to the current track it's a cycle, fall through to
                     // master. Otherwise use the configured bus when it maps to
                     // a real graph node.
-                    let mut visited: std::collections::HashSet<String> =
+                    let mut visited: std::collections::HashSet<&str> =
                         std::collections::HashSet::new();
                     let mut cursor: Option<&str> = Some(bus_id.as_str());
                     let mut cycle = false;
@@ -848,14 +859,10 @@ impl GraphBuilder {
                             cycle = true;
                             break;
                         }
-                        if !visited.insert(next.to_string()) {
+                        if !visited.insert(next) {
                             break;
                         }
-                        cursor = project
-                            .tracks
-                            .iter()
-                            .find(|t| t.id == next)
-                            .and_then(|t| t.output_bus.as_deref());
+                        cursor = output_of.get(next).copied().flatten();
                     }
                     match track_id_to_node.get(bus_id).copied() {
                         Some(node) if !cycle => {
@@ -1265,13 +1272,15 @@ impl GraphBuilder {
         let mut regions: Vec<ClipRegion> = clips_to_play
             .filter_map(|clip| match &clip.content {
                 hardwave_project::clip::ClipContent::Audio(audio_clip) => {
+                    // The clip's sample, looked up once: its rate, length
+                    // and the step it plays at all come from it. It was
+                    // looked up four times over for every clip, which was a
+                    // good part of building a song with thousands of them.
+                    let source = self.audio_pool.get(&audio_clip.source_path);
                     // A clip that follows the tempo is played as a stretch or
                     // as warp markers at this tempo map (`tempo_follow`), the
                     // same clip the bakes were planned from.
-                    let file_rate = self
-                        .audio_pool
-                        .get(&audio_clip.source_path)
-                        .map(|b| b.sample_rate as f64);
+                    let file_rate = source.as_ref().map(|b| b.sample_rate as f64);
                     let followed =
                         crate::tempo_follow::tempo_followed(clip, audio_clip, tempo_map, file_rate);
                     let audio_clip: &hardwave_project::clip::AudioClip = &followed;
@@ -1302,9 +1311,8 @@ impl GraphBuilder {
                     };
                     // The sample's window: its start and length, and
                     // its tail cut where it falls under the trim level.
-                    let frames = self
-                        .audio_pool
-                        .get(&audio_clip.source_path)
+                    let frames = source
+                        .as_ref()
                         .map(|b| b.num_frames as u64)
                         .unwrap_or(u64::MAX);
                     let trim_end = treatment.trim_threshold().and_then(|share| {
@@ -1384,8 +1392,8 @@ impl GraphBuilder {
                     let warp_baked = if audio_clip.warp_markers.is_empty() || treatment.resample {
                         None
                     } else {
-                        self.audio_pool
-                            .get(&audio_clip.source_path)
+                        source
+                            .as_ref()
                             .map(|b| b.sample_rate as f64)
                             .and_then(|buffer_rate| {
                                 let unity = if buffer_rate > 0.0 {
@@ -1434,7 +1442,14 @@ impl GraphBuilder {
                     // the render rate, stayed in tune. A mix would come out
                     // with its samples and its synths in different keys.
                     // Ratio is 1.0 during playback, where the two agree.
-                    let source_step = match self.audio_pool.get(&region_source_id) {
+                    let other_source;
+                    let region_buffer = if region_source_id == audio_clip.source_path {
+                        source.as_ref()
+                    } else {
+                        other_source = self.audio_pool.get(&region_source_id);
+                        other_source.as_ref()
+                    };
+                    let source_step = match region_buffer {
                         Some(buf)
                             if buf.sample_rate != 0
                                 && (buf.sample_rate as f64 - sample_rate).abs() > f64::EPSILON =>
