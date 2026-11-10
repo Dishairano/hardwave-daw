@@ -2700,6 +2700,65 @@ impl DawEngine {
         times
     }
 
+    /// Play `total_samples` frames of the project through the callback
+    /// playback runs, block by block on the calling thread, without a sound
+    /// card, handing each interleaved stereo block to `on_block` (false
+    /// stops early).
+    ///
+    /// Unlike a render, it reads the engine's own MIDI input
+    /// ([`Self::midi_input`]), fills its capture ring
+    /// ([`Self::midi_capture_ring`]), and plays or stands still as the
+    /// engine's transport does. It is how a key played into the engine is
+    /// checked end to end without a device: the live MIDI smoke tests use
+    /// it.
+    ///
+    /// Never for an export, a freeze or a bounce: those must not hear the
+    /// keyboard (see [`Self::prepare_offline_render`]). It refuses while the
+    /// engine is running, as the audio thread reads the same input and the
+    /// two would split the keys between them.
+    pub fn play_live_without_device(
+        &self,
+        sample_rate: u32,
+        total_samples: u64,
+        mut on_block: impl FnMut(&[f32]) -> bool,
+    ) -> Result<(), String> {
+        if self.is_running() {
+            return Err("the engine is running: its audio thread reads the live input".into());
+        }
+        let buffer_size: usize = 1024;
+        let mut callback = self.offline_callback(
+            sample_rate,
+            buffer_size,
+            0,
+            None,
+            |_| {},
+            Arc::new(Mutex::new(None)),
+        );
+        // What makes it the live path: the engine's own MIDI input and
+        // capture ring in place of the render's, and the engine's transport
+        // deciding whether the song plays.
+        callback.midi_input = Arc::clone(&self.midi_input);
+        callback.midi_capture_ring = Arc::clone(&self.midi_capture_ring);
+        callback.transport.playing.store(
+            self.transport
+                .playing
+                .load(std::sync::atomic::Ordering::Relaxed),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let mut buf = vec![0.0_f32; buffer_size * 2];
+        let mut left = total_samples;
+        while left > 0 {
+            let frames = left.min(buffer_size as u64) as usize;
+            buf.fill(0.0);
+            callback.process(&mut buf, frames, 2);
+            if !on_block(&buf[..frames * 2]) {
+                break;
+            }
+            left -= frames as u64;
+        }
+        Ok(())
+    }
+
     /// A private callback over a snapshot of the project, for renders
     /// that happen beside playback rather than through the sound card.
     fn offline_callback(
@@ -2815,6 +2874,7 @@ impl DawEngine {
             // export ran landed in the file at whatever point the render had
             // reached, never reached the instrument being played, and went
             // into the capture ring at the render's positions.
+            // [`DawEngine::play_live_without_device`] swaps the live ones in.
             Arc::new(Mutex::new(MidiInputManager::new())),
             Arc::new(Mutex::new(MidiCaptureRing::new(64))),
             sample_rate,
