@@ -475,7 +475,17 @@ fn write_sample_dithered(
             let v = (x.clamp(-1.0, 1.0) * max).round() as i32;
             wav.write_sample(v)
         }
-        _ => wav.write_sample(s.clamp(-1.0, 1.0)),
+        // Float keeps everything above full scale: a freeze, bounce or
+        // consolidate is played back through the track's fader, and a part
+        // that runs hot is turned down there. Clamped at 1.0, a snare at
+        // +7.5 dBFS came back flattened to 0 dBFS. Only a sample that is
+        // not a number at all is left out, as silence.
+        // Float keeps everything above full scale: a freeze, bounce or
+        // consolidate is played back through the track's fader, and a part
+        // that runs hot is turned down there. Clamped at 1.0, a snare at
+        // +7.5 dBFS came back flattened to 0 dBFS. Only a sample that is
+        // not a number at all is left out, as silence.
+        _ => wav.write_sample(if s.is_finite() { s } else { 0.0 }),
     }
 }
 
@@ -3544,6 +3554,169 @@ mod placing_tests {
         assert!(engine.undo());
         assert!(!engine.project.lock().track(&id).unwrap().frozen);
         assert_eq!(clip_ids(&engine, &id), ["a", "b"], "and leaves no render");
+    }
+
+    /// A clip that starts over a longer one on the same track plays on top
+    /// of it, and the longer one plays on at full level: a clap at bar 3
+    /// made a beat from bar 1 fade away to its end. So consolidating a
+    /// range that starts inside the long clip changed the sound, because
+    /// the glued clip overlapped it for longer than the clap had.
+    #[test]
+    fn consolidating_a_part_on_top_of_a_long_clip_sounds_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = DawEngine::new();
+        let sr = engine.current_sample_rate();
+        sine_source(&engine, 4 * sr as usize);
+        let clap: Vec<f32> = (0..sr as usize)
+            .map(|n| (std::f32::consts::TAU * 660.0 * n as f32 / sr as f32).sin() * 0.4)
+            .collect();
+        engine.audio_pool.insert(
+            "clap".to_string(),
+            hardwave_engine::AudioBuffer {
+                channels: vec![clap.clone(), clap],
+                sample_rate: sr,
+                num_frames: sr as usize,
+            },
+        );
+        let id = {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Drums".into());
+            let t = p.track_mut(&id).unwrap();
+            t.clips.push(sine_clip("beat", &id, 0, 3840, 4 * sr as u64));
+            let mut c = clip("clap", &id, 1920, 480);
+            if let ClipContent::Audio(a) = &mut c.content {
+                a.source_end = sr as u64;
+            }
+            t.clips.push(c);
+            id
+        };
+        let at = |ticks: u64| {
+            engine
+                .project
+                .lock()
+                .tempo_map
+                .tick_to_samples(ticks, sr as f64) as usize
+                * 2
+        };
+        let len = at(3840) as u64 / 2;
+        let heard = render(&engine, len);
+
+        // The beat alone, to hear what it does once the clap is over.
+        let set_clap_muted = |muted: bool| {
+            let mut p = engine.project.lock();
+            for c in p.track_mut(&id).unwrap().clips.iter_mut() {
+                if let ClipContent::Audio(a) = &mut c.content {
+                    if a.id == "clap" {
+                        a.muted = muted;
+                    }
+                }
+            }
+        };
+        set_clap_muted(true);
+        let beat = render(&engine, len);
+        set_clap_muted(false);
+        let after_clap = at(2400) + 2 * (sr as usize / 100);
+        let diff = worst_difference(&heard[after_clap..], &beat[after_clap..]);
+        assert!(
+            diff < 1e-4,
+            "the beat plays on at full level after the clap: off by {diff}"
+        );
+        let diff = worst_difference(&heard[at(1920)..at(2400)], &beat[at(1920)..at(2400)]);
+        assert!(diff > 0.1, "the clap is heard on top of the beat: {diff}");
+
+        // Consolidate a range that starts inside the beat, around the clap.
+        let mut glued = Vec::new();
+        let target = id.clone();
+        engine
+            .prepare_offline_render(sr, at(1800) as u64 / 2, None, move |p| {
+                super::prepare_consolidate_render(p, &target, 1800, 2500, &|_| false)
+            })
+            .for_a_track()
+            .run((at(2500) - at(1800)) as u64 / 2, |b| {
+                glued.extend_from_slice(b);
+                true
+            });
+        let file = write_file(&engine, dir.path(), "glued.wav", &glued);
+        place_consolidated(&engine, &id, &file, 1800, 2500).unwrap();
+        let played = render(&engine, len);
+        let diff = worst_difference(&heard, &played);
+        assert!(
+            diff < 1e-3,
+            "consolidated, the song sounds as it did: off by {diff}"
+        );
+    }
+
+    /// A freeze keeps a part that runs over full scale as it played. The
+    /// render file is 32-bit float but every sample was clamped to 1.0, so
+    /// a snare with +12 dB of clip gain at +7.5 dBFS came back at 0 dBFS,
+    /// flattened, and the frozen track sounded quieter and distorted.
+    #[test]
+    fn a_frozen_part_above_full_scale_comes_back_as_it_played() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let engine = parking_lot::Mutex::new(DawEngine::new());
+        let sr = engine.lock().current_sample_rate();
+        let (id, len) = {
+            let e = engine.lock();
+            sine_source(&e, sr as usize);
+            let mut p = e.project.lock();
+            let id = p.add_audio_track("Snare".into());
+            let mut c = sine_clip("hot", &id, 0, 1920, sr as u64);
+            if let ClipContent::Audio(a) = &mut c.content {
+                a.gain_db = 12.0;
+            }
+            p.track_mut(&id).unwrap().clips.push(c);
+            let len = p.tempo_map.tick_to_samples(1920, sr as f64);
+            (id, len)
+        };
+        let freeze_render = |target: String| {
+            move |p: &mut hardwave_project::Project| {
+                super::isolate_track_for_render(p, &target, true, &|_| true);
+                super::leave_the_fader_out(p, &target);
+            }
+        };
+
+        let mut live = Vec::new();
+        engine
+            .lock()
+            .prepare_offline_render(sr, 0, None, freeze_render(id.clone()))
+            .for_a_track()
+            .run(len, |b| {
+                live.extend_from_slice(b);
+                true
+            });
+
+        let out = dir.path().join("frozen.wav");
+        let done = super::render_unlocked(
+            engine.lock(),
+            &out,
+            super::format_for_a_track(sr),
+            len,
+            0,
+            &Arc::new(AtomicBool::new(false)),
+            |_, _| {},
+            super::RenderAs::ATrack,
+            freeze_render(id.clone()),
+        )
+        .unwrap();
+        assert!(done, "the freeze finished");
+        let file: Vec<f32> = hound::WavReader::open(&out)
+            .unwrap()
+            .samples::<f32>()
+            .map(|s| s.unwrap())
+            .collect();
+
+        let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak(&live) > 1.5, "the part runs hot: {}", peak(&live));
+        assert_eq!(file.len(), live.len());
+        let diff = worst_difference(&file, &live);
+        assert!(
+            diff < 1e-6,
+            "the frozen render is the live one, peak {} for {}: off by {diff}",
+            peak(&file),
+            peak(&live)
+        );
     }
 }
 
