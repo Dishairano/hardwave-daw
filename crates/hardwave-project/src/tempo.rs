@@ -8,7 +8,7 @@ pub enum TempoRamp {
     Linear,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TempoEntry {
     pub tick: u64,
     pub bpm: f64,
@@ -26,7 +26,7 @@ pub struct BeatGrid {
     pub beats_per_bar: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TempoMap {
     pub entries: Vec<TempoEntry>,
 }

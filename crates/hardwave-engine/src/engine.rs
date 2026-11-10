@@ -180,7 +180,9 @@ use crate::master_node::MasterNode;
 use crate::master_tap::{self, SharedMasterTap};
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 use crate::transport::{TransportCommand, TransportState};
+use hardwave_project::snapshot::Snapshot;
 use hardwave_project::{InputChannel, RecordSource};
+use std::borrow::Cow;
 
 /// Shared per-track meter map. Rebuilt when the audio graph is rebuilt.
 pub type TrackMeterMap = Arc<Mutex<HashMap<String, Arc<TrackMeterState>>>>;
@@ -188,14 +190,22 @@ pub type TrackMeterMap = Arc<Mutex<HashMap<String, Arc<TrackMeterState>>>>;
 /// Maximum number of snapshots kept on each side of the history.
 const HISTORY_CAP: usize = 256;
 
+/// Roughly how many bytes the history may hold before its oldest steps
+/// go. Steps share what did not change, so a small edit costs a few
+/// kilobytes even on a big song; this only bites when edit after edit
+/// changes the whole song (moving every clip of a 3,000-clip FL song,
+/// over and over), where each step is a whole copy again.
+const HISTORY_BYTES: usize = 128 * 1024 * 1024;
+
 /// How many modulation routes the audio thread follows. Its state is sized
 /// for this many up front, so it never allocates; routes past it are left
 /// still.
 const MAX_MOD_ROUTES: usize = 256;
 
-/// Snapshot-based undo/redo. A snapshot is a full `Project` clone; the struct is
-/// small (track/clip metadata only — audio samples live in the AudioPool and are
-/// referenced by source id), so cloning is cheap.
+/// Snapshot-based undo/redo. Each step keeps the song in parts it shares
+/// with the step next to it ([`Snapshot`]), so a step costs what its edit
+/// changed; audio samples live in the AudioPool and are referenced by
+/// source id.
 pub struct History {
     /// The song before each edit, oldest first.
     undo: Vec<Step>,
@@ -209,11 +219,15 @@ pub struct History {
     edits: u64,
     /// `edits` when the song was last saved or opened.
     saved_at: u64,
+    /// Roughly how many bytes the steps hold together.
+    bytes: usize,
+    /// `HISTORY_BYTES`, smaller in tests.
+    max_bytes: usize,
 }
 
 /// One edit: a song it can be undone or redone to, and what the edit was.
 struct Step {
-    project: Project,
+    song: Snapshot,
     /// What the app called the edit, when it said.
     label: Option<String>,
     /// What the edit changed, read off the songs, once worked out. Kept
@@ -233,9 +247,9 @@ pub struct HistoryEntry {
 }
 
 impl Step {
-    fn new(project: Project) -> Self {
+    fn new(song: Snapshot) -> Self {
         Self {
-            project,
+            song,
             label: None,
             described: None,
             at_ms: std::time::SystemTime::now()
@@ -245,22 +259,29 @@ impl Step {
         }
     }
 
-    /// The same edit with another song, as it moves between the stacks:
-    /// the song it held, and the step holding `project`.
-    fn swap(mut self, project: Project) -> (Project, Self) {
-        let held = std::mem::replace(&mut self.project, project);
-        (held, self)
+    /// Move the edit to the other stack: `song` becomes the song it holds
+    /// and the song it held comes back. Returns the bytes the history
+    /// grew by, which can be less than nothing.
+    fn swap(&mut self, song: &mut Project) -> isize {
+        let back = self.song.to_project();
+        // The song as it is shares its parts with the one it goes back to:
+        // the two differ by this one edit.
+        let (now, added) = Snapshot::take(song, Some(&self.song));
+        let freed = self.song.bytes_freed_by_drop();
+        self.song = now;
+        *song = back;
+        added as isize - freed as isize
     }
 }
 
 /// The row for an edit that turned `before` into `after`. A description
 /// worked out between two snapshots (`keep`) is stored in `described`.
-fn history_row(
+/// The songs are only made when the edit has to be described.
+fn history_row<'a>(
     label: &Option<String>,
     described: &mut Option<hardwave_project::describe::Change>,
     at_ms: u64,
-    before: &Project,
-    after: &Project,
+    songs: impl FnOnce() -> (Cow<'a, Project>, Cow<'a, Project>),
     keep: bool,
 ) -> HistoryEntry {
     let change = match (label, &*described) {
@@ -270,7 +291,8 @@ fn history_row(
         },
         (None, Some(change)) => change.clone(),
         (None, None) => {
-            let change = hardwave_project::describe::describe_change(before, after);
+            let (before, after) = songs();
+            let change = hardwave_project::describe::describe_change(&before, &after);
             if keep {
                 *described = Some(change.clone());
             }
@@ -291,17 +313,56 @@ impl History {
             trimmed: false,
             edits: 0,
             saved_at: 0,
+            bytes: 0,
+            max_bytes: HISTORY_BYTES,
         }
     }
 
-    pub fn push(&mut self, snapshot: Project) {
+    /// Keep `song` as it is before an edit. It shares every part the edit
+    /// does not change with the step before it, and is left as it was.
+    pub fn push(&mut self, song: &mut Project) {
         self.note_edit();
+        while let Some(step) = self.redo.pop() {
+            self.forget(step);
+        }
+        let (snapshot, added) = Snapshot::take(song, self.undo.last().map(|step| &step.song));
+        self.bytes += added;
         self.undo.push(Step::new(snapshot));
-        if self.undo.len() > HISTORY_CAP {
-            self.undo.remove(0);
+        self.trim();
+    }
+
+    /// Drop a step, giving back what only it held.
+    fn forget(&mut self, step: Step) {
+        self.bytes = self.bytes.saturating_sub(step.song.bytes_freed_by_drop());
+    }
+
+    /// Keep the history within its caps: steps past `HISTORY_CAP` on
+    /// either side go, then the oldest undo steps (and after them the
+    /// furthest redo steps) while it holds more than `HISTORY_BYTES`. The
+    /// newest step on each side always stays, so the last edit can be
+    /// undone however big it is.
+    fn trim(&mut self) {
+        while self.undo.len() > HISTORY_CAP {
+            let step = self.undo.remove(0);
+            self.forget(step);
             self.trimmed = true;
         }
-        self.redo.clear();
+        while self.redo.len() > HISTORY_CAP {
+            let step = self.redo.remove(0);
+            self.forget(step);
+        }
+        while self.bytes > self.max_bytes {
+            if self.undo.len() > 1 {
+                let step = self.undo.remove(0);
+                self.forget(step);
+                self.trimmed = true;
+            } else if self.redo.len() > 1 {
+                let step = self.redo.remove(0);
+                self.forget(step);
+            } else {
+                break;
+            }
+        }
     }
 
     /// Forget every step. Whether the song changed since it was saved is
@@ -310,6 +371,7 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.trimmed = false;
+        self.bytes = 0;
     }
 
     /// The song changed without a step of its own: a later move of a
@@ -333,29 +395,40 @@ impl History {
         self.edits != self.saved_at
     }
 
-    pub fn undo(&mut self, current: Project) -> Option<Project> {
-        let (project, step) = self.undo.pop()?.swap(current);
+    /// Put `song` back as it was before the newest edit. Returns whether
+    /// there was an edit to undo.
+    pub fn undo(&mut self, song: &mut Project) -> bool {
+        let Some(mut step) = self.undo.pop() else {
+            return false;
+        };
         self.note_edit();
+        let grew = step.swap(song);
+        self.bytes = self.bytes.saturating_add_signed(grew);
         self.redo.push(step);
-        if self.redo.len() > HISTORY_CAP {
-            self.redo.remove(0);
-        }
-        Some(project)
+        self.trim();
+        true
     }
 
-    pub fn redo(&mut self, current: Project) -> Option<Project> {
-        let (project, step) = self.redo.pop()?.swap(current);
+    /// Make the newest undone edit again. Returns whether there was one.
+    pub fn redo(&mut self, song: &mut Project) -> bool {
+        let Some(mut step) = self.redo.pop() else {
+            return false;
+        };
         self.note_edit();
+        let grew = step.swap(song);
+        self.bytes = self.bytes.saturating_add_signed(grew);
         self.undo.push(step);
-        if self.undo.len() > HISTORY_CAP {
-            self.undo.remove(0);
-            self.trimmed = true;
-        }
-        Some(project)
+        self.trim();
+        true
     }
 
     pub fn sizes(&self) -> (usize, usize) {
         (self.undo.len(), self.redo.len())
+    }
+
+    /// Roughly how many bytes the steps hold together.
+    pub fn bytes(&self) -> usize {
+        self.bytes
     }
 
     /// Name the newest edit, if it was made at or after `since_ms` (when
@@ -385,19 +458,24 @@ impl History {
         for i in 0..applied {
             let (head, tail) = self.undo.split_at_mut(i + 1);
             let Step {
-                project,
+                song,
                 label,
                 described,
                 at_ms,
                 ..
             } = &mut head[i];
-            let after = tail.first().map(|next| &next.project);
+            let after = tail.first().map(|next| &next.song);
             out.push(history_row(
                 label,
                 described,
                 *at_ms,
-                project,
-                after.unwrap_or(current),
+                || {
+                    let after = match after {
+                        Some(after) => Cow::Owned(after.to_project()),
+                        None => Cow::Borrowed(current),
+                    };
+                    (Cow::Owned(song.to_project()), after)
+                },
                 after.is_some(),
             ));
         }
@@ -408,19 +486,24 @@ impl History {
             let index = undone - 1 - k;
             let (head, tail) = self.redo.split_at_mut(index + 1);
             let Step {
-                project,
+                song,
                 label,
                 described,
                 at_ms,
                 ..
             } = &mut head[index];
-            let before = tail.first().map(|previous| &previous.project);
+            let before = tail.first().map(|previous| &previous.song);
             out.push(history_row(
                 label,
                 described,
                 *at_ms,
-                before.unwrap_or(current),
-                project,
+                || {
+                    let before = match before {
+                        Some(before) => Cow::Owned(before.to_project()),
+                        None => Cow::Borrowed(current),
+                    };
+                    (before, Cow::Owned(song.to_project()))
+                },
                 before.is_some(),
             ));
         }
@@ -448,25 +531,29 @@ mod history_list_tests {
     fn the_list_is_the_undo_steps_with_their_names_and_follows_undo() {
         let mut h = History::new();
         // Edit one, named by the app; edit two, not named.
-        h.push(song(120.0));
+        h.push(&mut song(120.0));
         assert!(h.label_newest("Set tempo".into(), 0));
-        h.push(song(130.0));
-        let current = song(140.0);
+        h.push(&mut song(130.0));
+        let mut current = song(140.0);
         let (rows, applied) = h.entries(&current);
         let labels: Vec<&str> = rows.iter().map(|r| r.change.label.as_str()).collect();
         assert_eq!(labels, vec!["Set tempo", "Tempo"]);
         assert_eq!(applied, 2);
 
         // Undo moves the cursor, not the names.
-        let back = h.undo(current).unwrap();
-        let (rows, applied) = h.entries(&back);
+        assert!(h.undo(&mut current));
+        assert_eq!(current.tempo_map.entries[0].bpm, 130.0);
+        let (rows, applied) = h.entries(&current);
         let labels: Vec<&str> = rows.iter().map(|r| r.change.label.as_str()).collect();
         assert_eq!(labels, vec!["Set tempo", "Tempo"]);
         assert_eq!(applied, 1);
-        let back = h.undo(back).unwrap();
-        assert_eq!(h.entries(&back).1, 0);
-        let forward = h.redo(back).unwrap();
-        let (rows, applied) = h.entries(&forward);
+        assert!(h.undo(&mut current));
+        assert_eq!(current.tempo_map.entries[0].bpm, 120.0);
+        assert_eq!(h.entries(&current).1, 0);
+        assert!(!h.undo(&mut current), "nothing older");
+        assert!(h.redo(&mut current));
+        assert_eq!(current.tempo_map.entries[0].bpm, 130.0);
+        let (rows, applied) = h.entries(&current);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].change.label, "Set tempo");
         assert_eq!(applied, 1);
@@ -476,16 +563,16 @@ mod history_list_tests {
     fn a_name_is_only_for_an_edit_made_since_its_command_started() {
         let mut h = History::new();
         assert!(!h.label_newest("Nothing to name".into(), 0), "no edit yet");
-        h.push(song(120.0));
+        h.push(&mut song(120.0));
         let made = h.undo.last().unwrap().at_ms;
         // A command started after the step and took none of its own: its
         // name must not land on the step before it.
         assert!(!h.label_newest("Set volume".into(), made + 1));
         assert!(h.label_newest("First".into(), made));
         assert!(!h.label_newest("Second".into(), made), "named once");
-        let current = song(125.0);
-        let back = h.undo(current).unwrap();
-        h.redo(back).unwrap();
+        let mut current = song(125.0);
+        assert!(h.undo(&mut current));
+        assert!(h.redo(&mut current));
         assert!(
             !h.label_newest("After redo".into(), made + 1),
             "a redo is not a new edit"
@@ -496,7 +583,7 @@ mod history_list_tests {
     fn an_edit_since_the_last_save_is_known_and_clearing_the_list_does_not_hide_it() {
         let mut h = History::new();
         assert!(!h.has_unsaved_edits(), "a song as opened");
-        h.push(song(150.0));
+        h.push(&mut song(150.0));
         assert!(h.has_unsaved_edits(), "a new tempo is an edit");
         h.mark_saved();
         assert!(!h.has_unsaved_edits());
@@ -507,10 +594,11 @@ mod history_list_tests {
         h.mark_saved();
 
         // Undo changes the song on screen from the one on disk.
-        let back = h.undo(song(155.0)).unwrap();
+        let mut current = song(155.0);
+        assert!(h.undo(&mut current));
         assert!(h.has_unsaved_edits());
         h.mark_saved();
-        h.redo(back).unwrap();
+        assert!(h.redo(&mut current));
         assert!(h.has_unsaved_edits());
 
         // The history list's Clear forgets the steps, not the edit.
@@ -521,12 +609,151 @@ mod history_list_tests {
     #[test]
     fn the_oldest_step_says_whether_it_is_the_song_as_opened() {
         let mut h = History::new();
-        h.push(song(120.0));
+        h.push(&mut song(120.0));
         assert!(h.starts_at_open());
         for i in 0..HISTORY_CAP {
-            h.push(song(120.0 + i as f64));
+            h.push(&mut song(120.0 + i as f64));
         }
         assert!(!h.starts_at_open(), "the first step went past the cap");
+    }
+
+    /// A song with a few busy tracks among the inserts, like an import.
+    fn busy_song() -> Project {
+        let mut p = Project::default();
+        for t in 1..=6 {
+            let track_id = p.tracks[t].id.clone();
+            for c in 0..100u64 {
+                let mut clip =
+                    hardwave_midi::MidiClip::new(format!("m{t}-{c}"), "Bass".into(), 3840);
+                clip.notes = vec![hardwave_midi::MidiNote::default(); 16];
+                p.tracks[t]
+                    .clips
+                    .push(hardwave_project::clip::ClipPlacement {
+                        content: hardwave_project::clip::ClipContent::Midi(
+                            hardwave_project::clip::MidiClipRef {
+                                id: format!("c{t}-{c}"),
+                                clip,
+                            },
+                        ),
+                        track_id: track_id.clone(),
+                        position_ticks: c * 3840,
+                        length_ticks: 3840,
+                        lane: 0,
+                        color: None,
+                        row: Some(t as u32),
+                    });
+            }
+        }
+        p
+    }
+
+    fn file(p: &Project) -> Vec<u8> {
+        p.to_bytes().unwrap()
+    }
+
+    #[test]
+    fn undo_and_redo_give_back_every_song_exactly() {
+        let mut h = History::new();
+        let mut song = busy_song();
+        let mut songs = vec![file(&song)];
+        for n in 0..40usize {
+            h.push(&mut song);
+            match n % 5 {
+                0 => song.tracks[1 + n % 6].clips[n].position_ticks += 96,
+                1 => song.tracks[n].volume_db = -3.0,
+                2 => {
+                    song.tracks[2].clips.drain(0..3);
+                }
+                3 => {
+                    let t = song.tracks.remove(10);
+                    song.tracks.insert(20, t);
+                }
+                _ => song.tempo_map.entries[0].bpm += 1.0,
+            }
+            songs.push(file(&song));
+        }
+        for n in (0..40).rev() {
+            assert!(h.undo(&mut song));
+            assert!(file(&song) == songs[n], "undo to song {n}");
+        }
+        for (n, after) in songs.iter().enumerate().skip(1) {
+            assert!(h.redo(&mut song));
+            assert!(file(&song) == *after, "redo to song {n}");
+        }
+        // Halfway back, a new edit drops the redo steps and still undoes.
+        for _ in 0..20 {
+            assert!(h.undo(&mut song));
+        }
+        h.push(&mut song);
+        song.tracks[3].muted = true;
+        assert_eq!(h.sizes(), (21, 0));
+        assert!(h.undo(&mut song));
+        assert!(file(&song) == songs[20]);
+    }
+
+    #[test]
+    fn a_small_edit_on_a_busy_song_holds_a_small_step() {
+        let mut h = History::new();
+        let mut song = busy_song();
+        h.push(&mut song);
+        let whole = h.bytes();
+        song.tracks[3].clips[50].position_ticks += 96;
+        h.push(&mut song);
+        song.tracks[4].volume_db = -6.0;
+        h.push(&mut song);
+        let two_edits = h.bytes() - whole;
+        assert!(two_edits * 20 < whole, "{two_edits} bytes against {whole}");
+        // Undo and redo cost about as little.
+        assert!(h.undo(&mut song));
+        assert!(h.redo(&mut song));
+        assert!(h.bytes() - whole < 2 * two_edits);
+    }
+
+    #[test]
+    fn the_history_stays_within_its_bytes_and_keeps_the_newest_steps() {
+        let mut h = History::new();
+        let mut song = busy_song();
+        h.push(&mut song);
+        let whole = h.bytes();
+        h.clear();
+        // Room for a few whole songs.
+        h.max_bytes = whole * 5;
+        let mut songs = Vec::new();
+        for _ in 0..30 {
+            songs.push(file(&song));
+            h.push(&mut song);
+            // Every clip moves: nothing to share with the step before.
+            for t in song.tracks.iter_mut() {
+                for c in t.clips.iter_mut() {
+                    c.position_ticks += 96;
+                }
+            }
+            assert!(
+                h.bytes() <= h.max_bytes,
+                "{} over {}",
+                h.bytes(),
+                h.max_bytes
+            );
+        }
+        let (kept, _) = h.sizes();
+        assert!((3..30).contains(&kept), "{kept} steps kept");
+        assert!(!h.starts_at_open());
+        for n in (30 - kept..30).rev() {
+            assert!(h.undo(&mut song));
+            assert!(file(&song) == songs[n], "undo to song {n}");
+        }
+        assert!(!h.undo(&mut song));
+        while h.redo(&mut song) {
+            assert!(h.bytes() <= h.max_bytes);
+        }
+
+        // One step bigger than the cap is still kept: the last edit can
+        // always be undone.
+        h.clear();
+        h.max_bytes = 1;
+        h.push(&mut song);
+        h.push(&mut song);
+        assert_eq!(h.sizes(), (1, 0));
     }
 }
 
@@ -924,8 +1151,9 @@ impl DawEngine {
             self.history.lock().note_edit();
             return;
         }
-        let snap = self.project.lock().clone();
-        self.history.lock().push(snap);
+        // The song, then the history: the order every caller takes them in.
+        let mut song = self.project.lock();
+        self.history.lock().push(&mut song);
     }
 
     /// Start treating the mutations that follow as one undo step.
@@ -960,26 +1188,14 @@ impl DawEngine {
     /// Roll the project back to the most recent snapshot. Returns true when a snapshot
     /// was consumed. The caller is responsible for calling `rebuild_graph()` afterwards.
     pub fn undo(&self) -> bool {
-        let current = self.project.lock().clone();
-        let prev = self.history.lock().undo(current);
-        if let Some(p) = prev {
-            *self.project.lock() = p;
-            true
-        } else {
-            false
-        }
+        let mut song = self.project.lock();
+        self.history.lock().undo(&mut song)
     }
 
     /// Re-apply the most recently undone mutation. Returns true on success.
     pub fn redo(&self) -> bool {
-        let current = self.project.lock().clone();
-        let next = self.history.lock().redo(current);
-        if let Some(p) = next {
-            *self.project.lock() = p;
-            true
-        } else {
-            false
-        }
+        let mut song = self.project.lock();
+        self.history.lock().redo(&mut song)
     }
 
     /// Name the edit just made, for the history list. See
@@ -9469,9 +9685,8 @@ mod track_render_tests {
         };
         // A fifth of a second from a frame, interleaved: the step is a
         // sixteenth in, a tenth of a second at 140 BPM.
-        let from = |s: &[f32], frame: usize| -> f32 {
-            peak(&s[2 * frame..2 * (frame + SR as usize / 5)])
-        };
+        let from =
+            |s: &[f32], frame: usize| -> f32 { peak(&s[2 * frame..2 * (frame + SR as usize / 5)]) };
         let once = render(true);
         assert!(from(&once, 0) > 0.05, "the step plays near the start");
         assert!(from(&once, bar) < 1e-4, "and not again in the tail");

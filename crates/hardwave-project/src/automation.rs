@@ -9,7 +9,7 @@ pub enum AutomationTarget {
     SendLevel { send_index: usize },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CurveMode {
     Linear,
     Bezier,
@@ -25,7 +25,7 @@ pub enum CurveMode {
 
 const STAIR_STEPS: u32 = 4;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutomationPoint {
     pub tick: u64,
     /// Normalized value 0.0..1.0
@@ -35,7 +35,7 @@ pub struct AutomationPoint {
     pub tension: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutomationLane {
     pub id: String,
     pub target: AutomationTarget,
