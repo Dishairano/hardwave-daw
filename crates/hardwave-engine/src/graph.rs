@@ -1,7 +1,5 @@
 //! Audio graph — DAG of processing nodes, topologically sorted for real-time execution.
 
-use std::collections::HashMap;
-
 pub type NodeId = usize;
 
 /// Context passed to each node during processing.
@@ -112,23 +110,32 @@ pub trait AudioNode: Send {
         None
     }
 
-    /// Hand off the keys held and the arpeggio playing on a live keyboard,
-    /// for the node that replaces this one in a graph rebuild. Default
-    /// `None`; an instrument track's node overrides it while busy.
-    fn take_live_midi(&mut self) -> Option<Box<crate::live_midi_fx::LiveMidiFx>> {
-        None
-    }
-
-    /// Carry on from what a replaced node handed off with `take_live_midi`.
-    fn restore_live_midi(&mut self, live: Box<crate::live_midi_fx::LiveMidiFx>) {
-        let _ = live;
-    }
-
     /// Reattach a previously-stashed plug-in chain after a graph rebuild.
     /// No-op for non-track nodes; TrackNode replaces its empty chain
     /// with the supplied one.
     fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
         let _ = chain;
+    }
+
+    /// Carry on the sound of `old`, the node this one replaces when a new
+    /// graph is swapped in: the voices still ringing, the filter and delay
+    /// state, the gain ramp, where the playhead was. Without it every edit
+    /// during playback cut every synth note and filter tail. Runs on the
+    /// audio thread: it swaps state, never allocates or frees. Default:
+    /// nothing to carry.
+    fn carry_on_from(&mut self, old: &mut dyn AudioNode) {
+        let _ = old;
+    }
+
+    /// The node as `Any`, so `carry_on_from` can see whether the node it
+    /// replaces is of its own kind. `None` for nodes that carry nothing.
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
+
+    /// How many plug-ins the node's chain holds.
+    fn chain_len(&self) -> usize {
+        0
     }
 
     /// Build-time insert population for offline render: push a pre-built
@@ -175,10 +182,11 @@ struct Edge {
     compensation_samples: u32,
 }
 
-/// Compensation delay lines taken from a graph that is being rebuilt, by
-/// (source track, source port, destination track, destination port).
-#[derive(Default)]
-pub struct HeldDelays(HashMap<(String, usize, String, usize), EdgeDelayLine>);
+/// Where a compensation line sits, by the tracks and ports at each end of
+/// its edge (source track, source port, destination track, destination
+/// port), and the edge's index. A graph built in place of another carries
+/// on with the lines of the edges they share (`carry_delays_from`).
+type DelayKey = (String, usize, String, usize, usize);
 
 /// Delay line for one edge's PDC compensation. `ring` holds `capacity`
 /// samples; `write_pos` is the next index to write to.
@@ -302,6 +310,13 @@ pub struct AudioGraph {
     /// being used. `None` is the plain one-thread path, which is what
     /// every build did until this existed.
     pool: Option<std::sync::Arc<crate::parallel::WorkerPool>>,
+    /// The edges with a compensation line between two tracks, sorted, so a
+    /// graph swapped in for this one finds the lines it shares with it in
+    /// one pass (`index_delays`, `carry_delays_from`).
+    delay_keys: Vec<DelayKey>,
+    /// The critical-path latency `finalize_pdc` worked out, with the chain
+    /// delays it was told.
+    planned_latency: u32,
 }
 
 impl AudioGraph {
@@ -320,6 +335,8 @@ impl AudioGraph {
             buffer_size,
             levels: crate::parallel::Levels::default(),
             pool: None,
+            delay_keys: Vec::new(),
+            planned_latency: 0,
         }
     }
 
@@ -400,65 +417,75 @@ impl AudioGraph {
         self.order_dirty = true;
     }
 
-    /// Take the compensation delay lines out of a graph about to be cleared,
-    /// with the tracks and ports at each end of their edge, for the graph
-    /// built in its place (`restore_delays`).
-    pub fn take_delays(&mut self) -> HeldDelays {
-        let mut held = HashMap::new();
-        for (edge, line) in self.edges.iter().zip(self.edge_delays.iter_mut()) {
-            let (Some(source), Some(dest)) = (
-                self.nodes.get(edge.source).and_then(|n| n.track_id()),
-                self.nodes.get(edge.dest).and_then(|n| n.track_id()),
-            ) else {
-                continue;
-            };
-            if let Some(line) = line.take() {
-                let key = (
-                    source.to_string(),
-                    edge.source_port,
-                    dest.to_string(),
-                    edge.dest_port,
-                );
-                held.insert(key, line);
-            }
-        }
-        HeldDelays(held)
-    }
-
-    /// After `finalize_pdc`: an edge between the same tracks and ports as
-    /// one in the graph this replaced, delayed by the same amount, carries
-    /// on with that edge's line and the audio already in it. A new line
-    /// starts empty, so every rebuild (a mute, a solo, a send) cut that
-    /// much out of every compensated track while the song played: a click
-    /// with a short lookahead, a gap with a long one.
-    pub fn restore_delays(&mut self, held: HeldDelays) {
-        let mut held = held.0;
-        if held.is_empty() {
-            return;
-        }
+    /// Note where each compensation line sits, for the graph built in this
+    /// one's place (`carry_delays_from`). Called once the graph is finished,
+    /// off the audio thread: it allocates.
+    pub fn index_delays(&mut self) {
+        let mut keys = Vec::new();
         for (index, edge) in self.edges.iter().enumerate() {
-            let Some(Some(line)) = self.edge_delays.get(index) else {
+            if !matches!(self.edge_delays.get(index), Some(Some(_))) {
                 continue;
-            };
+            }
             let (Some(source), Some(dest)) = (
                 self.nodes.get(edge.source).and_then(|n| n.track_id()),
                 self.nodes.get(edge.dest).and_then(|n| n.track_id()),
             ) else {
                 continue;
             };
-            let key = (
+            keys.push((
                 source.to_string(),
                 edge.source_port,
                 dest.to_string(),
                 edge.dest_port,
-            );
-            let same = held.get(&key).is_some_and(|old| {
-                old.samples == line.samples && old.ring.len() == line.ring.len()
-            });
-            if same {
-                self.edge_delays[index] = held.remove(&key);
+                index,
+            ));
+        }
+        keys.sort();
+        self.delay_keys = keys;
+    }
+
+    /// Carry on with the compensation lines of `old`, the graph this one
+    /// replaces: an edge between the same tracks and ports, delayed by the
+    /// same amount, takes that edge's line with the audio already in it,
+    /// and `old` gets this one's empty line to be freed with it. A new line
+    /// starts empty, so every rebuild (a mute, a solo, a send) cut that much
+    /// out of every compensated track while the song played: a click with a
+    /// short lookahead, a gap with a long one.
+    ///
+    /// Runs on the audio thread when a graph is swapped in: one pass over
+    /// both sorted lists, swapping lines, never allocating.
+    pub fn carry_delays_from(&mut self, old: &mut AudioGraph) {
+        let (mut i, mut j) = (0, 0);
+        while i < self.delay_keys.len() && j < old.delay_keys.len() {
+            let (new_key, old_key) = (&self.delay_keys[i], &old.delay_keys[j]);
+            let order = (&new_key.0, new_key.1, &new_key.2, new_key.3)
+                .cmp(&(&old_key.0, old_key.1, &old_key.2, old_key.3));
+            match order {
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+                std::cmp::Ordering::Equal => {
+                    let (new_edge, old_edge) = (new_key.4, old_key.4);
+                    if let (Some(Some(new_line)), Some(Some(old_line))) = (
+                        self.edge_delays.get_mut(new_edge),
+                        old.edge_delays.get_mut(old_edge),
+                    ) {
+                        if new_line.samples == old_line.samples
+                            && new_line.ring.len() == old_line.ring.len()
+                        {
+                            std::mem::swap(new_line, old_line);
+                        }
+                    }
+                    i += 1;
+                    j += 1;
+                }
             }
         }
+    }
+
+    /// Keep the worker pool of `old` when this graph was built without
+    /// reading the setting (its lock was busy). A swap of two handles.
+    pub fn keep_pool_of(&mut self, old: &mut AudioGraph) {
+        std::mem::swap(&mut self.pool, &mut old.pool);
     }
 
     /// Whether sound leaving `from` already arrives at `to` through the
@@ -510,12 +537,26 @@ impl AudioGraph {
     /// menu, for someone who wants the lowest latency while playing live
     /// and accepts plug-ins that are late. It used to change nothing.
     pub fn finalize_pdc(&mut self, enabled: bool) {
+        self.finalize_pdc_with(enabled, &[]);
+    }
+
+    /// `finalize_pdc` for a graph whose plug-in chains are not in it yet:
+    /// `chain_latency[node]` is added to each node's own latency, for the
+    /// chain that will be moved into it when the graph is swapped in.
+    pub fn finalize_pdc_with(&mut self, enabled: bool, chain_latency: &[u32]) {
         self.ensure_order();
         let n = self.nodes.len();
+        self.delay_keys.clear();
         if n == 0 {
             self.edge_delays.clear();
+            self.planned_latency = 0;
             return;
         }
+        let own = |node: usize, nodes: &[Box<dyn AudioNode>]| {
+            nodes[node]
+                .latency_samples()
+                .saturating_add(chain_latency.get(node).copied().unwrap_or(0))
+        };
         // Accumulated latency per node (critical path into the node +
         // node's own latency) — same DP as `total_latency_samples`.
         let mut acc = vec![0u32; n];
@@ -525,8 +566,9 @@ impl AudioGraph {
                 .map(|&e| acc[self.edges[e].source])
                 .max()
                 .unwrap_or(0);
-            acc[node_id] = incoming_max.saturating_add(self.nodes[node_id].latency_samples());
+            acc[node_id] = incoming_max.saturating_add(own(node_id, &self.nodes));
         }
+        self.planned_latency = acc.iter().copied().max().unwrap_or(0);
         // For each edge, compute the pad samples needed so the source arrives
         // aligned with the slowest incoming branch of the same dest.
         // Two passes: write compensation_samples on edges, then build delay
@@ -846,6 +888,12 @@ impl AudioGraph {
     /// accumulated latency is `self_latency + max(incoming source latencies)`.
     /// This is the number plugin delay compensation would use to align
     /// parallel paths against the slowest branch.
+    /// The critical-path latency the last `finalize_pdc` worked out, with
+    /// the chain delays it was given. Cheap, for the audio thread.
+    pub fn planned_latency_samples(&self) -> u32 {
+        self.planned_latency
+    }
+
     pub fn total_latency_samples(&self) -> u32 {
         let n = self.nodes.len();
         if n == 0 {
@@ -1212,10 +1260,12 @@ mod tests {
         padded_song(&mut g);
         g.process(&ctx(), &[]);
         g.process(&ctx(), &[]);
-        let held = g.take_delays();
-        g.clear();
-        let master = padded_song(&mut g);
-        g.restore_delays(held);
+        g.index_delays();
+        let mut next = AudioGraph::new(16);
+        let master = padded_song(&mut next);
+        next.index_delays();
+        next.carry_delays_from(&mut g);
+        let mut g = next;
         g.process(&ctx(), &[]);
         let out = &g.node_output(master).unwrap()[0];
         assert!(

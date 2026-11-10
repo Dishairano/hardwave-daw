@@ -552,6 +552,18 @@ impl BiquadStereo {
         (yl, yr)
     }
 
+    /// Take the filter's memory from `old`, keeping this one's coefficients.
+    fn carry_state_from(&mut self, old: &BiquadStereo) {
+        self.x1_l = old.x1_l;
+        self.x2_l = old.x2_l;
+        self.y1_l = old.y1_l;
+        self.y2_l = old.y2_l;
+        self.x1_r = old.x1_r;
+        self.x2_r = old.x2_r;
+        self.y1_r = old.y1_r;
+        self.y2_r = old.y2_r;
+    }
+
     fn reset_state(&mut self) {
         self.x1_l = 0.0;
         self.x2_l = 0.0;
@@ -718,6 +730,20 @@ impl ChannelUtility {
         }
     }
 
+    /// Carry on from `old`, the stage of the node this one replaces: the
+    /// filter's memory when it is the same kind of filter, and the delay
+    /// line with the audio in it. Swaps, so nothing is allocated or freed.
+    pub fn carry_from(&mut self, old: &mut ChannelUtility) {
+        if self.filter_kind == old.filter_kind {
+            self.filter.carry_state_from(&old.filter);
+        }
+        if !self.delay_buf_l.is_empty() && self.delay_buf_l.len() == old.delay_buf_l.len() {
+            std::mem::swap(&mut self.delay_buf_l, &mut old.delay_buf_l);
+            std::mem::swap(&mut self.delay_buf_r, &mut old.delay_buf_r);
+            self.delay_write_pos = old.delay_write_pos;
+        }
+    }
+
     /// Delay, swap and polarity, in that order: the shifted signal feeds the
     /// rest. Allocation-free.
     pub fn process_pre(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
@@ -841,6 +867,17 @@ impl TrackNode {
 
     pub fn set_delay_samples(&mut self, samples: i64) {
         self.utility.set_delay_samples(samples);
+    }
+
+    /// Carry on the sound of `old`, the node this one replaces in a graph
+    /// swap: the gain ramp, the width, the meter's smoothing, the filter and
+    /// the delay line. Clips play from the playhead, so they need nothing.
+    pub(crate) fn carry_runtime_from(&mut self, old: &mut TrackNode) {
+        self.gain_ramp = old.gain_ramp;
+        self.width_applied = old.width_applied;
+        self.rms_smooth = old.rms_smooth;
+        self.utility.carry_from(&mut old.utility);
+        std::mem::swap(&mut self.chain_scratch, &mut old.chain_scratch);
     }
 
     /// Update the clip list. Called from the engine thread (not the audio thread)
@@ -1189,6 +1226,23 @@ impl AudioNode for TrackNode {
 
     fn restore_chain(&mut self, chain: crate::insert_chain::InsertChain) {
         self.chain = chain;
+    }
+
+    fn carry_on_from(&mut self, old: &mut dyn AudioNode) {
+        if let Some(old) = old
+            .as_any_mut()
+            .and_then(|old| old.downcast_mut::<TrackNode>())
+        {
+            self.carry_runtime_from(old);
+        }
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn chain_len(&self) -> usize {
+        self.chain.slots.len()
     }
 
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {

@@ -294,6 +294,10 @@ pub struct MidiTrackNode {
     /// the next block (reused, so the audio thread does not allocate).
     /// (channel, key) of notes to let go at the top of the block.
     jump_offs: Vec<(u8, u8)>,
+    /// Notes a plug-in instrument was playing that a graph swap took away
+    /// (the edit deleted, moved or shortened them): let go of at the top
+    /// of the next block, as `jump_offs` are.
+    carried_offs: Vec<(u8, u8)>,
     /// The MPE zone was announced since playing started (or the last jump).
     mpe_zone_sent: bool,
     /// Whether the song played last block, to send the zone again when
@@ -446,6 +450,7 @@ impl MidiTrackNode {
             last_block_end: 0,
             jumped: false,
             jump_offs: Vec::with_capacity(64),
+            carried_offs: Vec::with_capacity(64),
             mpe_zone_sent: false,
             was_playing: false,
             session: None,
@@ -501,6 +506,16 @@ impl MidiTrackNode {
             Instrument::KickSynth => {
                 self.kick = hardwave_dsp::kick_synth::KickSynth::new(sample_rate.max(1.0));
             }
+        }
+    }
+
+    /// Make room for a block of `frames` up front, so the first block the
+    /// node plays does not grow its buffers on the audio thread. Only the
+    /// kick renders into buffers of its own.
+    pub fn reserve_block(&mut self, frames: usize) {
+        if self.instrument == Instrument::KickSynth {
+            self.kick_l.resize(frames, 0.0);
+            self.kick_r.resize(frames, 0.0);
         }
     }
 
@@ -879,6 +894,94 @@ impl MidiTrackNode {
         Some(slot_index)
     }
 
+    /// Carry on the sound of `old`, the node this one replaces in a graph
+    /// swap, so an edit while the song plays does not cut what is ringing:
+    /// the synth's voices and the kick's tail, the bend, the keys held,
+    /// where the playhead was (the walk through the new notes picks up from
+    /// there instead of starting over as after a jump), the filter, delay
+    /// and gain ramp. A note a plug-in instrument is holding that the edit
+    /// took away is let go of at the top of the next block. Swaps and
+    /// copies only; runs on the audio thread.
+    pub(crate) fn carry_runtime_from(&mut self, old: &mut MidiTrackNode) {
+        if self.instrument == old.instrument {
+            std::mem::swap(&mut self.voices, &mut old.voices);
+            if self.instrument == Instrument::KickSynth {
+                self.kick.voice = old.kick.voice.take();
+            }
+        }
+        self.channel_bend = old.channel_bend;
+        self.channel_pressure = old.channel_pressure;
+        self.bend_mul = old.bend_mul;
+        self.live_channel = old.live_channel;
+        self.live_held = old.live_held;
+        self.release_live = old.release_live;
+        if old.live_fx.busy() {
+            self.live_fx.take_over_from(&mut old.live_fx);
+        }
+        self.was_playing = old.was_playing;
+        self.mpe_zone_sent = old.mpe_zone_sent && self.mpe == old.mpe;
+        self.session_was = old.session_was;
+        self.session_held = old.session_held;
+        self.last_block_end = old.last_block_end;
+        let at = self.last_block_end;
+        if at > 0 {
+            // Everything that started before the playhead was played by the
+            // node before; the walk goes on from the first note after it.
+            self.next_note_idx = self.notes.partition_point(|n| n.note_on_sample < at);
+            self.next_control_idx = self.controls.partition_point(|c| c.sample < at);
+            if old.was_playing {
+                self.carried_offs.clear();
+                for n in &old.notes {
+                    if n.muted || n.note_on_sample >= at || n.note_off_sample < at {
+                        continue;
+                    }
+                    if !self.still_holds(n, at)
+                        && self.carried_offs.len() < self.carried_offs.capacity()
+                    {
+                        self.carried_offs.push((n.channel & 0x0F, n.pitch));
+                    }
+                }
+            }
+        }
+        self.utility.carry_from(&mut old.utility);
+        self.gain_ramp = old.gain_ramp;
+        self.width_applied = old.width_applied;
+        self.rms_smooth = old.rms_smooth;
+        std::mem::swap(&mut self.chain_scratch, &mut old.chain_scratch);
+        if old.kick_l.len() > self.kick_l.len() {
+            std::mem::swap(&mut self.kick_l, &mut old.kick_l);
+            std::mem::swap(&mut self.kick_r, &mut old.kick_r);
+        }
+        if let (Some(clips), Some(old_clips)) = (self.clips.as_mut(), old.clips.as_mut()) {
+            clips.carry_runtime_from(old_clips);
+        }
+    }
+
+    /// The note-offs sent at the top of the last block for notes the
+    /// playhead or a graph swap left behind.
+    #[cfg(test)]
+    pub(crate) fn offs_sent_last_block(&self) -> Vec<(u8, u8)> {
+        self.jump_offs.clone()
+    }
+
+    /// Whether the new notes still hold `old` at `at`: the same key started
+    /// at the same sample and not yet let go. Its own note-off then comes
+    /// from the new notes.
+    fn still_holds(&self, old: &MidiNoteRegion, at: u64) -> bool {
+        let from = self
+            .notes
+            .partition_point(|n| n.note_on_sample < old.note_on_sample);
+        self.notes[from..]
+            .iter()
+            .take_while(|n| n.note_on_sample == old.note_on_sample)
+            .any(|n| {
+                !n.muted
+                    && n.pitch == old.pitch
+                    && n.channel & 0x0F == old.channel & 0x0F
+                    && n.note_off_sample >= at
+            })
+    }
+
     pub fn set_notes(&mut self, mut notes: Vec<MidiNoteRegion>) {
         notes.sort_by_key(|n| n.note_on_sample);
         self.notes = notes;
@@ -1231,6 +1334,11 @@ impl AudioNode for MidiTrackNode {
         // note the playhead jumped past the end of: its note-off was in the
         // part that was skipped.
         self.jump_offs.clear();
+        for off in self.carried_offs.drain(..) {
+            if self.jump_offs.len() < self.jump_offs.capacity() {
+                self.jump_offs.push(off);
+            }
+        }
         self.jumped = false;
         if ctx.playing {
             if block_start != self.last_block_end {
@@ -2035,14 +2143,21 @@ impl AudioNode for MidiTrackNode {
         self.chain = chain;
     }
 
-    fn take_live_midi(&mut self) -> Option<Box<crate::live_midi_fx::LiveMidiFx>> {
-        self.live_fx
-            .busy()
-            .then(|| std::mem::take(&mut self.live_fx))
+    fn carry_on_from(&mut self, old: &mut dyn AudioNode) {
+        if let Some(old) = old
+            .as_any_mut()
+            .and_then(|old| old.downcast_mut::<MidiTrackNode>())
+        {
+            self.carry_runtime_from(old);
+        }
     }
 
-    fn restore_live_midi(&mut self, live: Box<crate::live_midi_fx::LiveMidiFx>) {
-        self.live_fx.take_over(*live);
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn chain_len(&self) -> usize {
+        self.chain.slots.len()
     }
 
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
