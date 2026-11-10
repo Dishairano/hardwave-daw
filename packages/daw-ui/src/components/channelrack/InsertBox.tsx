@@ -12,7 +12,7 @@ import {
 } from '../../lib/mixerNumbers'
 import { routeToInsert } from '../../lib/insertActions'
 import { t, tf, useLanguage } from '../../i18n'
-import './insertBox.css'
+import './insert-box.css'
 
 /** Pixels of drag per number, as FL's insert box steps. */
 const DRAG_STEP_PX = 8
