@@ -593,6 +593,9 @@ pub struct TrackNode {
     /// Shared behaviour switches, read on the audio thread. Only the pan
     /// law is used here; the rest belong to the instrument tracks.
     prefs: crate::audio_prefs::AudioPrefs,
+    /// 0 dB at centre (FL's law) instead of the pan law setting: an insert
+    /// in a song with `Project::inserts_unity_at_centre`.
+    unity_centre: bool,
     /// 0.0 = mono, 1.0 = normal, >1.0 = widened.
     stereo_separation: f32,
     /// What the last block used, so the next ramps from it.
@@ -809,6 +812,7 @@ impl TrackNode {
             session: None,
             session_quantise: None,
             prefs: crate::audio_prefs::AudioPrefs::new(),
+            unity_centre: false,
             volume: 1.0,
             pan: 0.0,
             muted: false,
@@ -1015,6 +1019,12 @@ impl TrackNode {
     /// rebuild, like the other per-track settings.
     pub fn set_prefs(&mut self, prefs: crate::audio_prefs::AudioPrefs) {
         self.prefs = prefs;
+    }
+
+    /// Pan this track with 0 dB at centre whatever the pan law setting: an
+    /// insert (something plays into it) in a song with FL's inserts.
+    pub fn set_unity_centre(&mut self, on: bool) {
+        self.unity_centre = on;
     }
 
     pub fn set_automation_lanes(
@@ -1633,7 +1643,14 @@ impl AudioNode for TrackNode {
 
         // Apply track volume and pan, and measure post-fader peak/RMS.
         let pan = (self.pan + self.mod_pan).clamp(-1.0, 1.0);
-        let (pan_l, pan_r) = crate::pan::gains(pan, self.prefs.pan_law());
+        // An insert in a song with FL's inserts passes a centred sound at
+        // 0 dB (FL's law: the far side is turned down, nothing is boosted).
+        let law = if self.unity_centre {
+            crate::pan::PanLaw::Zero
+        } else {
+            self.prefs.pan_law()
+        };
+        let (pan_l, pan_r) = crate::pan::gains(pan, law);
         let vol = self.volume * self.mod_gain;
 
         let (out_left, out_rest) = outputs.split_at_mut(1);

@@ -161,6 +161,15 @@ pub struct Project {
     /// index into this.
     #[serde(default)]
     pub rack_groups: Vec<String>,
+    /// The mixer's inserts sit at 0 dB with their pan at centre, as in FL:
+    /// a track that other tracks play into (an insert, a bus, a return)
+    /// passes a centred sound at the level it gets, so routing a channel
+    /// into an insert is as loud as playing it straight into the master.
+    /// Songs made before kept the pan law's 3 dB drop at every track,
+    /// buses included; a file without this field is one of those and keeps
+    /// it, so it renders exactly as it did. New songs and FL imports set it.
+    #[serde(default)]
+    pub inserts_unity_at_centre: bool,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -224,6 +233,8 @@ impl Default for Project {
             keyboard_track: None,
             rows: Vec::new(),
             rack_groups: Vec::new(),
+            // A new song's inserts are at 0 dB at centre, as in FL.
+            inserts_unity_at_centre: true,
             scenes: vec![
                 "Scene 1".to_string(),
                 "Scene 2".to_string(),
@@ -388,6 +399,8 @@ impl Project {
         let mut old = self.clone();
         old.version = 2;
         old.forget_layout();
+        // Older builds had the pan law's drop at every track.
+        old.inserts_unity_at_centre = false;
         let data = rmp_serde::to_vec_named(&old).unwrap_or_default();
         zstd::encode_all(data.as_slice(), 3).unwrap_or_default()
     }

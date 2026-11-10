@@ -256,6 +256,37 @@ mod tests {
     }
 
     #[test]
+    fn a_new_song_and_an_fl_import_put_inserts_at_0_db_and_older_songs_keep_the_drop() {
+        let new = Project::default();
+        assert!(new.inserts_unity_at_centre, "a new song, as in FL");
+        let back = Project::from_bytes(&new.to_bytes().unwrap()).unwrap();
+        assert!(back.inserts_unity_at_centre, "kept when saved and opened");
+
+        // A song saved by a build from before format 3, and one saved by a
+        // format 3 build from before the setting: neither has the field.
+        let old = Project::from_bytes(&new.older_format_bytes()).unwrap();
+        assert!(!old.inserts_unity_at_centre, "format 2 keeps the old law");
+        let mut named = serde_json::to_value(&new).unwrap();
+        named
+            .as_object_mut()
+            .unwrap()
+            .remove("inserts_unity_at_centre");
+        let bytes =
+            zstd::encode_all(rmp_serde::to_vec_named(&named).unwrap().as_slice(), 3).unwrap();
+        let three = Project::from_bytes(&bytes).unwrap();
+        assert!(
+            !three.inserts_unity_at_centre,
+            "format 3 without it keeps the old law"
+        );
+
+        let fl =
+            crate::fl_build::build_project(&crate::fl_import::FlProject::default(), "FL", &|_| {
+                None
+            });
+        assert!(fl.project.inserts_unity_at_centre, "an FL import, as in FL");
+    }
+
+    #[test]
     fn a_track_added_to_a_song_without_groups_gets_the_unsorted_one() {
         let mut p = Project::default();
         p.rack_groups.clear();
