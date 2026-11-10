@@ -1,7 +1,8 @@
 //! What an FL song with thousands of clips costs: how long the audio graph
-//! takes to build (it is rebuilt on the audio thread after every edit),
-//! what a whole copy of the song weighs, and what the undo history holds
-//! for small and big edits. A measurement, not a check.
+//! takes to build after every edit (off the audio thread), how long the
+//! audio thread takes to swap it in, what a whole copy of the song weighs,
+//! and what the undo history holds for small and big edits. A measurement,
+//! not a check.
 //!
 //! Run with the song and its samples in one folder:
 //!   HW_FL_SONG=/path/to/song.flp hw-daw-cargo test -j 1 -p hardwave-engine \
@@ -106,15 +107,21 @@ fn an_fl_songs_graph_build_and_undo_step() {
     );
 
     *engine.project.lock() = song;
-    let mut times = engine.graph_build_times(12);
+    let times = engine.graph_build_times(12);
     // The first build fills caches; the rest are what an edit costs.
-    let first = times.remove(0);
-    times.sort();
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+    let summary = |mut v: Vec<std::time::Duration>| {
+        let first = v.remove(0);
+        v.sort();
+        (ms(first), ms(v[v.len() / 2]), ms(*v.last().unwrap()))
+    };
+    let (first, median, slowest) = summary(times.iter().map(|t| t.build).collect());
     eprintln!(
-        "graph build: first {:.2} ms, then median {:.2} ms, slowest {:.2} ms",
-        first.as_secs_f64() * 1e3,
-        times[times.len() / 2].as_secs_f64() * 1e3,
-        times.last().unwrap().as_secs_f64() * 1e3
+        "graph build, off the audio thread: first {first:.2} ms, then median {median:.2} ms, slowest {slowest:.2} ms"
+    );
+    let (first, median, slowest) = summary(times.iter().map(|t| t.swap).collect());
+    eprintln!(
+        "graph swap, on the audio thread: first {first:.3} ms, then median {median:.3} ms, slowest {slowest:.3} ms"
     );
 }
 

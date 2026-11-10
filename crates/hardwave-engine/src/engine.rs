@@ -171,7 +171,7 @@ use rtrb::RingBuffer;
 use std::collections::HashMap;
 
 use crate::audio_pool::{AudioBuffer, AudioPool};
-use crate::graph::{AudioGraph, AudioNode, ProcessContext};
+use crate::graph::{AudioGraph, ProcessContext};
 use crate::input_node::{
     CaptureTap, InputBlock, InputHub, InputNode, InputRing, RecordTapNode, SharedInputBlock,
     SharedInputConsumer, MAX_RECORD_SOURCES,
@@ -181,6 +181,13 @@ use crate::master_tap::{self, SharedMasterTap};
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 use crate::transport::{TransportCommand, TransportState};
 use hardwave_project::snapshot::Snapshot;
+
+mod graph_build;
+#[cfg(test)]
+mod graph_swap_tests;
+use graph_build::{
+    BuildMode, CarryKind, ChainBoard, GraphBuilder, MonitorEdges, PreparedGraph, SendEdges,
+};
 use hardwave_project::{InputChannel, RecordSource};
 use std::borrow::Cow;
 
@@ -1644,6 +1651,9 @@ impl DawEngine {
         // an export's callback keeps the ones nobody can start.
         callback.test_tone = crate::test_tone::TestTone::new(self.test_tone.clone());
         callback.check_voice = crate::check_voice::CheckVoice::new(self.check_voice.clone());
+        // From here on graphs are built on a thread of their own and only
+        // swapped in on the audio thread.
+        callback.attach_builder_thread();
 
         self.audio_device
             .start(callback)
@@ -1701,13 +1711,15 @@ impl DawEngine {
         let _ = self.command_tx.try_send(EngineCommand::Transport(cmd));
     }
 
-    /// Tell the audio thread to rebuild its graph from the current project state.
     /// Which MIDI tracks hear the keyboard changed: set it on the audio
     /// thread without rebuilding the graph.
     pub fn refresh_live_midi(&self) {
         let _ = self.command_tx.try_send(EngineCommand::RefreshLiveMidi);
     }
 
+    /// Ask for the audio graph to be built again from the current project
+    /// state. It is built on the graph builder thread and swapped in by the
+    /// audio thread when ready.
     pub fn rebuild_graph(&self) {
         // Kick the bake off in the background and signal the rebuild now.
         // Baking a long stem takes seconds (~16 s for 30 s of stereo), so
@@ -3079,20 +3091,38 @@ impl DawEngine {
         }
     }
 
-    /// How long building the audio graph for the song takes, `runs` times
-    /// over. The graph is rebuilt on the audio thread after every edit, so
-    /// this is how long a block waits after one. The plug-ins are left out;
-    /// clips, notes, automation and routing are all there.
+    /// What one graph costs, `runs` times over, with the song playing from
+    /// half a minute in: `build` is the work done off the audio thread,
+    /// `swap` what the audio thread does to put the graph in. The plug-ins
+    /// are left out; clips, notes, automation and routing are all there.
     #[doc(hidden)]
-    pub fn graph_build_times(&self, runs: usize) -> Vec<std::time::Duration> {
+    pub fn graph_build_times(&self, runs: usize) -> Vec<GraphBuildTime> {
         let mut callback =
             self.offline_callback(48_000, 512, 0, None, |_| {}, Arc::new(Mutex::new(None)));
+        callback.transport.set_position(48_000 * 30);
+        let mut out = vec![0.0f32; 512 * 2];
+        for _ in 0..4 {
+            callback.process(&mut out, 512, 2);
+        }
         (0..runs)
             .map(|_| {
-                callback.needs_rebuild = true;
                 let started = std::time::Instant::now();
-                callback.rebuild_graph();
-                started.elapsed()
+                let seq = callback.graph_seq + 1;
+                let prepared = {
+                    let BuildMode::Inline(builder) = &mut callback.builder else {
+                        unreachable!("an offline callback builds inline");
+                    };
+                    let project = callback.project.lock();
+                    let mut meters = callback.track_meters.lock();
+                    builder.build(&project, &mut meters, seq)
+                };
+                let build = started.elapsed();
+                let started = std::time::Instant::now();
+                let old = callback.install_graph(prepared);
+                let swap = started.elapsed();
+                drop(old);
+                callback.process(&mut out, 512, 2);
+                GraphBuildTime { build, swap }
             })
             .collect()
     }
@@ -3492,7 +3522,34 @@ impl OfflineRender {
     /// more are rendered at the end, so the song's first sample is the
     /// file's first sample. A bounce used to start with that much silence
     /// and land late by it.
-    pub fn run(mut self, total_samples: u64, mut on_block: impl FnMut(&[f32]) -> bool) {
+    pub fn run(self, total_samples: u64, on_block: impl FnMut(&[f32]) -> bool) {
+        self.run_swapping(total_samples, None, on_block);
+    }
+
+    /// `run`, with the graph built on a builder thread and a new one asked
+    /// for every `swap_every` blocks, swapped in whenever it is ready, the
+    /// way playback gets one after every edit. Returns how many were
+    /// swapped in. A check that playback through swaps sounds exactly like
+    /// an export.
+    #[doc(hidden)]
+    pub fn run_with_graph_swaps(
+        mut self,
+        total_samples: u64,
+        swap_every: usize,
+        on_block: impl FnMut(&[f32]) -> bool,
+    ) -> u64 {
+        self.callback.attach_builder_thread();
+        self.run_swapping(total_samples, Some(swap_every.max(1)), on_block)
+    }
+
+    fn run_swapping(
+        mut self,
+        total_samples: u64,
+        swap_every: Option<usize>,
+        mut on_block: impl FnMut(&[f32]) -> bool,
+    ) -> u64 {
+        let first_graph = self.callback.graph_seq;
+        let mut blocks = 0usize;
         // A render runs plug-ins and tails like the audio thread does, on
         // whatever thread asked for it: flush denormals for the length of
         // it, then leave that thread as it was. Every offline render (an
@@ -3508,6 +3565,10 @@ impl OfflineRender {
             let frames = (remaining + ahead).min(self.buffer_size as u64) as usize;
             let slice = &mut buf[..frames * 2];
             slice.fill(0.0);
+            if swap_every.is_some_and(|every| blocks % every == every - 1) {
+                self.callback.needs_rebuild = true;
+            }
+            blocks += 1;
             self.callback.process(slice, frames, 2);
             let pending = *to_drop.get_or_insert_with(|| {
                 self.callback
@@ -3531,6 +3592,7 @@ impl OfflineRender {
             }
             remaining -= kept as u64;
         }
+        self.callback.graph_seq - first_graph
     }
 }
 
@@ -3573,7 +3635,6 @@ struct EngineCallback {
     command_rx: Receiver<EngineCommand>,
     audio_pool: AudioPool,
     track_meters: TrackMeterMap,
-    input_consumer: SharedInputConsumer,
     master_tap: SharedMasterTap,
     graph: AudioGraph,
     meter: ChannelMeter,
@@ -3595,18 +3656,11 @@ struct EngineCallback {
     /// graph does not run while stopped, so without this every meter kept
     /// showing the last block it played.
     meters_parked: bool,
-    /// Shared with `DawEngine.captures`. Forwarded into the input nodes and
-    /// record taps each rebuild so a recording survives graph rebuilds.
-    captures: Arc<[Arc<CaptureTap>]>,
     /// Keeps the playhead on a Link session's beat.
     link_follow: crate::link::PhaseFollower,
     /// The MIDI tracks' nodes in the current graph, so picking another track
     /// for the keyboard is set on them without a rebuild.
     midi_track_nodes: Vec<(String, crate::graph::NodeId)>,
-    /// One block of every interface input, drained by the input hub and
-    /// read by each input node. Made here, at the largest block size, so
-    /// the audio thread never grows it.
-    input_block: SharedInputBlock,
     graph_latency_samples: Arc<std::sync::atomic::AtomicU32>,
     /// Per-track plug-in command receiver. Drained at the start of every
     /// audio block; commands route to TrackNodes by track_id.
@@ -3699,47 +3753,33 @@ struct EngineCallback {
     /// The edges that carry live input to a monitoring track, switched per
     /// block for tracks whose monitoring follows the transport.
     monitor_edges: Vec<MonitorEdges>,
-    /// The threads that share the per-block work, when the setting asks
-    /// for them. Picked up at rebuild, never started here: starting a
-    /// thread on the audio thread is the kind of thing that makes a
-    /// block late.
-    worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
-    /// The reference track handles, handed to the master node at every
-    /// rebuild so comparing against a record survives one.
-    #[allow(clippy::type_complexity)]
-    reference: Arc<Mutex<Option<Arc<crate::audio_pool::AudioBuffer>>>>,
-    reference_on: Arc<std::sync::atomic::AtomicBool>,
-    reference_gain_centi_db: Arc<std::sync::atomic::AtomicI64>,
-    /// The launcher grid, shared with the app so a clip pressed in the
-    /// UI reaches the track node that plays it.
-    session: Arc<crate::session::SessionState>,
     /// This block's clicks. A fixed-size array rather than a Vec because it
     /// is filled on the audio thread, which must not allocate.
     click_events: [crate::metronome::ClickEvent; crate::metronome::MAX_CLICKS_PER_BLOCK],
+    /// Where graphs are built: on the calling thread (an offline render,
+    /// and until playback starts the builder thread), or on the builder
+    /// thread, which hands them over finished.
+    builder: BuildMode,
+    /// Per node of the graph: where its chain's delay and size are
+    /// published for the next build, and the delay the compensation was
+    /// worked out with.
+    chain_boards: Vec<Option<Arc<ChainBoard>>>,
+    assumed_latency: Vec<u32>,
+    /// The build request the graph in use answers.
+    graph_seq: u64,
+    /// The tempo map the graph in use was built with, for a block in which
+    /// the project is busy.
+    tempo_map: hardwave_project::TempoMap,
 }
 
-/// The pair of graph edges that carry one send, so its gain can be moved
-/// without rebuilding the graph.
-struct SendEdges {
-    track_id: String,
-    send_index: usize,
-    left_edge: usize,
-    right_edge: usize,
-    /// The send's level as the mixer has it, for a block with no lane.
-    base_gain: f32,
-    /// A route moved it last block, so it goes back to its level when
-    /// the route is taken away.
-    modulated: bool,
-}
-
-/// The two edges that carry live input to one monitoring track (or to the
-/// master, with direct monitoring), and whether that monitoring follows the
-/// transport: input while stopped or recording, the track's own audio while
-/// playing back.
-struct MonitorEdges {
-    auto: bool,
-    left_edge: usize,
-    right_edge: usize,
+/// What one graph cost (see `DawEngine::graph_build_times`).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct GraphBuildTime {
+    /// Building it, off the audio thread.
+    pub build: std::time::Duration,
+    /// Swapping it in, on the audio thread.
+    pub swap: std::time::Duration,
 }
 
 /// Audio-thread load counters shared with the UI: how much of each block's
@@ -3886,7 +3926,31 @@ impl EngineCallback {
         reference_gain_centi_db: Arc<std::sync::atomic::AtomicI64>,
         session: Arc<crate::session::SessionState>,
     ) -> Self {
+        let input_block = InputBlock::shared(buffer_size as usize);
+        let builder = GraphBuilder {
+            project: Arc::clone(&project),
+            track_meters: Arc::clone(&track_meters),
+            transport: transport.clone(),
+            audio_pool: audio_pool.clone(),
+            audio_prefs: audio_prefs.clone(),
+            session: Arc::clone(&session),
+            worker_pool: Arc::clone(&worker_pool),
+            reference: Arc::clone(&reference),
+            reference_on: Arc::clone(&reference_on),
+            reference_gain_centi_db: Arc::clone(&reference_gain_centi_db),
+            input_consumer: Arc::clone(&input_consumer),
+            input_block: Arc::clone(&input_block),
+            captures: Arc::clone(&captures),
+            sample_rate,
+            buffer_size: buffer_size as usize,
+            boards: HashMap::new(),
+        };
         let mut cb = Self {
+            builder: BuildMode::Inline(Box::new(builder)),
+            chain_boards: Vec::new(),
+            assumed_latency: Vec::new(),
+            graph_seq: 0,
+            tempo_map: hardwave_project::TempoMap::default(),
             preview: crate::preview_player::PreviewPlayer::new(preview),
             test_tone: crate::test_tone::TestTone::unwired(),
             check_voice: crate::check_voice::CheckVoice::unwired(),
@@ -3905,11 +3969,6 @@ impl EngineCallback {
             mod_mix: Vec::with_capacity(MAX_MOD_ROUTES),
             mod_mix_prev: Vec::with_capacity(MAX_MOD_ROUTES),
             monitor_edges: Vec::with_capacity(8),
-            worker_pool,
-            reference,
-            reference_on,
-            reference_gain_centi_db,
-            session,
             click_events: [crate::metronome::ClickEvent {
                 frame_offset: 0,
                 downbeat: false,
@@ -3923,7 +3982,6 @@ impl EngineCallback {
             command_rx,
             audio_pool,
             track_meters,
-            input_consumer,
             master_tap,
             graph: AudioGraph::new(buffer_size as usize),
             meter: ChannelMeter::new(sample_rate as f64),
@@ -3934,8 +3992,6 @@ impl EngineCallback {
             master_id: None,
             has_monitored_input: false,
             meters_parked: false,
-            captures,
-            input_block: InputBlock::shared(buffer_size as usize),
             link_follow: crate::link::PhaseFollower::default(),
             midi_track_nodes: Vec::new(),
             graph_latency_samples,
@@ -4027,7 +4083,7 @@ impl EngineCallback {
         // into the freshly-taken (capacity-0) Vec, allocating on the
         // audio thread. With the rebuild done nothing re-parks, so the
         // original allocation is retained via the put-back below.
-        if !self.needs_rebuild && !self.deferred_insert_commands.is_empty() {
+        if !self.graph_pending() && !self.deferred_insert_commands.is_empty() {
             let mut parked = std::mem::take(&mut self.deferred_insert_commands);
             for cmd in parked.drain(..) {
                 self.dispatch_one_insert_command(cmd, true);
@@ -4095,7 +4151,7 @@ impl EngineCallback {
             if adds && !replay {
                 self.needs_rebuild = true;
             }
-            if self.needs_rebuild
+            if self.graph_pending()
                 && !replay
                 && self.deferred_insert_commands.len() < self.deferred_insert_commands.capacity()
             {
@@ -4131,35 +4187,8 @@ impl EngineCallback {
                 self.needs_rebuild = true;
             }
         }
-    }
-
-    /// Pool id of an already-baked pitch-preserving variant of `source_id`,
-    /// or `None` if it hasn't been baked yet.
-    ///
-    /// LOOKUP ONLY — deliberately never bakes. `rebuild_graph` runs on the
-    /// audio thread (see `AudioCallback::process`), and the bake is an FFT
-    /// over the whole source plus multi-megabyte allocations; doing it here
-    /// would stall the callback for as long as the file is big. Baking is
-    /// `DawEngine::prebake_stretch_sources`, driven from the UI thread before
-    /// the rebuild is signalled. A miss simply falls back to the varispeed
-    /// resample path for this rebuild, and the next one picks the bake up.
-    fn stretched_source(&self, source_id: &str, stretch: f64, semitones: f64) -> Option<String> {
-        let key = stretch_cache_key(source_id, stretch, semitones);
-        self.audio_pool.contains(&key).then_some(key)
-    }
-
-    /// The pool id a clip plays from before its stretch: its take with the
-    /// notes tuned by hand once that render is in the pool, else the file.
-    /// LOOKUP ONLY, like `stretched_source`: the render is baked off this
-    /// thread.
-    fn tuned_source(&self, audio_clip: &hardwave_project::clip::AudioClip) -> String {
-        if audio_clip.has_tuned_notes() {
-            let key = tune_cache_key(&audio_clip.source_path, &audio_clip.tuned_notes);
-            if self.audio_pool.contains(&key) {
-                return key;
-            }
-        }
-        audio_clip.source_path.clone()
+        // The next graph is built knowing what the chain holds now.
+        self.publish_chain(node_id);
     }
 
     /// Populate every track's insert chain from the project's saved
@@ -4246,6 +4275,15 @@ impl EngineCallback {
                     .pdc_enabled
                     .load(std::sync::atomic::Ordering::Relaxed),
             );
+            self.graph.index_delays();
+            // A graph built again for this render (`OfflineRender::play_mode`)
+            // knows the chains' delays, and this one was worked out with them.
+            self.publish_chains();
+            for (node_id, assumed) in self.assumed_latency.iter_mut().enumerate() {
+                if let Some(node) = self.graph.node_mut(node_id) {
+                    *assumed = node.latency_samples();
+                }
+            }
             self.graph_latency_samples.store(
                 self.graph.total_latency_samples(),
                 std::sync::atomic::Ordering::Relaxed,
@@ -4382,288 +4420,221 @@ impl EngineCallback {
         }
     }
 
-    /// Rebuild the audio graph from the project state.
-    /// Creates one TrackNode per non-master track, a MasterNode, and wires them together.
-    /// A track's audio clips as the regions its node plays, with fades,
-    /// stretch, warp and treatment worked out, and overlaps crossfaded.
-    /// Audio tracks play these in their own node; a MIDI track plays them
-    /// beside its synth, so a consolidated part or a dropped sample on a
-    /// channel is heard through the same inserts and fader.
-    fn audio_regions(
-        &self,
-        track: &hardwave_project::track::Track,
-        tempo_map: &hardwave_project::TempoMap,
-        sample_rate: f64,
-        track_pitch_factor: f64,
-        silent_rows: &hardwave_project::layout::SilentRows,
-    ) -> Vec<ClipRegion> {
-        // Convert clip placements to sample-based ClipRegions.
-        // Clips are visited in their project-defined order, then any overlap between
-        // adjacent audio clips is promoted to an equal-length crossfade: the earlier
-        // clip gets a fade-out across the overlap and the later clip gets a fade-in.
-        // User-authored fades take precedence when they are already longer than the
-        // auto-computed value.
-        // Frozen: the render, and nothing else. Live: everything but
-        // the render, which is parked on its own lane.
-        // A clip on a playlist row that is switched off (or not soloed
-        // while another is) is left out, as FL's track switch does.
-        let clips_to_play = track.clips.iter().filter(|clip| {
-            let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
-            let on_track = if track.frozen { is_freeze } else { !is_freeze };
-            on_track && !silent_rows.has(clip.row)
-        });
-        let mut regions: Vec<ClipRegion> = clips_to_play
-            .filter_map(|clip| match &clip.content {
-                hardwave_project::clip::ClipContent::Audio(audio_clip) => {
-                    // A clip that follows the tempo is played as a stretch or
-                    // as warp markers at this tempo map (`tempo_follow`), the
-                    // same clip the bakes were planned from.
-                    let file_rate = self
-                        .audio_pool
-                        .get(&audio_clip.source_path)
-                        .map(|b| b.sample_rate as f64);
-                    let followed =
-                        crate::tempo_follow::tempo_followed(clip, audio_clip, tempo_map, file_rate);
-                    let audio_clip: &hardwave_project::clip::AudioClip = &followed;
-                    let timeline_start =
-                        tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
-                    let timeline_end = tempo_map
-                        .tick_to_samples(clip.position_ticks + clip.length_ticks, sample_rate);
-                    // Normalising and taking the DC offset off need the
-                    // sample's levels, worked out once in the pool.
-                    let treatment = audio_clip.treatment;
-                    let levels = (treatment.normalize || treatment.remove_dc)
-                        .then(|| self.audio_pool.level_stats(&audio_clip.source_path))
-                        .flatten();
-                    let normalise = match (treatment.normalize, levels) {
-                        (true, Some(l)) => {
-                            let peak = if treatment.remove_dc {
-                                l.peak_without_dc
-                            } else {
-                                l.peak
-                            };
-                            if peak > 1e-6 {
-                                1.0 / peak
-                            } else {
-                                1.0
-                            }
-                        }
-                        _ => 1.0,
-                    };
-                    // The sample's window: its start and length, and
-                    // its tail cut where it falls under the trim level.
-                    let frames = self
-                        .audio_pool
-                        .get(&audio_clip.source_path)
-                        .map(|b| b.num_frames as u64)
-                        .unwrap_or(u64::MAX);
-                    let trim_end = treatment.trim_threshold().and_then(|share| {
-                        let peak = self
-                            .audio_pool
-                            .level_stats(&audio_clip.source_path)
-                            .map(|l| l.peak)
-                            .unwrap_or(1.0);
-                        self.audio_pool
-                            .trim_end(&audio_clip.source_path, share as f32 * peak)
-                    });
-                    let treat = crate::track_node::ClipTreat::new(
-                        &treatment,
-                        levels.map(|l| l.dc).unwrap_or([0.0; 2]),
-                    )
-                    .with_window(&treatment, frames, trim_end);
-                    let gain = if audio_clip.gain_db <= -100.0 {
-                        0.0
-                    } else {
-                        10.0_f64.powf(audio_clip.gain_db / 20.0) as f32 * normalise
-                    };
-                    // A clip without fades of its own gets the tiny
-                    // ones its declicking mode stands for.
-                    let (declick_in, declick_out) = treatment.declick.fades_ms();
-                    let micro = |ms: f64| (ms / 1000.0 * sample_rate).round() as u64;
-                    // A fade lasts its ticks at the tempo where it is: from
-                    // the clip's start, and up to its end. Counted from the
-                    // song's start, a fade after a tempo change played at
-                    // the opening tempo, longer or shorter than drawn.
-                    let clip_end_ticks = clip.position_ticks + clip.length_ticks;
-                    let fade_in_samples = if audio_clip.fade_in_ticks > 0 {
-                        tempo_map
-                            .tick_to_samples(
-                                clip.position_ticks + audio_clip.fade_in_ticks,
-                                sample_rate,
-                            )
-                            .saturating_sub(timeline_start)
-                    } else {
-                        micro(declick_in)
-                    };
-                    let fade_out_samples = if audio_clip.fade_out_ticks > 0 {
-                        timeline_end.saturating_sub(tempo_map.tick_to_samples(
-                            clip_end_ticks.saturating_sub(audio_clip.fade_out_ticks),
-                            sample_rate,
-                        ))
-                    } else {
-                        micro(declick_out)
-                    };
-                    let clip_pitch_factor = 2.0_f64.powf(audio_clip.pitch_semitones / 12.0);
-                    let pitch_factor = clip_pitch_factor * track_pitch_factor;
-                    let stretch = if audio_clip.stretch_ratio <= 0.01 {
-                        1.0
-                    } else {
-                        audio_clip.stretch_ratio
-                    };
-                    // Pitch-preserving stretch. A plain `source_step` resample
-                    // can only change duration and pitch *together* (varispeed:
-                    // stretch_ratio 2.0 also dropped an octave), so when a clip
-                    // asks for either, bake a stretched / pitch-shifted copy of
-                    // the source once and play it back at unity step. That makes
-                    // stretch_ratio change duration only and pitch_semitones
-                    // change pitch only, as their names promise.
-                    //
-                    // Warped clips keep the resample path — warp markers define
-                    // their own piecewise source map and take precedence below.
-                    // The track-level pitch/fine-tune offset stays a resample, so
-                    // it remains a varispeed control.
-                    // Resample is the varispeed path on purpose: like a
-                    // tape, a longer clip plays lower.
-                    // A warped clip rendered with its pitch kept (see
-                    // `warp_bake_plan`), when the render has landed: played
-                    // straight through, its markers already in it.
-                    // A take with notes tuned by hand plays its tuned render
-                    // once that has landed (see `tune_bake_plan`); until
-                    // then, the file. Its stretch and warp are made from it.
-                    let base = self.tuned_source(audio_clip);
-                    let warp_baked = if audio_clip.warp_markers.is_empty() || treatment.resample {
-                        None
-                    } else {
-                        self.audio_pool
-                            .get(&audio_clip.source_path)
-                            .map(|b| b.sample_rate as f64)
-                            .and_then(|buffer_rate| {
-                                let unity = if buffer_rate > 0.0 {
-                                    buffer_rate / sample_rate
-                                } else {
-                                    1.0
-                                };
-                                let pieces =
-                                    warp_pieces(clip, audio_clip, tempo_map, sample_rate, unity);
-                                let key = warp_cache_key(
-                                    &base,
-                                    &pieces,
-                                    audio_clip.pitch_semitones,
-                                    sample_rate,
-                                );
-                                self.audio_pool.contains(&key).then_some(key)
-                            })
-                    };
-                    let needs_bake = audio_clip.warp_markers.is_empty()
-                        && !treatment.resample
-                        && ((stretch - 1.0).abs() > 1e-4
-                            || audio_clip.pitch_semitones.abs() > 1e-4);
-                    let baked = if needs_bake {
-                        self.stretched_source(&base, stretch, audio_clip.pitch_semitones)
-                    } else {
-                        None
-                    };
-                    // Baking stretches the whole source, so an in-source start
-                    // offset scales with the same ratio.
-                    let (region_source_id, region_source_offset, source_step) =
-                        match (baked, &warp_baked) {
-                            (_, Some(key)) => (key.clone(), 0, track_pitch_factor),
-                            (Some(key), None) => (
-                                key,
-                                (audio_clip.source_start as f64 * stretch) as u64,
-                                track_pitch_factor,
-                            ),
-                            (None, None) => (base, audio_clip.source_start, pitch_factor / stretch),
-                        };
-                    // Rate-match the source to the rate we're rendering at.
-                    // Pool buffers are normalised to the *device* rate on
-                    // import, but an export renders at whatever rate the
-                    // user picked — so bouncing at 44.1 k from a 48 k
-                    // device read every audio clip 8.8% too slow (flat and
-                    // long) while MIDI/synth tracks, which are generated at
-                    // the render rate, stayed in tune. A mix would come out
-                    // with its samples and its synths in different keys.
-                    // Ratio is 1.0 during playback, where the two agree.
-                    let source_step = match self.audio_pool.get(&region_source_id) {
-                        Some(buf)
-                            if buf.sample_rate != 0
-                                && (buf.sample_rate as f64 - sample_rate).abs() > f64::EPSILON =>
-                        {
-                            source_step * (buf.sample_rate as f64 / sample_rate)
-                        }
-                        _ => source_step,
-                    };
-                    // Warp markers → precomputed segments. Marker
-                    // ticks are clip-relative; going through the
-                    // tempo map (absolute tick → samples, minus the
-                    // clip start) keeps anchors honest under tempo
-                    // automation.
-                    let warp = if audio_clip.warp_markers.is_empty() || warp_baked.is_some() {
-                        Vec::new()
-                    } else {
-                        let anchors: Vec<(u64, f64)> = audio_clip
-                            .warp_markers
-                            .iter()
-                            .map(|m| {
-                                let abs = tempo_map.tick_to_samples(
-                                    clip.position_ticks + m.clip_tick,
-                                    sample_rate,
-                                );
-                                (abs.saturating_sub(timeline_start), m.source_sample as f64)
-                            })
-                            .collect();
-                        crate::track_node::build_warp_segments(
-                            &anchors,
-                            source_step,
-                            audio_clip.source_start as f64,
-                        )
-                    };
-                    Some(ClipRegion {
-                        source_id: region_source_id,
-                        timeline_start,
-                        timeline_end,
-                        source_offset: region_source_offset,
-                        gain,
-                        muted: audio_clip.muted,
-                        fade_in_samples,
-                        fade_out_samples,
-                        fade_in_curve: audio_clip.fade_in_curve,
-                        fade_out_curve: audio_clip.fade_out_curve,
-                        reversed: audio_clip.reversed,
-                        source_step,
-                        warp,
-                        treat,
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-
-        // Apply auto-crossfade across overlapping, unmuted audio clips.
-        // We sort indices by timeline_start so adjacency maps to timeline order,
-        // without losing the original positions inside `regions`.
-        let mut order: Vec<usize> = (0..regions.len()).collect();
-        order.sort_by_key(|&i| regions[i].timeline_start);
-        for w in order.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            if regions[a].muted || regions[b].muted {
-                continue;
+    /// Ask for a graph of the project as it is now.
+    ///
+    /// With the builder thread running this only asks: the graph is built
+    /// there and swapped in by `take_ready_graph` a block or two later.
+    /// Without it (an offline render, the first graph) it is built here.
+    /// The project and the meter map are only tried, never waited for: a
+    /// busy lock leaves `needs_rebuild` set and the next block tries again.
+    fn rebuild_graph(&mut self) {
+        match &mut self.builder {
+            BuildMode::Thread(link) => {
+                link.request();
+                self.needs_rebuild = false;
             }
-            if regions[b].timeline_start < regions[a].timeline_end {
-                let overlap = regions[a]
-                    .timeline_end
-                    .saturating_sub(regions[b].timeline_start);
-                if overlap > 0 {
-                    if regions[a].fade_out_samples < overlap {
-                        regions[a].fade_out_samples = overlap;
-                    }
-                    if regions[b].fade_in_samples < overlap {
-                        regions[b].fade_in_samples = overlap;
-                    }
-                }
+            BuildMode::Inline(builder) => {
+                let Some(project) = self.project.try_lock() else {
+                    self.needs_rebuild = true;
+                    return;
+                };
+                let Some(mut meters) = self.track_meters.try_lock() else {
+                    self.needs_rebuild = true;
+                    return;
+                };
+                let seq = self.graph_seq + 1;
+                let prepared = builder.build(&project, &mut meters, seq);
+                drop(meters);
+                drop(project);
+                self.needs_rebuild = false;
+                let old = self.install_graph(prepared);
+                drop(old);
             }
         }
-        regions
+    }
+
+    /// Swap in the newest graph the builder thread finished, if there is
+    /// one, and send the one it replaces back to be freed there.
+    fn take_ready_graph(&mut self) {
+        let BuildMode::Thread(link) = &mut self.builder else {
+            return;
+        };
+        let Some(prepared) = link.take_ready() else {
+            return;
+        };
+        let old = self.install_graph(prepared);
+        if let BuildMode::Thread(link) = &mut self.builder {
+            link.throw_away(old);
+        }
+    }
+
+    /// Whether a graph that was asked for has not been swapped in yet. A
+    /// plug-in for a track with no node waits for it.
+    fn graph_pending(&self) -> bool {
+        self.needs_rebuild
+            || matches!(&self.builder, BuildMode::Thread(link) if link.requested() > self.graph_seq)
+    }
+
+    /// Put a finished graph in place of the current one. Runs on the audio
+    /// thread, so it only moves things: the plug-in chains, the keys held
+    /// and the sound of each node (`AudioNode::carry_on_from`), and the
+    /// audio in the compensation lines go over to the new graph; what was
+    /// built for it already is all there. Nothing is allocated or freed:
+    /// the returned box holds the old graph, to be freed elsewhere.
+    fn install_graph(&mut self, mut p: Box<PreparedGraph>) -> Box<PreparedGraph> {
+        std::mem::swap(&mut self.graph, &mut p.graph);
+        std::mem::swap(&mut self.master_id, &mut p.master_id);
+        std::mem::swap(&mut self.track_id_to_node, &mut p.track_id_to_node);
+        std::mem::swap(&mut self.send_edges, &mut p.send_edges);
+        std::mem::swap(&mut self.monitor_edges, &mut p.monitor_edges);
+        std::mem::swap(&mut self.midi_track_nodes, &mut p.midi_track_nodes);
+        std::mem::swap(&mut self.parked_chains, &mut p.parked_chains);
+        std::mem::swap(&mut self.chain_boards, &mut p.boards);
+        std::mem::swap(&mut self.assumed_latency, &mut p.assumed_latency);
+        std::mem::swap(&mut self.tempo_map, &mut p.tempo_map);
+        self.has_monitored_input = p.has_monitored_input;
+        self.graph_seq = self.graph_seq.max(p.seq);
+        // From here `self` has the new graph and `p` the old one, apart from
+        // the lists that describe the new one (`carries`, `sidechain_flags`).
+        if !p.pool_read {
+            self.graph.keep_pool_of(&mut p.graph);
+        }
+        // The new nodes start with their own level and pan.
+        self.mod_mix.clear();
+        self.mod_mix_prev.clear();
+
+        let old = &mut *p;
+        for carry in &old.carries {
+            let old_node = old.track_id_to_node.get(carry.track_id.as_str()).copied();
+            // The chain: from the node this one replaces, or parked while
+            // the track was frozen.
+            let mut chain = old_node
+                .and_then(|id| old.graph.node_mut(id))
+                .and_then(|node| node.take_chain());
+            if chain.is_none() {
+                chain = old
+                    .parked_chains
+                    .get_mut(carry.track_id.as_str())
+                    .filter(|c| !c.slots.is_empty())
+                    .map(std::mem::take);
+            }
+            if let Some(chain) = chain {
+                if carry.kind == (CarryKind::Audio { frozen: true }) {
+                    match self.parked_chains.get_mut(carry.track_id.as_str()) {
+                        Some(parked) => *parked = chain,
+                        // Not expected: the build parks every frozen track.
+                        // The chain stays with the old graph and is let go.
+                        None => {
+                            if let Some(node) = old_node.and_then(|id| old.graph.node_mut(id)) {
+                                node.restore_chain(chain);
+                            }
+                        }
+                    }
+                } else if let Some(node) = self.graph.node_mut(carry.node) {
+                    node.restore_chain(chain);
+                }
+            }
+            // The sound: voices, tails, where the playhead was.
+            if let (Some(new_node), Some(old_node)) = (
+                self.graph.node_mut(carry.node),
+                old_node.and_then(|id| old.graph.node_mut(id)),
+            ) {
+                new_node.carry_on_from(old_node.as_mut());
+            }
+        }
+        for (node, slot_id, active) in &old.sidechain_flags {
+            if let Some(node) = self.graph.node_mut(*node) {
+                node.set_slot_sidechain(slot_id, *active);
+            }
+        }
+        self.graph.carry_delays_from(&mut old.graph);
+
+        // Chains left in the old graph belong to tracks that are gone. Their
+        // plug-ins go to the graveyard, to be let go on the UI thread; when
+        // it is full, what is left goes with the old graph.
+        for node in old.graph.iter_nodes_mut() {
+            if node.chain_len() == 0 {
+                continue;
+            }
+            if let Some(mut chain) = node.take_chain() {
+                bury_chain(&mut self.insert_graveyard_tx, &mut chain);
+                // Back in the old node even when empty: its list is freed
+                // with the old graph, not here.
+                node.restore_chain(chain);
+            }
+        }
+        for chain in old.parked_chains.values_mut() {
+            bury_chain(&mut self.insert_graveyard_tx, chain);
+        }
+
+        if self.publish_chains() {
+            // A chain's delay is not the one the compensation was worked out
+            // with (a plug-in changed its latency, or one was added since):
+            // the next graph gets it right.
+            self.needs_rebuild = true;
+        }
+        self.graph_latency_samples.store(
+            self.graph.planned_latency_samples(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        p
+    }
+
+    /// Publish each chain's delay and size for the next build. True when a
+    /// delay differs from the one the graph's compensation assumed.
+    fn publish_chains(&mut self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut differs = false;
+        for node_id in 0..self.chain_boards.len() {
+            if self.chain_boards[node_id].is_none() {
+                continue;
+            }
+            let Some(node) = self.graph.node_mut(node_id) else {
+                continue;
+            };
+            let latency = node.latency_samples();
+            let mut slots = node.chain_len();
+            if let Some(parked) = node.track_id().and_then(|id| self.parked_chains.get(id)) {
+                slots += parked.slots.len();
+            }
+            if let Some(board) = &self.chain_boards[node_id] {
+                board.latency.store(latency, Relaxed);
+                board.slots.store(slots as u32, Relaxed);
+            }
+            if self.assumed_latency.get(node_id).copied() != Some(latency) {
+                differs = true;
+            }
+        }
+        differs
+    }
+
+    /// Publish one node's chain after a plug-in command changed it.
+    fn publish_chain(&mut self, node_id: crate::graph::NodeId) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let Some(Some(board)) = self.chain_boards.get(node_id) else {
+            return;
+        };
+        if let Some(node) = self.graph.node_mut(node_id) {
+            board.latency.store(node.latency_samples(), Relaxed);
+            board.slots.store(node.chain_len() as u32, Relaxed);
+        }
+    }
+
+    /// Start building graphs on a thread of their own. Playback calls this
+    /// once the first graph is in; until then, and when the thread cannot
+    /// be started, graphs are built where they are asked for, as before.
+    fn attach_builder_thread(&mut self) {
+        let BuildMode::Inline(builder) = &self.builder else {
+            return;
+        };
+        match Box::new(builder.as_ref().clone()).spawn(self.graph_seq) {
+            Ok(link) => self.builder = BuildMode::Thread(link),
+            Err(e) => {
+                log::warn!(
+                    "graph builder thread did not start ({e}); building on the audio thread"
+                );
+            }
+        }
     }
 
     /// Set which MIDI tracks hear the keyboard, on the nodes already built.
@@ -4689,1072 +4660,6 @@ impl EngineCallback {
         }
     }
 
-    fn rebuild_graph(&mut self) {
-        // RT-safety: this runs on the audio thread. If the UI currently
-        // holds the project or meter-map lock we must NOT block — leave
-        // `needs_rebuild` set and retry on the next block. One extra
-        // block on the old graph (~5ms) is inaudible; blocking the audio
-        // callback behind a UI mutation (priority inversion) is an
-        // audible dropout. Locks are taken up-front, before the old
-        // graph is torn down, so a deferred rebuild leaves the current
-        // graph fully intact.
-        let Some(project) = self.project.try_lock() else {
-            self.needs_rebuild = true;
-            return;
-        };
-        let Some(mut meters) = self.track_meters.try_lock() else {
-            self.needs_rebuild = true;
-            return;
-        };
-
-        // Step 1: extract plug-in chains from the *outgoing* TrackNodes
-        // before the graph is cleared. Without this, every rebuild would
-        // drop every Box<dyn HostedPlugin> on the audio thread (calls
-        // free()) and silently destroy the user's plug-in instances on
-        // every property tweak. Stashing them by track_id lets us
-        // re-attach to the freshly-built TrackNode below — or, if a
-        // track was deleted, ship its chain to the graveyard for an
-        // off-RT thread to drop.
-        let mut stashed_chains: HashMap<String, crate::insert_chain::InsertChain> = HashMap::new();
-        // And the keys held on a live keyboard, with the notes they
-        // started, so the new node lets them go and an arpeggio goes on.
-        let mut stashed_live: HashMap<String, Box<crate::live_midi_fx::LiveMidiFx>> =
-            HashMap::new();
-        for node in self.graph.iter_nodes_mut() {
-            if let Some(track_id) = node.track_id().map(|s| s.to_string()) {
-                if let Some(chain) = node.take_chain() {
-                    stashed_chains.insert(track_id.clone(), chain);
-                }
-                if let Some(live) = node.take_live_midi() {
-                    stashed_live.insert(track_id, live);
-                }
-            }
-        }
-
-        // The compensation delay lines, with the audio in them, for the
-        // same edges in the new graph.
-        let held_delays = self.graph.take_delays();
-        self.graph.clear();
-        self.send_edges.clear();
-        // The new nodes start with their own level and pan.
-        self.mod_mix.clear();
-        self.mod_mix_prev.clear();
-        self.monitor_edges.clear();
-        self.midi_track_nodes.clear();
-        // Whether the work is shared across cores is a setting, and a
-        // rebuild is where it is picked up. A busy lock means the next
-        // rebuild gets it, which is a block or two later at worst.
-        if let Some(pool) = self.worker_pool.try_lock() {
-            self.graph.set_worker_pool(pool.clone());
-        }
-
-        let sample_rate = self.sample_rate as f64;
-        let tempo_map = &project.tempo_map;
-
-        // Parallel map from project track id to graph node id, needed to
-        // connect send edges once every track node has been inserted.
-        let mut track_id_to_node: HashMap<String, crate::graph::NodeId> = HashMap::new();
-
-        // While any track is soloed, the tracks not heard are muted: the
-        // soloed ones are heard with their way out and what feeds them.
-        let solo_audible = hardwave_project::mixer::solo_audible(&project.tracks);
-        let silenced_by_solo = |track: &hardwave_project::track::Track| {
-            solo_audible
-                .as_ref()
-                .is_some_and(|heard| !heard.contains(&track.id) && !track.solo_safe)
-        };
-        // Playlist rows switched off, or not soloed while one is: what sits
-        // on them (clips, notes, automation) is left out below. Rows never
-        // route sound, so the channels and their effects keep running.
-        let silent_rows = hardwave_project::layout::SilentRows::of(&project.rows);
-        let audible_lanes = |track: &hardwave_project::track::Track| {
-            track
-                .automation_lanes
-                .iter()
-                .filter(|lane| !silent_rows.has(lane.row))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        // Automation clips that move another track's knob (FL's automation
-        // clip channels), gathered once the way MIDI routes are: the target
-        // track's node plays them as its own. A clip with no target moves
-        // the track it sits on, as every clip did before.
-        let mut handed: HashMap<&str, Vec<&hardwave_project::automation_clip::AutomationClip>> =
-            HashMap::new();
-        for source in &project.tracks {
-            for clip in &source.automation_clips {
-                if let Some(target) = clip.target_track.as_deref() {
-                    if target != source.id && !silent_rows.has(clip.row) {
-                        handed.entry(target).or_default().push(clip);
-                    }
-                }
-            }
-        }
-        let audible_automation_clips = |track: &hardwave_project::track::Track| {
-            let own = track.automation_clips.iter().filter(|clip| {
-                clip.target_track.as_deref().is_none_or(|t| t == track.id)
-                    && !silent_rows.has(clip.row)
-            });
-            let theirs = handed.get(track.id.as_str()).into_iter().flatten().copied();
-            own.chain(theirs).cloned().collect::<Vec<_>>()
-        };
-
-        // Reconcile the per-track meter map with the current tracks: reuse existing
-        // Arcs where possible, create new ones, drop meters for removed tracks.
-        // (`meters` guard acquired via try_lock at the top of this fn.)
-        let live_ids: std::collections::HashSet<String> = project
-            .tracks
-            .iter()
-            .filter(|t| t.kind.is_audio_bearing())
-            .map(|t| t.id.clone())
-            .collect();
-        meters.retain(|id, _| live_ids.contains(id));
-
-        // MIDI routes, gathered once: for each target track, the tracks
-        // whose notes it also plays. A route to a track that has been
-        // deleted simply never appears here.
-        let mut midi_routes: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, source) in project.tracks.iter().enumerate() {
-            if !matches!(source.kind, hardwave_project::TrackKind::Midi) {
-                continue;
-            }
-            for target in &source.midi_route_to {
-                if target == &source.id {
-                    continue;
-                }
-                midi_routes.entry(target.clone()).or_default().push(index);
-            }
-        }
-
-        // Who hears a MIDI keyboard: the armed tracks when any are armed,
-        // otherwise the one MIDI track picked last (the first one in a new
-        // song). Every MIDI track used to take it, so a keyboard played all
-        // of them at once.
-        let armed_for_input = project.tracks.iter().any(|t| {
-            t.armed && t.monitor_input && !matches!(t.kind, hardwave_project::TrackKind::Master)
-        });
-        let keyboard_track = keyboard_track_of(&project);
-        // Tracks something reaches: another track's output, a send, a MIDI
-        // route. A track nothing reaches and that has nothing of its own is
-        // an empty insert, and gets no node (see `is_placeholder`).
-        let mut reached: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for t in &project.tracks {
-            if let Some(bus) = t.output_bus.as_deref() {
-                reached.insert(bus);
-            }
-            for send in t.sends.iter().filter(|s| s.enabled) {
-                reached.insert(send.target.as_str());
-            }
-            for target in &t.midi_route_to {
-                reached.insert(target.as_str());
-            }
-        }
-
-        for track in &project.tracks {
-            if !track.kind.is_audio_bearing() {
-                continue;
-            }
-
-            let meter = meters
-                .entry(track.id.clone())
-                .or_insert_with(|| Arc::new(TrackMeterState::default()))
-                .clone();
-
-            // An empty insert makes no sound, and building its node was most
-            // of a rebuild: a new song has 500 of them, and building them all
-            // took about 14 ms on the audio thread, longer than a block, so
-            // every rebuild was a click. Its meter shows silence.
-            if is_placeholder(track, &reached) && !stashed_chains.contains_key(&track.id) {
-                meter.park();
-                continue;
-            }
-
-            // MIDI tracks get an entirely separate node type — a built-in
-            // monosynth that converts pre-resolved note schedules into
-            // audio. The TrackNode path below is for audio-bearing tracks
-            // that play sample clips, which can't service MIDI content.
-            // A frozen MIDI track is audio now: it falls through to the
-            // TrackNode path below, which plays the render. Building the
-            // instrument node as well would play the part twice.
-            if matches!(track.kind, hardwave_project::TrackKind::Midi) && !track.frozen {
-                let mut midi_node = crate::midi_track_node::MidiTrackNode::new(
-                    track.id.clone(),
-                    track.name.clone(),
-                    meter.clone(),
-                );
-                midi_node.set_prefs(self.audio_prefs.clone());
-                let (vca_gain_db, vca_muted) =
-                    hardwave_project::vca::offset_for(&project.vcas, &track.id);
-                midi_node.set_volume_db(track.volume_db + vca_gain_db);
-                midi_node.set_pan(track.pan);
-                midi_node.set_automation_lanes(audible_lanes(track));
-                midi_node.set_automation_clips(audible_automation_clips(track));
-                midi_node.set_stereo_separation(track.stereo_separation);
-                // The mixer strip's polarity, swap and delay and the rack's
-                // filter, as an audio track has them.
-                midi_node.set_phase_invert(track.phase_invert);
-                midi_node.set_swap_lr(track.swap_lr);
-                midi_node.set_delay_samples(track.delay_samples);
-                midi_node.set_filter(
-                    crate::track_node::TrackFilterType::parse(&track.filter_type),
-                    track.filter_cutoff_hz,
-                    track.filter_resonance,
-                    self.sample_rate as f32,
-                );
-                // The live mix starts from what the project says.
-                meter.set_vca_gain(db_to_linear_f32(vca_gain_db));
-                meter.set_mix(
-                    db_to_linear_f32(track.volume_db + vca_gain_db),
-                    track.pan as f32,
-                    track.stereo_separation as f32,
-                );
-                let effective_mute_midi = track.muted || vca_muted || silenced_by_solo(track);
-                midi_node.set_muted(effective_mute_midi);
-                midi_node.set_soloed(track.soloed);
-                // Map the project's NativeInstrument enum to the
-                // engine's Instrument enum (they're separate so the
-                // engine doesn't take a project-crate dep cycle).
-                use crate::midi_track_node::Instrument as EngInstr;
-                use crate::midi_track_node::Waveform;
-                use hardwave_project::track::NativeInstrument as ProjInstr;
-                let (eng_instr, waveform) = match track.instrument {
-                    ProjInstr::BuiltinSine => (EngInstr::BuiltinSine, Waveform::Sine),
-                    ProjInstr::BuiltinSaw => (EngInstr::BuiltinSine, Waveform::Saw),
-                    ProjInstr::BuiltinSquare => (EngInstr::BuiltinSine, Waveform::Square),
-                    ProjInstr::BuiltinTriangle => (EngInstr::BuiltinSine, Waveform::Triangle),
-                    ProjInstr::KickSynth => (EngInstr::KickSynth, Waveform::Sine),
-                };
-                midi_node.set_instrument(eng_instr, self.sample_rate as f32);
-                midi_node.set_waveform(waveform);
-                if matches!(track.instrument, ProjInstr::KickSynth)
-                    && track.kick_patch.has_overrides()
-                {
-                    midi_node.apply_kick_patch(&track.kick_patch);
-                }
-
-                // Walk the clip placements and turn each MIDI note into a
-                // sample-positioned MidiNoteRegion. Tempo-map lookups happen
-                // here on the UI thread so the audio thread sees a flat
-                // sorted list.
-                let mut note_regions: Vec<crate::midi_track_node::MidiNoteRegion> = Vec::new();
-                let mut control_regions: Vec<crate::midi_track_node::MidiControlRegion> =
-                    Vec::new();
-                // The track's own clips, plus the clips of every track
-                // routed into it. A routed clip plays this track's
-                // instrument through this track's chain, which is what
-                // layering two synths off one part means.
-                let routed = midi_routes.get(&track.id).cloned().unwrap_or_default();
-                // In pattern mode the channel plays the channel rack's
-                // active pattern instead of the playlist, as in FL. The
-                // steps were saved and never read, so the step sequencer
-                // made no sound at all.
-                let pattern_mode = self
-                    .transport
-                    .pattern_mode
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                if let Some(rack) = &project.step_rack {
-                    self.transport
-                        .pattern_len_ticks
-                        .store(rack.length_ticks(), std::sync::atomic::Ordering::Relaxed);
-                }
-                let pattern_clip = if pattern_mode {
-                    project.step_rack.as_ref().map(|rack| {
-                        let notes: Vec<hardwave_midi::MidiNote> = rack
-                            .notes_for(&track.id)
-                            .into_iter()
-                            .map(|n| hardwave_midi::MidiNote {
-                                start_tick: n.tick,
-                                duration_ticks: n.duration_ticks,
-                                pitch: n.pitch,
-                                velocity: n.velocity,
-                                pan: n.pan,
-                                fine_cents: n.fine_cents,
-                                release_velocity: n.release_velocity,
-                                ..Default::default()
-                            })
-                            .collect();
-                        hardwave_project::clip::ClipPlacement {
-                            content: hardwave_project::clip::ClipContent::Midi(
-                                hardwave_project::clip::MidiClipRef {
-                                    id: "pattern".into(),
-                                    clip: hardwave_midi::MidiClip {
-                                        notes,
-                                        length_ticks: rack.length_ticks(),
-                                        ..hardwave_midi::MidiClip::new(
-                                            "pattern".into(),
-                                            "Pattern".into(),
-                                            rack.length_ticks(),
-                                        )
-                                    },
-                                },
-                            ),
-                            track_id: track.id.clone(),
-                            position_ticks: 0,
-                            length_ticks: rack.length_ticks(),
-                            lane: 0,
-                            color: None,
-                            row: None,
-                        }
-                    })
-                } else {
-                    None
-                };
-                let pattern_clips = pattern_clip.map(|c| vec![c]);
-                let clip_sources: Box<
-                    dyn Iterator<Item = &Vec<hardwave_project::clip::ClipPlacement>>,
-                > = match &pattern_clips {
-                    Some(p) => Box::new(std::iter::once(p)),
-                    None => Box::new(
-                        std::iter::once(&track.clips)
-                            .chain(routed.iter().map(|index| &project.tracks[*index].clips)),
-                    ),
-                };
-                for clip in clip_sources.flatten() {
-                    let hardwave_project::clip::ClipContent::Midi(midi_ref) = &clip.content else {
-                        continue;
-                    };
-                    // A muted clip contributes nothing, the same way a muted
-                    // audio clip is skipped; nor does one on a silent row.
-                    if midi_ref.clip.muted || silent_rows.has(clip.row) {
-                        continue;
-                    }
-                    // MIDI effects sit between the clip and the
-                    // instrument. With an empty chain this is the clip's
-                    // own notes, which is every project written before
-                    // the chain existed.
-                    let heard = if track.midi_fx.is_empty() {
-                        std::borrow::Cow::Borrowed(&midi_ref.clip.notes)
-                    } else {
-                        std::borrow::Cow::Owned(hardwave_midi::midi_fx::apply_chain(
-                            &midi_ref.clip.notes,
-                            &track.midi_fx,
-                        ))
-                    };
-                    // Where the clip on the playlist ends, once it has been
-                    // made shorter than what it holds (shrunk from the right,
-                    // or the left half of a split): nothing after it plays
-                    // and a note held over it is let go there. A clip as long
-                    // as its content or longer plays all of it, so a song
-                    // with notes drawn past a clip's end sounds as it did.
-                    let window_end = (clip.length_ticks < midi_ref.clip.length_ticks)
-                        .then_some(clip.length_ticks);
-                    for note in heard.iter() {
-                        let mut duration = note.duration_ticks.max(1);
-                        if let Some(end) = window_end {
-                            if note.start_tick >= end {
-                                continue;
-                            }
-                            duration = duration.min(end - note.start_tick);
-                        }
-                        let on_tick = clip.position_ticks + note.start_tick;
-                        let off_tick = on_tick + duration;
-                        let note_on = tempo_map.tick_to_samples(on_tick, sample_rate);
-                        let note_off = tempo_map.tick_to_samples(off_tick, sample_rate);
-                        note_regions.push(crate::midi_track_node::MidiNoteRegion {
-                            note_on_sample: note_on,
-                            note_off_sample: note_off,
-                            pitch: note.pitch,
-                            velocity: note.velocity,
-                            muted: note.muted,
-                            pan: note.pan,
-                            fine_cents: note.fine_cents,
-                            release_velocity: note.release_velocity,
-                            channel: note.channel & 0x0F,
-                        });
-                    }
-                    // Controller movements: mod wheel, sustain, bend. Mapped
-                    // through the tempo map here, like the notes, and kept
-                    // inside the clip so a clip moved on the playlist takes
-                    // them with it.
-                    for c in &midi_ref.clip.controls {
-                        if window_end.is_some_and(|end| c.tick >= end) {
-                            continue;
-                        }
-                        let tick = clip.position_ticks + c.tick.min(midi_ref.clip.length_ticks);
-                        control_regions.push(crate::midi_track_node::MidiControlRegion {
-                            sample: tempo_map.tick_to_samples(tick, sample_rate),
-                            channel: c.channel,
-                            kind: c.kind,
-                            value: c.value,
-                        });
-                    }
-                }
-                // Live input goes through the same chain the clips did.
-                midi_node.set_midi_fx(track.midi_fx.clone());
-                // A tuning other than twelve equal, worked out here so
-                // the audio thread only ever reads a table.
-                midi_node.set_tuning(track.tuning.as_ref().map(|t| Box::new(t.table())));
-                midi_node.set_mpe(track.mpe);
-                // MPE out: each note a member channel of its own, so its
-                // detune can be its own bend.
-                if track.mpe {
-                    crate::midi_track_node::assign_mpe_channels(&mut note_regions);
-                }
-                midi_node.set_notes(note_regions);
-                // The channel's audio clips: a consolidated part, a sample
-                // dropped on it. They used to be silent here, so a
-                // consolidated kick on a MIDI channel played nothing.
-                let midi_pitch_factor = 2.0_f64.powf(
-                    (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0,
-                );
-                let audio = self.audio_regions(
-                    track,
-                    tempo_map,
-                    sample_rate,
-                    midi_pitch_factor,
-                    &silent_rows,
-                );
-                if !audio.is_empty() {
-                    midi_node.set_audio_clips(self.audio_pool.clone(), audio);
-                }
-                midi_node.set_controls(control_regions);
-                // This track's row of the launcher grid: its MIDI loops, in
-                // samples from each loop's start. Lengths are in ticks in
-                // the project so they follow the tempo.
-                if !track.session_slots.is_empty() {
-                    let samples_per_tick =
-                        tempo_map.tick_to_samples(hardwave_midi::PPQ, sample_rate) as f64
-                            / hardwave_midi::PPQ as f64;
-                    let at = |tick: u64| (tick as f64 * samples_per_tick).round() as u64;
-                    let slots = track
-                        .session_slots
-                        .iter()
-                        .map(|slot| {
-                            let slot = slot.as_ref()?;
-                            let notes = slot.notes.as_ref()?;
-                            let length = slot.length_ticks.max(1);
-                            let mut regions: Vec<crate::midi_track_node::MidiNoteRegion> = notes
-                                .iter()
-                                .filter(|n| n.start_tick < length)
-                                .map(|n| {
-                                    // A note held past the loop's end is let go there.
-                                    let off = (n.start_tick + n.duration_ticks.max(1)).min(length);
-                                    crate::midi_track_node::MidiNoteRegion {
-                                        note_on_sample: at(n.start_tick),
-                                        note_off_sample: at(off),
-                                        pitch: n.pitch,
-                                        velocity: n.velocity,
-                                        muted: n.muted,
-                                        pan: n.pan,
-                                        fine_cents: n.fine_cents,
-                                        release_velocity: n.release_velocity,
-                                        channel: n.channel & 0x0F,
-                                    }
-                                })
-                                .collect();
-                            regions.sort_by_key(|r| r.note_on_sample);
-                            Some(crate::midi_track_node::SessionMidiClip {
-                                length_samples: at(length),
-                                notes: regions,
-                            })
-                        })
-                        .collect();
-                    midi_node.set_session_midi(
-                        slots,
-                        self.session.track(&track.id),
-                        Arc::clone(&self.session.quantise_beats),
-                    );
-                }
-
-                // Its plug-ins, carried over from the node this rebuild
-                // replaces, as an audio track's are below. They were not:
-                // every rebuild after a plug-in went on an instrument track
-                // (a note drawn, a track added, a plug-in added, which itself
-                // rebuilds) sent the chain to the graveyard, so instruments
-                // and effects on MIDI tracks went silent and the built-in
-                // synth played in their place.
-                if let Some(chain) = stashed_chains
-                    .remove(&track.id)
-                    .or_else(|| self.parked_chains.remove(&track.id))
-                {
-                    midi_node.restore_chain(chain);
-                }
-                if let Some(live) = stashed_live.remove(&track.id) {
-                    midi_node.restore_live_midi(live);
-                }
-                let node_id = self.graph.add_node(Box::new(midi_node));
-                // A track armed for input hears the keyboard; with none
-                // armed, the keyboard plays the track picked last, so a new
-                // MIDI track still answers a controller without arming.
-                let accepts = hears_keyboard(track, armed_for_input, keyboard_track.as_deref());
-                self.graph.set_accepts_live_midi(node_id, accepts);
-                self.midi_track_nodes.push((track.id.clone(), node_id));
-                track_id_to_node.insert(track.id.clone(), node_id);
-                continue;
-            }
-
-            let mut node = TrackNode::new(
-                track.id.clone(),
-                track.name.clone(),
-                self.audio_pool.clone(),
-                meter,
-            );
-            // Snapshot the project's automation lanes for this track
-            // onto the audio-thread node. Cloned here on the UI thread
-            // so process() never has to walk the project tree under a
-            // lock. Empty list is the no-automation steady state.
-            node.set_prefs(self.audio_prefs.clone());
-            node.set_automation_lanes(audible_lanes(track));
-            node.set_automation_clips(audible_automation_clips(track));
-            // Reattach the plug-in chain stashed at the top of this
-            // rebuild. Tracks that didn't exist before fall through to
-            // the default-empty chain that TrackNode::new gave them.
-            //
-            // A frozen track is the exception: the render already went
-            // through the chain, so running it again would apply every
-            // plug-in twice and cost the CPU freezing was meant to give
-            // back. The chain is dropped from the graph, not from the
-            // project, so unfreezing puts it back untouched.
-            if let Some(chain) = stashed_chains
-                .remove(&track.id)
-                .or_else(|| self.parked_chains.remove(&track.id))
-            {
-                if track.frozen {
-                    self.parked_chains.insert(track.id.clone(), chain);
-                } else {
-                    node.restore_chain(chain);
-                }
-            }
-            // A VCA group adds its level to the member's own fader and can
-            // silence it, without moving anything in the signal path.
-            let (vca_gain_db, vca_muted) =
-                hardwave_project::vca::offset_for(&project.vcas, &track.id);
-            node.set_volume_db(track.volume_db + vca_gain_db);
-            node.set_pan(track.pan);
-            let effective_mute = track.muted || vca_muted || silenced_by_solo(track);
-            node.set_muted(effective_mute);
-            node.set_soloed(track.soloed);
-            node.set_phase_invert(track.phase_invert);
-            node.set_swap_lr(track.swap_lr);
-            node.set_stereo_separation(track.stereo_separation);
-            // The live mix starts from what the project says.
-            if let Some(meter) = meters.get(&track.id) {
-                meter.set_vca_gain(db_to_linear_f32(vca_gain_db));
-                meter.set_mix(
-                    db_to_linear_f32(track.volume_db + vca_gain_db),
-                    track.pan as f32,
-                    track.stereo_separation as f32,
-                );
-            }
-            node.set_delay_samples(track.delay_samples);
-            node.set_frozen(track.frozen);
-            let filter_kind = crate::track_node::TrackFilterType::parse(&track.filter_type);
-            node.set_filter(
-                filter_kind,
-                track.filter_cutoff_hz,
-                track.filter_resonance,
-                sample_rate as f32,
-            );
-
-            // Per-track coarse + fine pitch offset. Combined as a single resample
-            // factor that's folded into each clip's source_step below. A
-            // freeze render already has it: played through it again, a
-            // frozen track came out transposed twice and out of time.
-            let track_pitch_offset =
-                (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0;
-            let track_pitch_factor = if track.frozen {
-                1.0
-            } else {
-                2.0_f64.powf(track_pitch_offset)
-            };
-
-            let regions = self.audio_regions(
-                track,
-                tempo_map,
-                sample_rate,
-                track_pitch_factor,
-                &silent_rows,
-            );
-            node.set_clips(regions);
-
-            // This track's row of the launcher grid. Lengths are in
-            // ticks in the project so they follow the tempo, and in
-            // samples here because the audio thread counts samples.
-            if !track.session_slots.is_empty() {
-                let tempo_map = &project.tempo_map;
-                let samples_per_tick = tempo_map.tick_to_samples(hardwave_midi::PPQ, sample_rate)
-                    as f64
-                    / hardwave_midi::PPQ as f64;
-                let slots: Vec<Option<crate::track_node::SessionClip>> = track
-                    .session_slots
-                    .iter()
-                    .map(|slot| {
-                        // A MIDI loop has no audio to play on an audio track.
-                        slot.as_ref().filter(|s| s.notes.is_none()).map(|s| {
-                            crate::track_node::SessionClip {
-                                source_id: s.source_path.clone(),
-                                source_offset: s.source_start,
-                                length_samples: (s.length_ticks as f64 * samples_per_tick) as u64,
-                                gain: if s.gain_db <= -100.0 {
-                                    0.0
-                                } else {
-                                    10f64.powf(s.gain_db / 20.0) as f32
-                                },
-                            }
-                        })
-                    })
-                    .collect();
-                node.set_session_slots(slots);
-                node.set_session(
-                    self.session.track(&track.id),
-                    Arc::clone(&self.session.quantise_beats),
-                );
-            }
-
-            let node_id = self.graph.add_node(Box::new(node));
-            // Audio tracks accept live MIDI only when explicitly armed
-            // for input — common pattern for routing a controller into
-            // a synth plug-in loaded on an audio-bearing track. Hardware
-            // events flow through the insert chain to that plug-in.
-            self.graph
-                .set_accepts_live_midi(node_id, track.armed && track.monitor_input);
-            track_id_to_node.insert(track.id.clone(), node_id);
-        }
-
-        // Add master node (reads volume from shared transport atomic — no rebuild on change)
-        let master_track_id = project
-            .tracks
-            .iter()
-            .find(|t| matches!(t.kind, hardwave_project::track::TrackKind::Master))
-            .map(|t| t.id.clone());
-        let master_node = MasterNode::new_with_reference(
-            Arc::clone(&self.transport.master_volume_db),
-            master_track_id.clone(),
-            Arc::clone(&self.reference),
-            Arc::clone(&self.reference_on),
-            Arc::clone(&self.reference_gain_centi_db),
-        );
-        let master_id = self.graph.add_node(Box::new(master_node));
-        self.master_id = Some(master_id);
-
-        // Point the Master track's id at the master node so its insert chain is
-        // reachable, and carry the live chain across the rebuild the same way
-        // track chains are carried.
-        //
-        // Master isn't audio-bearing, so it gets no `TrackNode` and never
-        // landed in this map — every `InsertCommand` aimed at the master strip
-        // resolved to no node and was dropped, and `hydrate_offline_inserts`
-        // skipped it on export too. A plug-in added to the master was persisted
-        // in the project and then silently processed nothing, anywhere.
-        if let Some(mid) = &master_track_id {
-            track_id_to_node.insert(mid.clone(), master_id);
-            if let Some(chain) = stashed_chains.remove(mid) {
-                if let Some(node) = self.graph.node_mut(master_id) {
-                    node.restore_chain(chain);
-                }
-            }
-        }
-
-        // Connect each track either to its configured output_bus (another
-        // track) or to master. Invalid targets (self-routing, unknown id,
-        // cycles) silently fall back to master — the command layer already
-        // rejects bad values, but the engine is defensive to keep audio
-        // flowing even if a legacy project carries stale routing.
-        // Tracks another track's output lands on. They are buses, and are
-        // told so below together with the send targets.
-        let mut bus_targets: Vec<String> = Vec::new();
-        for track in &project.tracks {
-            if !track.kind.is_audio_bearing() {
-                continue;
-            }
-            // Stem renders exclude every track but the target from the mix.
-            // The node still exists and still processes, so it can key a
-            // sidechain — it just doesn't reach the output.
-            if track.stem_excluded {
-                continue;
-            }
-            let Some(&src_node) = track_id_to_node.get(&track.id) else {
-                continue;
-            };
-            let dst_node = match track.output_bus.as_ref() {
-                Some(bus_id) if bus_id != &track.id => {
-                    // Walk the chain from the bus target; if the chain comes
-                    // back to the current track it's a cycle, fall through to
-                    // master. Otherwise use the configured bus when it maps to
-                    // a real graph node.
-                    let mut visited: std::collections::HashSet<String> =
-                        std::collections::HashSet::new();
-                    let mut cursor: Option<&str> = Some(bus_id.as_str());
-                    let mut cycle = false;
-                    while let Some(next) = cursor {
-                        if next == track.id {
-                            cycle = true;
-                            break;
-                        }
-                        if !visited.insert(next.to_string()) {
-                            break;
-                        }
-                        cursor = project
-                            .tracks
-                            .iter()
-                            .find(|t| t.id == next)
-                            .and_then(|t| t.output_bus.as_deref());
-                    }
-                    match track_id_to_node.get(bus_id).copied() {
-                        Some(node) if !cycle => {
-                            bus_targets.push(bus_id.clone());
-                            node
-                        }
-                        _ => master_id,
-                    }
-                }
-                _ => master_id,
-            };
-            self.graph.connect(src_node, 0, dst_node, 0);
-            self.graph.connect(src_node, 1, dst_node, 1);
-        }
-
-        // Wire the live input to a single InputNode that drains the input ring
-        // buffer. Two separate questions decide what happens:
-        //
-        //   armed          -> the input has to reach the recording tap
-        //   monitor_input  -> the input also has to be audible
-        //
-        // The node used to be built only for armed AND monitoring tracks, and
-        // the recording tap lives on that node, so arming a track without
-        // switching monitoring on recorded silence: press record, play, get
-        // an empty take and no error. Arming alone is now enough to capture.
-        //
-        // Each armed track records its own input: a channel or a pair of the
-        // interface, or another track's output. Every source gets a capture
-        // of its own, in the order `record_sources` gives, which is the order
-        // `start_capture` armed them in.
-        let default_input = self
-            .input_consumer
-            .try_lock()
-            .and_then(|g| g.as_ref().map(|r| r.default))
-            .unwrap_or(InputChannel {
-                first: 0,
-                mono: false,
-            });
-        let mut sources = project.record_sources(default_input);
-        sources.truncate(MAX_RECORD_SOURCES);
-        // Each monitoring track with its input and whether it follows the
-        // transport (`monitor_auto`), and every track the live input passes
-        // through.
-        let mut monitor_routes: Vec<(crate::graph::NodeId, InputChannel, bool)> = Vec::new();
-        let mut live_tracks: Vec<&str> = Vec::new();
-        // An armed instrument track plays the keyboard live, so any armed
-        // track keeps the graph running while stopped; only audio tracks
-        // record and monitor the interface.
-        let any_armed = project
-            .tracks
-            .iter()
-            .any(|t| t.armed && t.kind.is_audio_bearing());
-        for track in project.record_armed() {
-            // A track recording another track's output takes nothing from
-            // the interface, so there is no input to hear on it.
-            let RecordSource::Interface(pick) = project.record_source_of(track, default_input)
-            else {
-                continue;
-            };
-            if track.monitor_input {
-                if let Some(&node_id) = track_id_to_node.get(&track.id) {
-                    monitor_routes.push((node_id, pick, track.monitor_auto));
-                    live_tracks.push(&track.id);
-                }
-            }
-        }
-        self.has_monitored_input = any_armed;
-        if any_armed {
-            let direct = self
-                .transport
-                .direct_monitoring
-                .load(std::sync::atomic::Ordering::Relaxed);
-            // The hub drains the interface's input once per block; each input
-            // node reads its channels from what the hub drained, and the
-            // edge from the hub makes sure it has run first.
-            let hub = self.graph.add_node(Box::new(InputHub::new(
-                Arc::clone(&self.input_consumer),
-                Arc::clone(&self.input_block),
-            )));
-            let mut input_nodes: Vec<(InputChannel, crate::graph::NodeId)> = Vec::new();
-            for (slot, source) in sources.iter().enumerate() {
-                let capture = Arc::clone(&self.captures[slot]);
-                match source {
-                    RecordSource::Interface(pick) => {
-                        let mut node = InputNode::new(Arc::clone(&self.input_block), *pick);
-                        node.set_capture(Some(capture));
-                        let id = self.graph.add_node(Box::new(node));
-                        self.graph.connect(hub, 0, id, 0);
-                        input_nodes.push((*pick, id));
-                    }
-                    // Recording another track's output (resampling): a tap on
-                    // that node's output feeds this capture.
-                    RecordSource::Track(source_id) => {
-                        if let Some(&source_node) = track_id_to_node.get(source_id) {
-                            let tap = self.graph.add_node(Box::new(RecordTapNode::new(capture)));
-                            self.graph.connect(source_node, 0, tap, 0);
-                            self.graph.connect(source_node, 1, tap, 1);
-                        }
-                    }
-                }
-            }
-            // Past the most inputs that record at once, a track still hears
-            // its input; it just has no capture.
-            for &(_, pick, _) in &monitor_routes {
-                if !input_nodes.iter().any(|(p, _)| *p == pick) {
-                    let id = self.graph.add_node(Box::new(InputNode::new(
-                        Arc::clone(&self.input_block),
-                        pick,
-                    )));
-                    self.graph.connect(hub, 0, id, 0);
-                    input_nodes.push((pick, id));
-                }
-            }
-            let node_of = |pick: InputChannel| {
-                input_nodes
-                    .iter()
-                    .find(|(p, _)| *p == pick)
-                    .map(|&(_, id)| id)
-            };
-            if monitor_routes.is_empty() {
-                // Armed but not monitoring: the input nodes exist only to
-                // feed the recording, so they connect to nothing. Wiring them
-                // to master here would make the input audible when the user
-                // switched monitoring off.
-            } else if direct {
-                // Direct monitoring: bypass the track FX chain and route live
-                // input straight to master for minimum latency. One path per
-                // input, so it follows the transport only when every track
-                // monitoring that input does.
-                for &(pick, input_id) in &input_nodes {
-                    let on_it: Vec<bool> = monitor_routes
-                        .iter()
-                        .filter(|r| r.1 == pick)
-                        .map(|r| r.2)
-                        .collect();
-                    if on_it.is_empty() {
-                        continue;
-                    }
-                    let auto = on_it.iter().all(|&auto| auto);
-                    self.graph.connect(input_id, 0, master_id, 0);
-                    let left_edge = self.graph.last_edge_index();
-                    self.graph.connect(input_id, 1, master_id, 1);
-                    let right_edge = self.graph.last_edge_index();
-                    self.monitor_edges.push(MonitorEdges {
-                        auto,
-                        left_edge,
-                        right_edge,
-                    });
-                }
-            } else {
-                for (track_node_id, pick, auto) in monitor_routes {
-                    let Some(input_id) = node_of(pick) else {
-                        continue;
-                    };
-                    self.graph.connect(input_id, 0, track_node_id, 0);
-                    let left_edge = self.graph.last_edge_index();
-                    self.graph.connect(input_id, 1, track_node_id, 1);
-                    let right_edge = self.graph.last_edge_index();
-                    self.monitor_edges.push(MonitorEdges {
-                        auto,
-                        left_edge,
-                        right_edge,
-                    });
-                }
-                // The tracks the input passes through keep running while
-                // stopped: each monitoring track, and every bus it reaches
-                // through its output or a send.
-                let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-                while let Some(id) = live_tracks.pop() {
-                    if !seen.insert(id) {
-                        continue;
-                    }
-                    let Some(track) = project.tracks.iter().find(|t| t.id == id) else {
-                        continue;
-                    };
-                    if let Some(&node_id) = track_id_to_node.get(id) {
-                        if let Some(node) = self.graph.node_mut(node_id) {
-                            node.set_live_input(true);
-                        }
-                    }
-                    live_tracks.extend(track.output_bus.as_deref());
-                    live_tracks.extend(
-                        track
-                            .sends
-                            .iter()
-                            .filter(|send| send.enabled)
-                            .map(|send| send.target.as_str()),
-                    );
-                }
-            }
-        }
-
-        // Wire send routing. Each enabled send contributes an extra edge from
-        // the source track's pre-fader tap (ports 2/3) or post-fader output
-        // (ports 0/1) into the target track's input (ports 0/1), with the
-        // send amount applied as per-edge gain.
-        // Tracks that something routes into. A bus with nothing of its own on
-        // it still has to mix what reaches it.
-        // A track routed to another track's output counts the same way:
-        // without it, a bus that only had tracks routed to it (no sends, no
-        // clips of its own) took the idle path and played nothing.
-        let mut receives_input: std::collections::HashSet<String> =
-            bus_targets.into_iter().collect();
-        for track in &project.tracks {
-            // An excluded track's sends are dropped too, so a stem carries only
-            // the target's own send tail rather than everyone else's.
-            if track.stem_excluded {
-                continue;
-            }
-            let src_node = match track_id_to_node.get(&track.id) {
-                Some(&id) => id,
-                None => continue,
-            };
-            for (send_index, send) in track.sends.iter().enumerate() {
-                if !send.enabled {
-                    continue;
-                }
-                let dst_node = match track_id_to_node.get(&send.target) {
-                    Some(&id) => id,
-                    None => continue,
-                };
-                if dst_node == src_node {
-                    continue;
-                }
-                // A send into something that already plays into this track
-                // (a bus it is routed to, through outputs, other sends or a
-                // sidechain) would close a loop, and a loop silenced the
-                // whole song: the graph runs nothing in or after it. The
-                // send is left out and everything else plays.
-                if self.graph.reaches(dst_node, src_node) {
-                    log::warn!(
-                        "send {send_index} from track {} to {} would loop back; left out",
-                        track.id,
-                        send.target
-                    );
-                    continue;
-                }
-                let gain = if send.gain_db <= -100.0 {
-                    0.0
-                } else {
-                    10.0_f64.powf(send.gain_db / 20.0) as f32
-                };
-                let (src_l, src_r) = if send.pre_fader { (2, 3) } else { (0, 1) };
-                self.graph
-                    .connect_with_gain(src_node, src_l, dst_node, 0, gain);
-                let left_edge = self.graph.last_edge_index();
-                self.graph
-                    .connect_with_gain(src_node, src_r, dst_node, 1, gain);
-                let right_edge = self.graph.last_edge_index();
-                // Remember which edges carry this send, so a SendLevel
-                // automation lane can move its gain per block. The level used
-                // to be baked here at rebuild time, which is why send
-                // automation was stored, drawn and never applied.
-                receives_input.insert(send.target.clone());
-                self.send_edges.push(SendEdges {
-                    track_id: track.id.clone(),
-                    send_index,
-                    left_edge,
-                    right_edge,
-                    base_gain: gain,
-                    modulated: false,
-                });
-            }
-        }
-
-        // Now that every send is known, tell the receiving nodes they are
-        // buses. Without this a bus with no clips, no inserts and no
-        // automation took the idle path and every send into it was silent.
-        for (track_id, &node_id) in track_id_to_node.iter() {
-            if !receives_input.contains(track_id) {
-                continue;
-            }
-            if let Some(node) = self.graph.node_mut(node_id) {
-                node.set_receives_input(true);
-            }
-        }
-
-        // Sidechain routing. A plug-in slot with a `sidechain_source` set
-        // gets that source track's post-fader output mixed into THIS
-        // track node's input ports 2/3 — the sidechain bus, kept separate
-        // from the main 0/1 signal. The node's insert chain forwards
-        // those channels to the keyed slot so e.g. a compressor ducks the
-        // bass against the kick. The per-slot flag is always synced (so
-        // clearing a source disables it); multiple slots on one track
-        // share the single bus, and distinct sources sum into it.
-        for track in &project.tracks {
-            let dst_node = match track_id_to_node.get(&track.id) {
-                Some(&id) => id,
-                None => continue,
-            };
-            let mut sources = Vec::new();
-            for slot in &track.inserts {
-                let active = slot.sidechain_source.is_some();
-                if let Some(node) = self.graph.node_mut(dst_node) {
-                    node.set_slot_sidechain(&slot.id, active);
-                }
-                if let Some(src_id) = &slot.sidechain_source {
-                    if let Some(&src_node) = track_id_to_node.get(src_id) {
-                        if src_node != dst_node && !sources.contains(&src_node) {
-                            sources.push(src_node);
-                        }
-                    }
-                }
-            }
-            for src_node in sources {
-                // Keyed from a track this one plays into (its own bus): the
-                // key would need this track's sound before it is made. The
-                // loop silenced everything, as with a send; it is left out.
-                if self.graph.reaches(dst_node, src_node) {
-                    log::warn!(
-                        "sidechain into track {} from a track it plays into would loop back; left out",
-                        track.id
-                    );
-                    continue;
-                }
-                self.graph.connect_with_gain(src_node, 0, dst_node, 2, 1.0);
-                self.graph.connect_with_gain(src_node, 1, dst_node, 3, 1.0);
-            }
-        }
-
-        // Persist the track_id → NodeId map so per-track plug-in
-        // commands can resolve in O(1) on the audio thread.
-        self.track_id_to_node = track_id_to_node;
-
-        // A frozen track that was deleted: its parked chain goes too.
-        let gone: Vec<String> = self
-            .parked_chains
-            .keys()
-            .filter(|id| project.track(id).is_none())
-            .cloned()
-            .collect();
-        for id in gone {
-            if let Some(chain) = self.parked_chains.remove(&id) {
-                stashed_chains.insert(id, chain);
-            }
-        }
-
-        // Any chains left in `stashed_chains` belong to tracks that
-        // disappeared during this rebuild. Ship them to the graveyard
-        // so an off-RT thread drops them — never on the audio thread.
-        for (track_id, mut chain) in stashed_chains.drain() {
-            for slot in chain.slots.drain(..) {
-                if self.insert_graveyard_tx.try_bury(slot).is_err() {
-                    log::warn!(
-                        "rebuild graveyard saturated dropping track {track_id} chain; remaining slots will free on engine shutdown"
-                    );
-                    break;
-                }
-            }
-        }
-
-        self.needs_rebuild = false;
-        // Finalize PDC: compute per-edge compensation delays so parallel
-        // paths arrive sample-aligned against the slowest branch before the
-        // total-latency number is published.
-        self.graph.finalize_pdc(
-            self.transport
-                .pdc_enabled
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
-        self.graph.restore_delays(held_delays);
-        self.graph_latency_samples.store(
-            self.graph.total_latency_samples(),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-    }
     /// Reset every node in the graph.
     ///
     /// Clears held instrument voices and the sample-buffer caches, so nothing
@@ -5781,11 +4686,11 @@ impl EngineCallback {
         // try_lock, never lock: the UI holds the project for a moment when it
         // edits it, and waiting here would be a dropout. Losing a block's
         // clicks costs at most one beat.
-        let Some(project) = self.project.try_lock() else {
-            return 0;
-        };
+        // When it is busy, the tempo map the graph was built with stands in.
+        let project = self.project.try_lock();
+        let tempo_map = project.as_ref().map_or(&self.tempo_map, |p| &p.tempo_map);
         crate::metronome::schedule_block_clicks(
-            &project.tempo_map,
+            tempo_map,
             self.transport.position_samples.load(Relaxed),
             num_frames,
             self.sample_rate as f64,
@@ -5947,6 +4852,9 @@ impl EngineCallback {
         if self.needs_rebuild {
             self.rebuild_graph();
         }
+        // A graph the builder thread finished goes in before the plug-in
+        // commands, so a plug-in for a new track finds its node.
+        self.take_ready_graph();
 
         // Drain pending plug-in chain commands (Add/Remove/SetParameter
         // /etc) and dispatch each to its owning TrackNode. Done AFTER
@@ -6166,34 +5074,38 @@ impl EngineCallback {
         // audio thread never blocks on a mutating UI command — stale BPM for one
         // block is fine.
         if playing {
-            if let Some(project) = self.project.try_lock() {
-                if project.tempo_map.entries.len() > 1 {
-                    let sr = self.sample_rate as f64;
-                    let pos_samples = self.transport.position();
-                    let cur_tick = project.tempo_map.samples_to_tick(pos_samples, sr);
-                    let cur_bpm = project.tempo_map.bpm_at(cur_tick);
-                    self.transport
-                        .bpm
-                        .store(cur_bpm, std::sync::atomic::Ordering::Relaxed);
-                    // The signature followed the same way. Only the tempo was
-                    // pushed here, so a signature change part-way through a
-                    // song was stored in the project and then ignored: the
-                    // click kept accenting the old bar length and plug-ins
-                    // kept being told the old meter.
-                    let (num, den) = project.tempo_map.time_sig_at(cur_tick);
-                    self.transport.time_sig.store(
-                        crate::transport::pack_time_sig(num, den),
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                }
+            // When the project is busy, the tempo map the graph was built
+            // with stands in.
+            let project = self.project.try_lock();
+            let tempo_map = project.as_ref().map_or(&self.tempo_map, |p| &p.tempo_map);
+            if tempo_map.entries.len() > 1 {
+                let sr = self.sample_rate as f64;
+                let pos_samples = self.transport.position();
+                let cur_tick = tempo_map.samples_to_tick(pos_samples, sr);
+                let cur_bpm = tempo_map.bpm_at(cur_tick);
+                self.transport
+                    .bpm
+                    .store(cur_bpm, std::sync::atomic::Ordering::Relaxed);
+                // The signature followed the same way. Only the tempo was
+                // pushed here, so a signature change part-way through a
+                // song was stored in the project and then ignored: the
+                // click kept accenting the old bar length and plug-ins
+                // kept being told the old meter.
+                let (num, den) = tempo_map.time_sig_at(cur_tick);
+                self.transport.time_sig.store(
+                    crate::transport::pack_time_sig(num, den),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         }
 
         // The block's position in ticks, for everything downstream that thinks
         // musically: automation curves, and anything that follows. Taken from
         // the project's tempo map when the lock is free, so it is right under
-        // a tempo change or a ramp, and from the current tempo otherwise,
-        // which is what a one-tempo song gives anyway.
+        // a tempo change or a ramp, and from the map the graph was built with
+        // otherwise. That was worked out from the current tempo, which came
+        // out a hair off even in a one-tempo song: an automated level moved
+        // by a rounding step whenever an edit held the project.
         let position_samples = self.transport.position();
         let tempo_now = self
             .transport
@@ -6203,10 +5115,9 @@ impl EngineCallback {
             Some(project) => project
                 .tempo_map
                 .samples_to_tick(position_samples, self.sample_rate as f64),
-            None => {
-                let secs = position_samples as f64 / (self.sample_rate as f64).max(1.0);
-                (secs * tempo_now.max(1.0) / 60.0 * hardwave_midi::PPQ as f64).max(0.0) as u64
-            }
+            None => self
+                .tempo_map
+                .samples_to_tick(position_samples, self.sample_rate as f64),
         };
 
         // Monitoring that follows the transport, as on a tape machine: the
@@ -6540,6 +5451,23 @@ pub fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> 
 /// a new song, or a bus or return nothing plays into (an FL insert that
 /// has a name and no effects). It makes no sound, so the graph leaves it
 /// out.
+/// Send a chain's plug-ins to the graveyard, to be let go of off the audio
+/// thread. What the graveyard has no room for stays in the chain.
+fn bury_chain(
+    graveyard: &mut crate::insert_chain::PluginGraveyardSender,
+    chain: &mut crate::insert_chain::InsertChain,
+) {
+    while let Some(slot) = chain.slots.pop() {
+        if let Err(slot) = graveyard.try_bury(slot) {
+            chain.slots.push(slot);
+            log::warn!(
+                "plug-in graveyard full; the rest of a deleted track's chain is let go later"
+            );
+            break;
+        }
+    }
+}
+
 fn is_placeholder(
     track: &hardwave_project::Track,
     reached: &std::collections::HashSet<&str>,

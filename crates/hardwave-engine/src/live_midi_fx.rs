@@ -207,7 +207,13 @@ impl LiveMidiFx {
     /// Take over what `old` was holding and playing, from the node a graph
     /// rebuild replaces, so a held key is let go properly and an
     /// arpeggio keeps going. This node's own chain stays.
-    pub fn take_over(&mut self, old: LiveMidiFx) {
+    pub fn take_over(&mut self, mut old: LiveMidiFx) {
+        self.take_over_from(&mut old);
+    }
+
+    /// `take_over` without taking `old` itself, for the audio thread: the
+    /// state is copied out and `old` (with its chain) is freed elsewhere.
+    pub fn take_over_from(&mut self, old: &mut LiveMidiFx) {
         let release = old.release_all || (old.chain != self.chain && old.busy());
         self.keys = old.keys;
         self.order = old.order;
