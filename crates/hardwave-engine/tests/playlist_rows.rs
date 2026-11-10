@@ -234,3 +234,44 @@ fn an_automation_clip_moves_the_track_it_targets() {
     let out = render(&engine, 6);
     assert!(peak(&out, 3, 5) > 0.3);
 }
+
+/// One channel's clips overlapping on two rows both play in full, as FL
+/// layers them; on one row they crossfade, as clips on a track always did.
+#[test]
+fn overlapping_clips_on_different_rows_play_over_each_other() {
+    let render_overlap = |rows: [u32; 2]| {
+        let engine = DawEngine::new();
+        // 140 Hz at 140 BPM: a beat is a whole number of cycles, so the
+        // two clips meet in phase.
+        let tone = make_sine_buffer(RATE, 2.0, 140.0, 0.25);
+        let frames = tone.num_frames as u64;
+        engine.audio_pool.insert("tone".into(), tone);
+        {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Kick".into());
+            let t = p.track_mut(&id).unwrap();
+            for (beat, row) in [(0u64, rows[0]), (1, rows[1])] {
+                let mut clip = tone_clip(&id, frames, beat, Some(row));
+                clip.length_ticks = 2 * hardwave_midi::PPQ;
+                t.clips.push(clip);
+            }
+            p.rows = vec![PlaylistRow::default(); 2];
+        }
+        render(&engine, 4)
+    };
+    let alone = render_overlap([0, 0]);
+    let layered = render_overlap([0, 1]);
+    // Before the overlap both play the first clip alone.
+    assert!((peak(&layered, 0, 1) - peak(&alone, 0, 1)).abs() < 1e-3);
+    // Where they meet, the layered clips add up; the crossfaded ones do not.
+    assert!(
+        peak(&layered, 1, 2) > 1.6 * peak(&layered, 0, 1),
+        "two rows layer: {} against {}",
+        peak(&layered, 1, 2),
+        peak(&layered, 0, 1)
+    );
+    assert!(
+        peak(&alone, 1, 2) < 1.2 * peak(&alone, 0, 1),
+        "one row crossfades"
+    );
+}

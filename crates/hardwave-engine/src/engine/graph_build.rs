@@ -1264,12 +1264,23 @@ impl GraphBuilder {
         // the render, which is parked on its own lane.
         // A clip on a playlist row that is switched off (or not soloed
         // while another is) is left out, as FL's track switch does.
-        let clips_to_play = track.clips.iter().filter(|clip| {
+        let plays = |clip: &&hardwave_project::clip::ClipPlacement| {
             let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
             let on_track = if track.frozen { is_freeze } else { !is_freeze };
             on_track && !silent_rows.has(clip.row)
-        });
-        let mut regions: Vec<ClipRegion> = clips_to_play
+        };
+        // Each region's playlist row, for the crossfades below.
+        let rows: Vec<Option<u32>> = track
+            .clips
+            .iter()
+            .filter(plays)
+            .filter(|clip| matches!(clip.content, hardwave_project::clip::ClipContent::Audio(_)))
+            .map(|clip| clip.row)
+            .collect();
+        let mut regions: Vec<ClipRegion> = track
+            .clips
+            .iter()
+            .filter(plays)
             .filter_map(|clip| match &clip.content {
                 hardwave_project::clip::ClipContent::Audio(audio_clip) => {
                     // The clip's sample, looked up once: its rate, length
@@ -1504,14 +1515,18 @@ impl GraphBuilder {
             })
             .collect();
 
-        // Apply auto-crossfade across overlapping, unmuted audio clips.
-        // We sort indices by timeline_start so adjacency maps to timeline order,
-        // without losing the original positions inside `regions`.
+        // Apply auto-crossfade across overlapping, unmuted audio clips on
+        // the same playlist row. Clips of one channel on different rows play
+        // over each other, as FL layers them: crossfaded, both were turned
+        // down where they met. We sort indices by row, then timeline_start,
+        // so adjacency maps to timeline order within a row, without losing
+        // the original positions inside `regions`.
+        debug_assert_eq!(rows.len(), regions.len());
         let mut order: Vec<usize> = (0..regions.len()).collect();
-        order.sort_by_key(|&i| regions[i].timeline_start);
+        order.sort_by_key(|&i| (rows.get(i).copied().flatten(), regions[i].timeline_start));
         for w in order.windows(2) {
             let (a, b) = (w[0], w[1]);
-            if regions[a].muted || regions[b].muted {
+            if regions[a].muted || regions[b].muted || rows.get(a) != rows.get(b) {
                 continue;
             }
             if regions[b].timeline_start < regions[a].timeline_end {
