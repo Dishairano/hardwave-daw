@@ -1257,6 +1257,7 @@ mod tests {
                 length_ticks: 4 * beat,
                 lane: 0,
                 color: None,
+                row: None,
             });
         let treatment = |p: &hardwave_project::Project| match &p.track("insert-001").unwrap().clips
             [0]

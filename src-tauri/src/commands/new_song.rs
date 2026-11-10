@@ -340,6 +340,7 @@ mod tests {
                     length_ticks: hardwave_midi::PPQ * 4,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }

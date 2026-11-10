@@ -9543,6 +9543,7 @@ mod tempo_follow_tests {
             length_ticks: PPQ * 20,
             lane: 0,
             color: None,
+            row: None,
         });
         project
     }
