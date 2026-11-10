@@ -1687,9 +1687,35 @@ fn place_consolidated(
             start_ticks,
             end_ticks,
         );
+        cancel_the_track_pitch(&mut project, track_id, &clip.clip_id);
     }
     engine.rebuild_graph();
     Ok(())
+}
+
+/// Play a glued clip at the speed it was rendered at on a track with a
+/// pitch offset. The render has the track's pitch in it, as it was heard,
+/// and the glued clip played through it again: a track at +5 came back at
+/// +10, and faster. The track's pitch resamples each clip, so the clip is
+/// resampled back by the same amount; changing the track's pitch later
+/// moves it as it moves the track's other clips.
+fn cancel_the_track_pitch(project: &mut Project, track_id: &str, clip_id: &str) {
+    use hardwave_project::clip::ClipContent;
+    let Some(track) = project.track_mut(track_id) else {
+        return;
+    };
+    let semitones = track.pitch_semitones as f64 + track.fine_tune_cents as f64 / 100.0;
+    if semitones.abs() < 1e-9 {
+        return;
+    }
+    for placement in track.clips.iter_mut() {
+        if let ClipContent::Audio(ac) = &mut placement.content {
+            if ac.id == clip_id {
+                ac.pitch_semitones = -semitones;
+                ac.treatment.resample = true;
+            }
+        }
+    }
 }
 
 /// Render one track through its plug-ins to audio, put the result on a new
@@ -2964,6 +2990,134 @@ mod placing_tests {
             })
             .collect();
         assert_eq!(rendered, ["inside"], "only what the glued clip replaces");
+    }
+
+    /// A steady 220 Hz sine, `frames` long, in the engine's pool as "sine".
+    pub(super) fn sine_source(engine: &DawEngine, frames: usize) {
+        let sr = engine.current_sample_rate();
+        let ch: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        engine.audio_pool.insert(
+            "sine".to_string(),
+            hardwave_engine::AudioBuffer {
+                channels: vec![ch.clone(), ch],
+                sample_rate: sr,
+                num_frames: frames,
+            },
+        );
+    }
+
+    /// A clip of the pool's sine.
+    pub(super) fn sine_clip(
+        id: &str,
+        track: &str,
+        at: u64,
+        len: u64,
+        frames: u64,
+    ) -> ClipPlacement {
+        let mut c = clip(id, track, at, len);
+        if let ClipContent::Audio(a) = &mut c.content {
+            a.source_path = "sine".into();
+            a.source_end = frames;
+        }
+        c
+    }
+
+    /// The whole song, `len` frames, interleaved.
+    pub(super) fn render(engine: &DawEngine, len: u64) -> Vec<f32> {
+        let mut out = Vec::new();
+        engine
+            .render_offline_with(
+                engine.current_sample_rate(),
+                len,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend_from_slice(b);
+                    true
+                },
+            )
+            .expect("it renders");
+        out
+    }
+
+    /// Interleaved stereo frames as a 32-bit float file at the engine's rate.
+    pub(super) fn write_file(engine: &DawEngine, dir: &Path, name: &str, frames: &[f32]) -> String {
+        let path = dir.join(name);
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: engine.current_sample_rate(),
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for &s in frames {
+            w.write_sample(s).unwrap();
+        }
+        w.finalize().unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    pub(super) fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b)
+            .fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+    }
+
+    /// Consolidating on a track with a pitch offset plays the part as it
+    /// did. The render had the track's pitch in it and the glued clip went
+    /// through it again: two pieces at +5 came back as one at +10.
+    #[test]
+    fn a_consolidated_part_on_a_pitched_track_plays_as_it_did() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = DawEngine::new();
+        let sr = engine.current_sample_rate();
+        let frames = 2 * sr as u64;
+        sine_source(&engine, frames as usize);
+        let id = {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Vox".into());
+            let t = p.track_mut(&id).unwrap();
+            t.pitch_semitones = 5;
+            t.clips.push(sine_clip("a", &id, 0, 960, frames));
+            t.clips.push(sine_clip("b", &id, 960, 960, frames));
+            id
+        };
+        let len = engine
+            .project
+            .lock()
+            .tempo_map
+            .tick_to_samples(1920, sr as f64);
+        let heard = render(&engine, len);
+
+        // The consolidate render, as the command makes it.
+        let mut glued = Vec::new();
+        let target = id.clone();
+        engine
+            .prepare_offline_render(sr, 0, None, move |p| {
+                super::prepare_consolidate_render(p, &target, 0, 1920, &|_| false)
+            })
+            .for_a_track()
+            .run(len, |b| {
+                glued.extend_from_slice(b);
+                true
+            });
+        let file = write_file(&engine, dir.path(), "glued.wav", &glued);
+        place_consolidated(&engine, &id, &file, 0, 1920).unwrap();
+
+        let played = render(&engine, len);
+        let peak = heard.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        // Up to the last 5 ms: a clip's own declick fades its last
+        // millisecond, and the glued clip fades the faded end again.
+        let upto = heard.len() - 2 * (sr as usize / 200);
+        let diff = worst_difference(&heard[..upto], &played[..upto]);
+        assert!(peak > 0.1, "the part plays: {peak}");
+        assert!(
+            diff < 1e-3,
+            "the glued part plays as the pieces did: off by {diff}"
+        );
     }
 
     /// Bouncing, freezing and consolidating are one undo step each. Each
