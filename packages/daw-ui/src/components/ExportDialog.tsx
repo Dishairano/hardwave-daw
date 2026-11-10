@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ExportOutcome } from './exportNotice'
+import { renderBounds } from './exportBounds'
 import { createPortal } from 'react-dom'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -205,28 +206,8 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
 
   const normalizeTargetForBackend = normalizeMode === 'lufs' ? normalizeTargetLufs : normalizeTargetDb
 
-  const computeRenderBounds = (): { startSamples: number | null; endSamples: number | null } => {
-    if (range === 'pattern') {
-      if (bpm <= 0) return { startSamples: null, endSamples: null }
-      const steps = patternGetLength(patternActiveId)
-      const stepsPerBeat = 4
-      const beats = steps / stepsPerBeat
-      const patternSamples = Math.round((beats * 60) / bpm * sampleRate)
-      if (patternSamples <= 0) return { startSamples: null, endSamples: null }
-      return { startSamples: 0, endSamples: patternSamples }
-    }
-    if (range !== 'loop' || !loopRangeValid || projectSampleRate <= 0 || projectSampleRate === sampleRate) {
-      if (range === 'loop' && loopRangeValid) {
-        return { startSamples: loopStart, endSamples: loopEnd }
-      }
-      return { startSamples: null, endSamples: null }
-    }
-    const ratio = sampleRate / projectSampleRate
-    return {
-      startSamples: Math.round(loopStart * ratio),
-      endSamples: Math.round(loopEnd * ratio),
-    }
-  }
+  const computeRenderBounds = () =>
+    renderBounds(range, { start: loopStart, end: loopEnd }, projectSampleRate, sampleRate)
 
   const handleStart = async () => {
     const { save, open } = await import('@tauri-apps/plugin-dialog')
@@ -265,6 +246,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           respectMuteSolo,
           startSamples: stemsBounds.startSamples,
           endSamples: stemsBounds.endSamples,
+          pattern: stemsBounds.pattern,
           normalizeMode,
           normalizeTargetDb: normalizeTargetForBackend,
           ditherMode,
@@ -313,7 +295,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
     setStageLabel(null)
     setEtaSecs(null)
     renderStartedAt.current = performance.now()
-    const { startSamples, endSamples } = computeRenderBounds()
+    const { startSamples, endSamples, pattern } = computeRenderBounds()
     try {
       const result = await invoke<ExportOutcome & { cancelled: boolean }>('export_project_wav', {
         path: finalPath,
@@ -322,6 +304,7 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         tailSecs,
         startSamples,
         endSamples,
+        pattern,
         normalizeMode,
         normalizeTargetDb: normalizeTargetForBackend,
         ditherMode,

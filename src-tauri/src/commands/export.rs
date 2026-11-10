@@ -156,12 +156,23 @@ fn instrument_ids(engine: &DawEngine) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// What a render plays.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RenderAs {
+    /// The mix, as the transport plays it.
+    Mix,
+    /// The channel rack's pattern, once: see
+    /// [`hardwave_engine::OfflineRender::the_pattern_once`].
+    Pattern,
+    /// Audio that goes back onto a track (a bounce, a freeze, a
+    /// consolidate): see [`hardwave_engine::OfflineRender::for_a_track`].
+    ATrack,
+}
+
 /// Prepare a render under the engine's lock, let go of the lock, then
 /// render and write. The render has its own copy of everything; holding
 /// the lock through it froze every window command until the file was done.
 ///
-/// `onto_a_track` is for audio that goes back onto a track (a bounce, a
-/// freeze, a consolidate): see [`hardwave_engine::OfflineRender::for_a_track`].
 #[allow(clippy::too_many_arguments)]
 fn render_unlocked<F>(
     engine: parking_lot::MutexGuard<'_, DawEngine>,
@@ -171,7 +182,7 @@ fn render_unlocked<F>(
     start_samples: u64,
     cancel: &Arc<AtomicBool>,
     on_progress: F,
-    onto_a_track: bool,
+    render_as: RenderAs,
     prepare: impl FnOnce(&mut Project),
 ) -> Result<bool, String>
 where
@@ -185,7 +196,7 @@ where
         start_samples,
         cancel,
         on_progress,
-        onto_a_track,
+        render_as,
         prepare,
     )
     .map(|loudness| loudness.is_some())
@@ -202,7 +213,7 @@ fn render_unlocked_measured<F>(
     start_samples: u64,
     cancel: &Arc<AtomicBool>,
     on_progress: F,
-    onto_a_track: bool,
+    render_as: RenderAs,
     prepare: impl FnOnce(&mut Project),
 ) -> Result<Option<FileLoudness>, String>
 where
@@ -212,10 +223,10 @@ where
     let render =
         engine.prepare_offline_render(fmt.sample_rate, start_samples, Some(&factory), prepare);
     drop(engine);
-    let render = if onto_a_track {
-        render.for_a_track()
-    } else {
-        render
+    let render = match render_as {
+        RenderAs::Mix => render,
+        RenderAs::Pattern => render.the_pattern_once(),
+        RenderAs::ATrack => render.for_a_track(),
     };
     let mut meter = LoudnessTap::new(fmt.sample_rate);
     let completed = write_render(
@@ -1304,7 +1315,9 @@ pub async fn export_project_wav(
     mp3_bitrate_kbps: Option<u32>,
     mp3_vbr_quality: Option<u32>,
     ogg_quality: Option<f32>,
+    pattern: Option<bool>,
 ) -> Result<ExportResult, String> {
+    let pattern = pattern.unwrap_or(false);
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
         (state.engine.clone(), state.export_cancel.clone())
@@ -1327,16 +1340,18 @@ pub async fn export_project_wav(
         let engine_guard = engine.lock();
 
         let body_samples = engine_guard.project_end_samples(sample_rate);
-        if body_samples == 0 {
+        if body_samples == 0 && !pattern {
             return Err("Project is empty — nothing to export.".into());
         }
         let tail_samples = ((tail_secs.max(0.0) as f64) * sample_rate as f64) as u64;
-        let (render_start, body_len) = match (start_samples, end_samples) {
-            (Some(s), Some(e)) if e > s => (s, e - s),
-            _ => (0, body_samples),
-        };
+        let (render_start, body_len, range_end) = export_span(
+            &engine_guard.project.lock(),
+            sample_rate,
+            (start_samples, end_samples),
+            pattern,
+            body_samples,
+        )?;
         let total_samples = body_len + tail_samples;
-        let range_end = (render_start + body_len < body_samples).then_some(render_start + body_len);
 
         let mut last_pct: i32 = -1;
         let app_for_progress = app.clone();
@@ -1360,7 +1375,11 @@ pub async fn export_project_wav(
                     );
                 }
             },
-            false,
+            if pattern {
+                RenderAs::Pattern
+            } else {
+                RenderAs::Mix
+            },
             |proj: &mut Project| {
                 if let Some(end) = range_end {
                     end_the_song_at(proj, end, sample_rate);
@@ -1469,6 +1488,51 @@ fn has_a_stem(project: &Project, track: &hardwave_project::track::Track) -> bool
             .tracks
             .iter()
             .any(|s| s.id != track.id && s.midi_route_to.contains(&track.id) && plays(s))
+}
+
+/// Whether a track plays notes in the channel rack's pattern: it gets a stem
+/// in an export of the pattern.
+fn plays_the_pattern(project: &Project, track: &hardwave_project::track::Track) -> bool {
+    matches!(track.kind, TrackKind::Midi)
+        && project
+            .step_rack
+            .as_ref()
+            .is_some_and(|rack| !rack.notes_for(&track.id).is_empty())
+}
+
+/// Where an export starts and how long its body is, in frames, and where
+/// the song is cut so the tail is only what still sounds: `None` when the
+/// body runs to the song's end.
+///
+/// The Pattern range is the channel rack's pattern from its start, as long
+/// as the pattern lasts under the tempo map. The window worked it out from
+/// the first tempo alone and asked for the song's first bars, which were
+/// the song unless the transport was in pattern mode. The song is cut at
+/// the pattern's end: audio clips on the playlist still play in pattern
+/// mode.
+fn export_span(
+    project: &Project,
+    sample_rate: u32,
+    (start, end): (Option<u64>, Option<u64>),
+    pattern: bool,
+    song_samples: u64,
+) -> Result<(u64, u64, Option<u64>), String> {
+    if pattern {
+        let rack = project
+            .step_rack
+            .as_ref()
+            .ok_or("There is no pattern in the channel rack to export")?;
+        let body = project
+            .tempo_map
+            .tick_to_samples(rack.length_ticks(), sample_rate as f64);
+        return Ok((0, body, Some(body)));
+    }
+    let (render_start, body_len) = match (start, end) {
+        (Some(s), Some(e)) if e > s => (s, e - s),
+        _ => (0, song_samples),
+    };
+    let range_end = (render_start + body_len < song_samples).then_some(render_start + body_len);
+    Ok((render_start, body_len, range_end))
 }
 
 /// Narrow a stem's copy of the song to one track's own sound, on its whole
@@ -1669,7 +1733,7 @@ pub async fn consolidate_track_range(
                 start_samples,
                 &cancel,
                 |_, _| {},
-                true,
+                RenderAs::ATrack,
                 // The glued clip stays on this track, through its effects
                 // and fader and on to the master: the render has none of
                 // them, only the instrument that plays its notes.
@@ -1840,7 +1904,7 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
                 0,
                 &cancel,
                 |_, _| {},
-                true,
+                RenderAs::ATrack,
                 // Through its own effects and fader, which the new track
                 // does without, and not through its bus or the master,
                 // which the new track plays into again.
@@ -1931,7 +1995,14 @@ pub async fn export_project_stems(
     mp3_bitrate_kbps: Option<u32>,
     mp3_vbr_quality: Option<u32>,
     ogg_quality: Option<f32>,
+    pattern: Option<bool>,
 ) -> Result<StemsExportResult, String> {
+    let pattern = pattern.unwrap_or(false);
+    let render_as = if pattern {
+        RenderAs::Pattern
+    } else {
+        RenderAs::Mix
+    };
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
         (state.engine.clone(), state.export_cancel.clone())
@@ -1961,17 +2032,18 @@ pub async fn export_project_stems(
             let engine_guard = engine.lock();
 
             let body_samples = engine_guard.project_end_samples(sample_rate);
-            if body_samples == 0 {
+            if body_samples == 0 && !pattern {
                 return Err("Project is empty — nothing to export.".into());
             }
             let tail_samples = ((tail_secs.max(0.0) as f64) * sample_rate as f64) as u64;
-            let (render_start, body_len) = match (start_samples, end_samples) {
-                (Some(s), Some(e)) if e > s => (s, e - s),
-                _ => (0, body_samples),
-            };
+            let (render_start, body_len, range_end) = export_span(
+                &engine_guard.project.lock(),
+                sample_rate,
+                (start_samples, end_samples),
+                pattern,
+                body_samples,
+            )?;
             let total_samples = body_len + tail_samples;
-            let range_end =
-                (render_start + body_len < body_samples).then_some(render_start + body_len);
 
             let folder = PathBuf::from(&folder_path);
             fs::create_dir_all(&folder).map_err(|e| format!("create folder: {e}"))?;
@@ -1981,7 +2053,9 @@ pub async fn export_project_stems(
                 project
                     .tracks
                     .iter()
-                    .filter(|t| has_a_stem(&project, t))
+                    .filter(|t| {
+                        has_a_stem(&project, t) || (pattern && plays_the_pattern(&project, t))
+                    })
                     .map(|t| (t.id.clone(), t.name.clone()))
                     .collect()
             };
@@ -2037,7 +2111,7 @@ pub async fn export_project_stems(
                             );
                         }
                     },
-                    false,
+                    render_as,
                     |proj: &mut Project| {
                         isolate_for_stem(proj, &target_id);
                         if !respect_mute_solo {
@@ -2092,7 +2166,7 @@ pub async fn export_project_stems(
                             );
                         }
                     },
-                    false,
+                    render_as,
                     |proj: &mut Project| {
                         if let Some(end) = range_end {
                             end_the_song_at(proj, end, sample_rate);
@@ -2206,7 +2280,7 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
                 0,
                 &cancel,
                 |_, _| {},
-                true,
+                RenderAs::ATrack,
                 // Through its own effects, which rest while it is frozen, and
                 // not through its fader, its bus or the master, which it still
                 // plays through.
@@ -2975,7 +3049,7 @@ mod stem_and_freeze_tests {
             0,
             &Arc::new(AtomicBool::new(false)),
             |_, _| {},
-            true,
+            super::RenderAs::ATrack,
             move |p: &mut Project| super::isolate_track_for_render(p, &target, true, &|_| true),
         )
         .expect("it bounces");
@@ -3007,6 +3081,40 @@ mod stem_and_freeze_tests {
             (rms_before - rms_after).abs() < 0.1,
             "and is as loud all through: {rms_before:.2} dB before, {rms_after:.2} dB after"
         );
+    }
+
+    /// The Pattern range is the pattern, from its start, as long as it
+    /// lasts under the tempo map: here two beats at 140 and two at 70.
+    #[test]
+    fn a_pattern_export_lasts_the_pattern_under_the_tempo_map() {
+        let mut p = Project::default();
+        let mut slower = p.tempo_map.entries[0].clone();
+        slower.tick = 2 * hardwave_midi::PPQ;
+        slower.bpm = 70.0;
+        p.tempo_map.entries.push(slower);
+        p.channel_rack_state = Some(r#"{"patterns":[{"id":"p"}],"activeId":"p"}"#.into());
+        p.refresh_step_rack();
+        let bar = 4 * hardwave_midi::PPQ;
+        let expected = p.tempo_map.tick_to_samples(bar, SR as f64);
+        let at_first_tempo = (4.0 * 60.0 / 140.0 * SR as f64) as u64;
+        assert_ne!(expected, at_first_tempo);
+
+        let span = super::export_span(
+            &p,
+            SR,
+            (Some(0), Some(at_first_tempo)),
+            true,
+            10 * SR as u64,
+        );
+        assert_eq!(
+            span,
+            Ok((0, expected, Some(expected))),
+            "a bar under the tempo map, the song cut there"
+        );
+
+        p.channel_rack_state = None;
+        p.refresh_step_rack();
+        assert!(super::export_span(&p, SR, (None, None), true, 0).is_err());
     }
 
     /// A muted track, or one silenced by a solo elsewhere, renders as it

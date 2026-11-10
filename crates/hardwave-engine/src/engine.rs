@@ -3186,6 +3186,20 @@ impl OfflineRender {
         self
     }
 
+    /// Make this a render of the channel rack's pattern, played once: the
+    /// export's Pattern range. It rendered the song's first bars unless the
+    /// transport happened to be in pattern mode, and then looped the
+    /// pattern into the tail. The pattern plays from its start and is not
+    /// started again at its end, so what follows is only what still sounds.
+    pub fn the_pattern_once(mut self) -> Self {
+        self.play_mode(true);
+        self.callback
+            .transport
+            .pattern_wraps
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self
+    }
+
     /// Render in pattern mode or out of it, whatever the transport is in.
     /// The graph was built in the transport's mode, so it is built again
     /// before the first block (the plug-ins carry over).
@@ -9243,6 +9257,57 @@ mod track_render_tests {
         let in_pattern_mode = render_for_a_track(&engine, &id, len, |_| {});
         let diff = worst_difference(&song, &in_pattern_mode);
         assert!(diff < 1e-6, "the part, not the pattern: off by {diff}");
+    }
+
+    /// An export of the pattern plays it once, from its start, whatever mode
+    /// the transport is in, and its tail is what still sounds, not the
+    /// pattern again.
+    #[test]
+    fn a_pattern_export_plays_the_pattern_once() {
+        let engine = DawEngine::new();
+        {
+            let mut p = engine.project.lock();
+            let id = p.add_midi_track("Hat".into());
+            // A step on the second sixteenth, so a pattern started again
+            // plays it again even when the loop lands inside the bar.
+            let mut row = vec![0.0; 16];
+            row[1] = 1.0;
+            let steps = serde_json::json!({ id.clone(): row });
+            let rack = serde_json::json!({
+                "patterns": [{ "id": "p", "steps": steps }],
+                "activeId": "p",
+            });
+            p.channel_rack_state = Some(rack.to_string());
+            p.refresh_step_rack();
+        }
+        // One bar of pattern and one of tail.
+        let bar = engine
+            .project
+            .lock()
+            .tempo_map
+            .tick_to_samples(4 * hardwave_midi::PPQ, SR as f64) as usize;
+        let render = |once: bool| -> Vec<f32> {
+            let mut out = Vec::new();
+            let r = engine.prepare_offline_render(SR, 0, None, |_| {});
+            let r = if once { r.the_pattern_once() } else { r };
+            r.run(2 * bar as u64, |b| {
+                out.extend_from_slice(b);
+                true
+            });
+            out
+        };
+        // A fifth of a second from a frame, interleaved: the step is a
+        // sixteenth in, a tenth of a second at 140 BPM.
+        let from = |s: &[f32], frame: usize| -> f32 {
+            peak(&s[2 * frame..2 * (frame + SR as usize / 5)])
+        };
+        let once = render(true);
+        assert!(from(&once, 0) > 0.05, "the step plays near the start");
+        assert!(from(&once, bar) < 1e-4, "and not again in the tail");
+        // What it rendered before, with the transport in song mode: the
+        // song's first bar, here nothing.
+        let song = render(false);
+        assert!(from(&song, 0) < 1e-4);
     }
 
     /// The loudest difference between two renders, away from the first and
