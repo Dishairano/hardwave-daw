@@ -521,17 +521,36 @@ impl Collab {
     /// to do with it). A build too old to send one is known by its tracks
     /// and arrangements, which lack the fields; a track that has them is
     /// taken, even before that side's format arrives.
+    ///
+    /// Two more moments come before any edit. The song a host sends says
+    /// its own format, and one in another format is never opened: a build
+    /// on the newer format took an older host's song, brought it up to
+    /// date and sent its edits back, and the room only ended when the
+    /// older side edited a track. And a host is asked for its song by a
+    /// guest that said its format first (every build that says one says
+    /// it before anything else), so a request from one that did not is
+    /// from an older build: the song is not sent and the room ends.
     pub fn check_peer(&self, kind: &SyncKind) -> Result<bool, String> {
+        use hardwave_project::project::FORMAT_VERSION;
         use hardwave_project::Project;
         match kind {
             SyncKind::SongState { section, blob, .. } if section == Project::FORMAT_SECTION => {
                 match Project::read_format_section(blob) {
-                    Some(v) if v == hardwave_project::project::FORMAT_VERSION => {
+                    Some(v) if v == FORMAT_VERSION => {
                         *self.peer_format.lock() = Some(v);
                         Ok(true)
                     }
                     _ => Err(ANOTHER_VERSION.into()),
                 }
+            }
+            SyncKind::ProjectOffer { blob, .. } => match Project::bytes_format(blob) {
+                Some(v) if v == FORMAT_VERSION => Ok(false),
+                _ => Err(ANOTHER_VERSION.into()),
+            },
+            SyncKind::ProjectRequest
+                if self.status.lock().hosting && self.peer_format.lock().is_none() =>
+            {
+                Err(ANOTHER_VERSION.into())
             }
             _ if self.peer_format.lock().is_some() => Ok(false),
             SyncKind::TrackState { blob, .. } if !Project::track_blob_knows_layout(blob) => {
@@ -618,10 +637,14 @@ impl Collab {
     /// The room says who is in it now. When the other person has left,
     /// their cursor goes with them: it stayed drawn on the arrangement,
     /// with their name, where they last were.
+    ///
+    /// So does the format they said: whoever comes in next says their own,
+    /// and a build too old to say one must not pass as the one before.
     pub fn set_members(&self, names: Vec<String>) {
         let mut status = self.status.lock();
         if names.len() < 2 {
             status.peer = None;
+            *self.peer_format.lock() = None;
         }
         status.members = names;
     }
@@ -1342,6 +1365,78 @@ mod tests {
         assert_eq!(collab.check_peer(&part("format", blob)), Ok(true));
         collab.begin("r", "CODE", true, tx);
         assert!(collab.peer_format.lock().is_none());
+    }
+
+    /// A host on an older build sends its song in its own format. The
+    /// newer guest ends the room on it, before the song is opened, instead
+    /// of taking it and sending its edits back.
+    #[test]
+    fn a_song_from_a_host_on_an_older_format_is_never_taken() {
+        let offer = |blob| SyncKind::ProjectOffer {
+            name: "Theirs".into(),
+            blob,
+        };
+        let guest = Collab::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        guest.begin("r", "CODE", false, tx);
+        guest.expect_song();
+        let older = song().older_format_bytes();
+        assert_eq!(
+            hardwave_project::Project::bytes_format(&older),
+            Some(2),
+            "the song as v0.266.40 sends it"
+        );
+        assert_eq!(
+            guest.check_peer(&offer(older.clone())),
+            Err(ANOTHER_VERSION.to_string())
+        );
+        // Even from a side that said this format: the song is what counts.
+        let said = Collab::default();
+        let blob = hardwave_project::Project::format_section();
+        assert_eq!(said.check_peer(&part("format", blob)), Ok(true));
+        assert_eq!(
+            said.check_peer(&offer(older)),
+            Err(ANOTHER_VERSION.to_string())
+        );
+        assert_eq!(
+            said.check_peer(&offer(b"not a song".to_vec())),
+            Err(ANOTHER_VERSION.to_string())
+        );
+        // A song in this format is taken, said or not.
+        let current = song().to_bytes().unwrap();
+        assert_eq!(said.check_peer(&offer(current.clone())), Ok(false));
+        assert_eq!(Collab::default().check_peer(&offer(current)), Ok(false));
+    }
+
+    /// A newer host is asked for its song by a guest on an older build,
+    /// which never says its format: the song is not sent and the room
+    /// ends. A guest that said its format first gets the song.
+    #[test]
+    fn a_guest_on_an_older_build_is_not_sent_the_song() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = Collab::default();
+        host.begin("r", "CODE", true, tx);
+        host.set_members(vec!["Host".into(), "Guest".into()]);
+        assert_eq!(
+            host.check_peer(&SyncKind::ProjectRequest),
+            Err(ANOTHER_VERSION.to_string())
+        );
+        let blob = hardwave_project::Project::format_section();
+        assert_eq!(host.check_peer(&part("format", blob)), Ok(true));
+        assert_eq!(host.check_peer(&SyncKind::ProjectRequest), Ok(false));
+        // The guest leaves; whoever comes in next says their own format.
+        host.set_members(vec!["Host".into()]);
+        host.set_members(vec!["Host".into(), "Another".into()]);
+        assert_eq!(
+            host.check_peer(&SyncKind::ProjectRequest),
+            Err(ANOTHER_VERSION.to_string()),
+            "an older build that came in after a current one"
+        );
+        // Only the host's song is guarded so: a guest is never asked.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let guest = Collab::default();
+        guest.begin("r", "CODE", false, tx);
+        assert_eq!(guest.check_peer(&SyncKind::ProjectRequest), Ok(false));
     }
 
     #[test]
