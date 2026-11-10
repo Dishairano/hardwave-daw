@@ -33,6 +33,7 @@ pub mod new_song;
 pub mod plugin_presets;
 pub mod plugins;
 pub mod project;
+pub mod rack_groups;
 pub mod reference;
 pub mod rows;
 pub mod scripts;

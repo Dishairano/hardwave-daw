@@ -441,6 +441,7 @@ pub fn run() {
             // Tracks
             commands::tracks::get_tracks,
             commands::tracks::get_tracks_with_clips,
+            commands::rack_groups::get_rack_groups,
             commands::tracks::get_track_with_clips,
             commands::tracks::add_audio_track,
             commands::tracks::add_midi_track,

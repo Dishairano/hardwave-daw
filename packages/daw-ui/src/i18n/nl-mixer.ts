@@ -203,6 +203,7 @@ export const nlMixer: Record<string, string> = {
   'No instruments found — scan plug-ins in Settings, or check that native synths loaded.': 'Geen instrumenten gevonden. Scan plug-ins in Instellingen, of controleer of de ingebouwde synths geladen zijn.',
   'Add {name} as a new channel': '{name} toevoegen als nieuw kanaal',
   'All': 'Alles',
+  'Show every channel': 'Toon elk kanaal',
   'Global swing · {n}%': 'Globale swing · {n}%',
   "Global swing — multiplied with each channel's swingmix": 'Globale swing, vermenigvuldigd met de swingmix van elk kanaal',
   'Steps': 'Stappen',

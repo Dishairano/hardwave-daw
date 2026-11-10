@@ -13,7 +13,9 @@ import type { TrackInfo } from '../../stores/trackStore'
 import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { mixHex } from '../../lib/color'
-import { channelKindShown, type ChannelKindFilter } from '../../lib/channelKindFilter'
+import { inRackGroup, keptRackGroupFilter, rackGroupButtons, type RackGroupFilter as GroupFilter } from '../../lib/rackGroupFilter'
+import { useRackGroupStore } from '../../stores/rackGroupStore'
+import { RackGroupButtons } from './RackGroupButtons'
 import { t, tf, useLanguage } from '../../i18n'
 import { addInstrumentChannel as addInstrumentChannelTo, channelSound } from '../../stores/instrumentChannels'
 import { useTransportStore } from '../../stores/transportStore'
@@ -76,7 +78,15 @@ export function ChannelRack() {
     [allPlugins],
   )
   const [instPickerOpen, setInstPickerOpen] = useState(false)
-  const [kindFilter, setKindFilter] = useState<ChannelKindFilter>('All')
+  // FL's group filter: All, or one of the song's groups.
+  const [groupFilter, setGroupFilter] = useState<GroupFilter>('all')
+  const rackGroups = useRackGroupStore(s => s.groups)
+  const fetchRackGroups = useRackGroupStore(s => s.fetchGroups)
+  // The song's groups are read again whenever a channel's group could have
+  // changed: another song, or channels added or moved.
+  const groupKey = tracks.map(t => t.rackGroup ?? '-').join(',')
+  useEffect(() => { void fetchRackGroups() }, [groupKey, fetchRackGroups])
+  useEffect(() => { setGroupFilter(f => keptRackGroupFilter(f, rackGroups)) }, [rackGroups])
 
   const addInstrumentChannel = useCallback(async (pluginId: string, pluginName: string) => {
     setInstPickerOpen(false)
@@ -291,13 +301,13 @@ export function ChannelRack() {
   for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
   const channels = allChannels.filter(t => {
     const f = folderByTrack.get(t.id)
-    return !(f && f.collapsed) && channelKindShown(kindFilter, t.kind)
+    return !(f && f.collapsed) && inRackGroup(groupFilter, t.rackGroup)
   })
   const shownFolderHeaders = new Set<string>()
   const channelRows: Array<{ kind: 'folderHeader'; folder: TrackFolder } | { kind: 'channel'; channelIdx: number }> = []
   let visibleIdx = 0
   allChannels.forEach(t => {
-    if (!channelKindShown(kindFilter, t.kind)) return
+    if (!inRackGroup(groupFilter, t.rackGroup)) return
     const f = folderByTrack.get(t.id)
     if (f && !shownFolderHeaders.has(f.id)) {
       channelRows.push({ kind: 'folderHeader', folder: f })
@@ -549,18 +559,7 @@ export function ChannelRack() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 1 }}>
-          {(['All', 'Audio', 'MIDI'] as const).map(g => (
-            <button key={g} onClick={() => setKindFilter(g)} style={{
-              ...topBtn, width: 'auto', padding: '0 9px',
-              fontSize: 11, color: g === kindFilter ? hw.textBright : hw.textMuted,
-              background: g === kindFilter ? hw.accentDim : 'transparent',
-              border: `1px solid ${g === kindFilter ? hw.accentGlow : 'transparent'}`,
-            }}>
-              {t(g)}
-            </button>
-          ))}
-        </div>
+        <RackGroupButtons buttons={rackGroupButtons(rackGroups, allChannels)} filter={groupFilter} onPick={setGroupFilter} />
 
         <TbSep />
 

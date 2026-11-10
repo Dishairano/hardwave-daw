@@ -65,6 +65,7 @@ permissions = [
   "allow-delete-arrangement",
   "allow-get-tracks",
   "allow-get-tracks-with-clips",
+  "allow-get-rack-groups",
   "allow-get-track-with-clips",
   "allow-add-audio-track",
   "allow-add-midi-track",
