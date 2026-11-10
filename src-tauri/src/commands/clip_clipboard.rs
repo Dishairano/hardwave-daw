@@ -6,6 +6,11 @@
 //! deleted the clips before the paste could find them, so cut and paste
 //! pasted nothing at all. The clipboard now holds copies of the clips
 //! themselves, taken when they are copied.
+//!
+//! A pasted clip stays on the channel it was copied from, as in FL, and
+//! lands on a playlist row: the rows are where clips sit, the channel is
+//! what they play through. Pasting onto another track used to change the
+//! sound of the copy.
 
 use hardwave_project::clip::{ClipContent, ClipPlacement};
 use hardwave_project::track::TrackKind;
@@ -14,11 +19,11 @@ use tauri::State;
 
 use crate::AppState;
 
-/// A copied clip and the playlist row it came from, so clips copied from
-/// several tracks land on as many tracks, the same distance apart.
+/// A copied clip and the playlist row it sat on, so clips copied from
+/// several rows land on as many rows, the same distance apart.
 #[derive(Clone)]
 struct Copied {
-    row: usize,
+    row: u32,
     placement: ClipPlacement,
 }
 
@@ -29,21 +34,9 @@ static CLIPBOARD: parking_lot::Mutex<Vec<Copied>> = parking_lot::const_mutex(Vec
 pub struct PasteOutcome {
     /// Ids of the new clips, to select them.
     pub pasted: Vec<String>,
-    /// Clips that had no fitting track there: an audio clip goes on an
-    /// audio track or a MIDI channel, a MIDI clip on a MIDI channel, and
-    /// nothing goes past the last track.
+    /// Clips that could not go back: their channel is gone, or the row
+    /// would be past the last one.
     pub skipped: usize,
-}
-
-/// The tracks the playlist shows, in its order.
-fn rows(project: &Project) -> Vec<usize> {
-    project
-        .tracks
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| !matches!(t.kind, TrackKind::Master))
-        .map(|(i, _)| i)
-        .collect()
 }
 
 fn id_of(placement: &ClipPlacement) -> &str {
@@ -53,15 +46,27 @@ fn id_of(placement: &ClipPlacement) -> &str {
     }
 }
 
+/// The row a clip sits on: its own, or for a clip made before rows were
+/// kept, its track's place in the playlist, where it was drawn.
+fn shown_row(project: &Project, track_index: usize, placement: &ClipPlacement) -> u32 {
+    placement.row.unwrap_or_else(|| {
+        project.tracks[..track_index]
+            .iter()
+            .filter(|t| !matches!(t.kind, TrackKind::Master))
+            .count() as u32
+    })
+}
+
 fn copy_from(project: &Project, clip_ids: &[String]) -> Vec<Copied> {
-    let rows = rows(project);
     let mut out = Vec::new();
-    for (row, &index) in rows.iter().enumerate() {
-        for placement in &project.tracks[index].clips {
+    for (index, track) in project.tracks.iter().enumerate() {
+        for placement in &track.clips {
             if clip_ids.iter().any(|id| id == id_of(placement)) {
+                let mut placement = placement.clone();
+                placement.track_id = track.id.clone();
                 out.push(Copied {
-                    row,
-                    placement: placement.clone(),
+                    row: shown_row(project, index, &placement),
+                    placement,
                 });
             }
         }
@@ -69,14 +74,14 @@ fn copy_from(project: &Project, clip_ids: &[String]) -> Vec<Copied> {
     out
 }
 
-/// Put copies of `copied` into the song: the earliest at `position_ticks`
-/// and the rest as far after it as they were, the top one on
-/// `target_track_id` (or on its own track when there is none) and the rest
-/// as many rows below it as they were.
+/// Put copies of `copied` into the song, each on the channel it came
+/// from: the earliest at `position_ticks` and the rest as far after it as
+/// they were, the top one on `target_row` (or on their own rows when there
+/// is none) and the rest as many rows below it as they were.
 fn paste_into(
     project: &mut Project,
     copied: &[Copied],
-    target_track_id: Option<&str>,
+    target_row: Option<u32>,
     position_ticks: u64,
     mut new_id: impl FnMut() -> String,
 ) -> PasteOutcome {
@@ -88,29 +93,24 @@ fn paste_into(
         return outcome;
     };
     let top = copied.iter().map(|c| c.row).min().unwrap_or(0);
-    let rows = rows(project);
-    let target_row = target_track_id
-        .and_then(|id| rows.iter().position(|&i| project.tracks[i].id == id))
-        .unwrap_or(top);
     for c in copied {
-        let row = target_row + (c.row - top);
-        let Some(&index) = rows.get(row) else {
-            outcome.skipped += 1;
-            continue;
-        };
-        let track = &mut project.tracks[index];
-        if !track.kind.holds(&c.placement.content) {
+        let row = target_row.map_or(c.row, |t| t.saturating_add(c.row - top));
+        if hardwave_project::row_edit::check_row_number(row).is_err() {
             outcome.skipped += 1;
             continue;
         }
+        let Some(track) = project.track_mut(&c.placement.track_id) else {
+            outcome.skipped += 1;
+            continue;
+        };
         let mut placement = c.placement.clone();
         let id = new_id();
         match &mut placement.content {
             ClipContent::Audio(a) => a.id = id.clone(),
             ClipContent::Midi(m) => m.id = id.clone(),
         }
-        placement.track_id = track.id.clone();
         placement.position_ticks = position_ticks + (c.placement.position_ticks - earliest);
+        placement.row = Some(row);
         track.clips.push(placement);
         outcome.pasted.push(id);
     }
@@ -148,12 +148,12 @@ pub fn cut_clips(state: State<AppState>, clip_ids: Vec<String>) -> usize {
     n
 }
 
-/// Paste the copied clips at `position_ticks`, starting on
-/// `target_track_id`, or on the tracks they came from when it is absent.
+/// Paste the copied clips at `position_ticks`, starting on `target_row`,
+/// or on the rows they came from when it is absent.
 #[tauri::command]
 pub fn paste_clips(
     state: State<AppState>,
-    target_track_id: Option<String>,
+    target_row: Option<u32>,
     position_ticks: u64,
 ) -> PasteOutcome {
     let copied = CLIPBOARD.lock().clone();
@@ -162,7 +162,7 @@ pub fn paste_clips(
     let outcome = paste_into(
         &mut engine.project.lock(),
         &copied,
-        target_track_id.as_deref(),
+        target_row,
         position_ticks,
         || uuid::Uuid::new_v4().to_string(),
     );
@@ -224,7 +224,7 @@ mod tests {
     }
 
     /// Three audio tracks and a MIDI track, with clips "a" on the first,
-    /// "b" on the second and "m" on the MIDI track.
+    /// "b" on the second and "m" on the MIDI track, on rows 0, 1 and 3.
     fn song() -> (Project, Vec<String>) {
         let mut p = Project::default();
         let ids = vec![
@@ -233,9 +233,22 @@ mod tests {
             p.add_audio_track("A3".into()),
             p.add_midi_track("M".into()),
         ];
-        p.track_mut(&ids[0]).unwrap().clips.push(audio("a", 960));
-        p.track_mut(&ids[1]).unwrap().clips.push(audio("b", 1920));
-        p.track_mut(&ids[3]).unwrap().clips.push(midi("m", 0));
+        let on = |mut c: ClipPlacement, row| {
+            c.row = Some(row);
+            c
+        };
+        p.track_mut(&ids[0])
+            .unwrap()
+            .clips
+            .push(on(audio("a", 960), 0));
+        p.track_mut(&ids[1])
+            .unwrap()
+            .clips
+            .push(on(audio("b", 1920), 1));
+        p.track_mut(&ids[3])
+            .unwrap()
+            .clips
+            .push(on(midi("m", 0), 3));
         (p, ids)
     }
 
@@ -247,22 +260,23 @@ mod tests {
         }
     }
 
-    fn clips_on(p: &Project, track: &str) -> Vec<(String, u64)> {
+    /// Each clip on a track: its id, where it starts and its row.
+    fn clips_on(p: &Project, track: &str) -> Vec<(String, u64, Option<u32>)> {
         p.tracks
             .iter()
             .find(|t| t.id == track)
             .unwrap()
             .clips
             .iter()
-            .map(|c| (id_of(c).to_string(), c.position_ticks))
+            .map(|c| (id_of(c).to_string(), c.position_ticks, c.row))
             .collect()
     }
 
     #[test]
-    fn a_clip_pastes_onto_another_track() {
+    fn a_clip_pastes_onto_another_row_and_stays_on_its_channel() {
         let (mut p, ids) = song();
         let copied = copy_from(&p, &["a".into()]);
-        let out = paste_into(&mut p, &copied, Some(&ids[2]), 3840, counter());
+        let out = paste_into(&mut p, &copied, Some(7), 3840, counter());
         assert_eq!(
             out,
             PasteOutcome {
@@ -270,9 +284,12 @@ mod tests {
                 skipped: 0
             }
         );
-        assert_eq!(clips_on(&p, &ids[2]), vec![("new-1".into(), 3840)]);
-        let pasted = &p.tracks.iter().find(|t| t.id == ids[2]).unwrap().clips[0];
-        assert_eq!(pasted.track_id, ids[2]);
+        assert_eq!(
+            clips_on(&p, &ids[0]),
+            vec![("a".into(), 960, Some(0)), ("new-1".into(), 3840, Some(7))]
+        );
+        let pasted = &p.track(&ids[0]).unwrap().clips[1];
+        assert_eq!(pasted.track_id, ids[0]);
         let ClipContent::Audio(a) = &pasted.content else {
             unreachable!()
         };
@@ -284,59 +301,66 @@ mod tests {
         let (mut p, ids) = song();
         let copied = copy_from(&p, &["a".into()]);
         p.track_mut(&ids[0]).unwrap().clips.clear();
-        let out = paste_into(&mut p, &copied, Some(&ids[1]), 0, counter());
+        let out = paste_into(&mut p, &copied, Some(1), 0, counter());
         assert_eq!(out.pasted.len(), 1);
+        assert_eq!(clips_on(&p, &ids[0]), vec![("new-1".into(), 0, Some(1))]);
+    }
+
+    #[test]
+    fn clips_from_two_rows_land_on_two_rows_the_same_distance_apart() {
+        let (mut p, ids) = song();
+        let copied = copy_from(&p, &["a".into(), "m".into()]);
+        paste_into(&mut p, &copied, Some(10), 7680, counter());
+        // "a" was three rows above "m" and a beat later.
         assert_eq!(
-            clips_on(&p, &ids[1]),
-            vec![("b".into(), 1920), ("new-1".into(), 0)]
+            clips_on(&p, &ids[0]).last(),
+            Some(&("new-1".into(), 7680 + 960, Some(10)))
+        );
+        assert_eq!(
+            clips_on(&p, &ids[3]).last(),
+            Some(&("new-2".into(), 7680, Some(13)))
         );
     }
 
     #[test]
-    fn clips_from_two_tracks_land_on_two_tracks_the_same_distance_apart() {
-        let (mut p, ids) = song();
-        let copied = copy_from(&p, &["a".into(), "b".into()]);
-        paste_into(&mut p, &copied, Some(&ids[1]), 7680, counter());
-        // "a" was a row above "b" and a beat earlier.
-        assert_eq!(clips_on(&p, &ids[1]).last(), Some(&("new-1".into(), 7680)));
-        assert_eq!(clips_on(&p, &ids[2]), vec![("new-2".into(), 7680 + 960)]);
-    }
-
-    #[test]
-    fn without_a_target_the_clips_go_back_on_their_own_tracks() {
+    fn without_a_target_the_clips_go_back_on_their_own_rows() {
         let (mut p, ids) = song();
         let copied = copy_from(&p, &["b".into()]);
         paste_into(&mut p, &copied, None, 0, counter());
         assert_eq!(
             clips_on(&p, &ids[1]),
-            vec![("b".into(), 1920), ("new-1".into(), 0)]
+            vec![("b".into(), 1920, Some(1)), ("new-1".into(), 0, Some(1))]
         );
     }
 
     #[test]
-    fn a_clip_with_no_fitting_track_there_is_counted_not_forced() {
+    fn a_clip_whose_channel_is_gone_is_counted_not_forced() {
         let (mut p, ids) = song();
-        // A MIDI clip onto an audio track, and audio past the last track.
-        let copied = copy_from(&p, &["m".into()]);
-        let out = paste_into(&mut p, &copied, Some(&ids[0]), 0, counter());
-        assert_eq!(
-            out,
-            PasteOutcome {
-                pasted: vec![],
-                skipped: 1
-            }
-        );
-        let copied = copy_from(&p, &["a".into(), "b".into()]);
-        let out = paste_into(&mut p, &copied, Some(&ids[3]), 0, counter());
-        assert_eq!(out.pasted.len(), 1, "audio onto the MIDI channel");
-        assert_eq!(out.skipped, 1, "and nothing below it");
+        let copied = copy_from(&p, &["m".into(), "a".into()]);
+        p.remove_track(&ids[3]);
+        let out = paste_into(&mut p, &copied, None, 0, counter());
+        assert_eq!(out.pasted.len(), 1, "the audio clip");
+        assert_eq!(out.skipped, 1, "the MIDI clip had nowhere to go");
+        let far = hardwave_project::sanitize::MAX_ROWS as u32;
+        let out = paste_into(&mut p, &copied, Some(far), 0, counter());
+        assert_eq!(out.skipped, 2, "no row past the last");
+    }
+
+    #[test]
+    fn a_clip_made_before_rows_were_kept_copies_from_the_row_it_showed_on() {
+        let (mut p, ids) = song();
+        p.track_mut(&ids[2]).unwrap().clips.push(audio("old", 0));
+        let copied = copy_from(&p, &["old".into()]);
+        let place = p.tracks.iter().position(|t| t.id == ids[2]).unwrap() as u32 - 1;
+        assert_eq!(copied[0].row, place, "its track's place in the playlist");
+        paste_into(&mut p, &copied, None, 960, counter());
+        assert_eq!(clips_on(&p, &ids[2]).last().unwrap().2, Some(place));
     }
 
     #[test]
     fn an_audio_clip_on_a_midi_channel_pastes_back_onto_it() {
         // A consolidated part or a sample dropped on a channel is an audio
-        // clip on a MIDI track, and the engine plays it there. Copy and
-        // paste skipped it, as if a channel could not hold audio.
+        // clip on a MIDI track, and the engine plays it there.
         let (mut p, ids) = song();
         p.track_mut(&ids[3])
             .unwrap()
@@ -351,6 +375,6 @@ mod tests {
                 skipped: 0
             }
         );
-        assert_eq!(clips_on(&p, &ids[3]).last(), Some(&("new-1".into(), 7680)));
+        assert_eq!(clips_on(&p, &ids[3]).last().map(|c| c.1), Some(7680));
     }
 }
