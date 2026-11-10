@@ -9529,9 +9529,8 @@ mod track_render_tests {
         };
         // A fifth of a second from a frame, interleaved: the step is a
         // sixteenth in, a tenth of a second at 140 BPM.
-        let from = |s: &[f32], frame: usize| -> f32 {
-            peak(&s[2 * frame..2 * (frame + SR as usize / 5)])
-        };
+        let from =
+            |s: &[f32], frame: usize| -> f32 { peak(&s[2 * frame..2 * (frame + SR as usize / 5)]) };
         let once = render(true);
         assert!(from(&once, 0) > 0.05, "the step plays near the start");
         assert!(from(&once, bar) < 1e-4, "and not again in the tail");
