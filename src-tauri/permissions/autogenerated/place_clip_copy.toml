@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-place-clip-copy"
+description = "Enables the place_clip_copy command without any pre-configured scope."
+commands.allow = ["place_clip_copy"]
+
+[[permission]]
+identifier = "deny-place-clip-copy"
+description = "Denies the place_clip_copy command without any pre-configured scope."
+commands.deny = ["place_clip_copy"]

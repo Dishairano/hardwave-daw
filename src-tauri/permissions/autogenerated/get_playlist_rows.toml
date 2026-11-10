@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-playlist-rows"
+description = "Enables the get_playlist_rows command without any pre-configured scope."
+commands.allow = ["get_playlist_rows"]
+
+[[permission]]
+identifier = "deny-get-playlist-rows"
+description = "Denies the get_playlist_rows command without any pre-configured scope."
+commands.deny = ["get_playlist_rows"]
