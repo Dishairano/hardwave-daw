@@ -147,13 +147,39 @@ pub struct RenderStats {
 }
 
 pub fn render_and_measure(engine: &DawEngine, sample_rate: u32, total_samples: u64) -> RenderStats {
+    measure("render_offline", |on_block| {
+        engine.render_offline(sample_rate, total_samples, on_block)
+    })
+}
+
+/// [`render_and_measure`] through the live path
+/// ([`DawEngine::play_live_without_device`]): the callback reads the
+/// engine's own MIDI input and capture ring, and plays or stands still as
+/// the engine's transport does. A render has a MIDI input of its own that
+/// nothing plays into, so a key injected into `engine.midi_input` is heard
+/// only this way.
+#[allow(dead_code)]
+pub fn play_live_and_measure(
+    engine: &DawEngine,
+    sample_rate: u32,
+    total_samples: u64,
+) -> RenderStats {
+    measure("play_live_without_device", |on_block| {
+        engine.play_live_without_device(sample_rate, total_samples, on_block)
+    })
+}
+
+fn measure(
+    what: &str,
+    run: impl FnOnce(&mut dyn FnMut(&[f32]) -> bool) -> Result<(), String>,
+) -> RenderStats {
     let mut peak = 0.0_f32;
     let mut sum_sq = 0.0_f64;
     let mut frames = 0_usize;
     let mut nan_count = 0_usize;
     let mut inf_count = 0_usize;
 
-    let result = engine.render_offline(sample_rate, total_samples, |block| {
+    let result = run(&mut |block: &[f32]| {
         for &s in block {
             if s.is_nan() {
                 nan_count += 1;
@@ -172,7 +198,7 @@ pub fn render_and_measure(engine: &DawEngine, sample_rate: u32, total_samples: u
         }
         true
     });
-    assert!(result.is_ok(), "render_offline failed: {result:?}");
+    assert!(result.is_ok(), "{what} failed: {result:?}");
 
     let rms = if frames > 0 {
         ((sum_sq / frames as f64).sqrt()) as f32

@@ -3,9 +3,11 @@
 //!
 //! These tests boot the real `DawEngine`, build a minimal project
 //! programmatically, render a short window via `render_offline`, and
-//! assert on the output buffer. They are the layer that catches "vapor
-//! features" — code paths that compile and have unit tests but never
-//! get wired into the real audio graph.
+//! assert on the output buffer. The live MIDI tests play through
+//! `play_live_without_device` instead, the callback playback runs, since a
+//! render has a MIDI input of its own that nothing plays into. They are the
+//! layer that catches "vapor features" — code paths that compile and have
+//! unit tests but never get wired into the real audio graph.
 //!
 //! ## Status (re-verified 2026-07-19)
 //!
@@ -757,15 +759,15 @@ fn loop_recording_splits_and_trims_each_pass() {
 #[ignore = "long: runs on GitHub in the Functional Smoke workflow on every push"]
 fn live_midi_noteon_drives_master_output() {
     // PASS-required.
-    // Inject a NoteOn into MidiInputManager, render a short window with
+    // Inject a NoteOn into MidiInputManager, play a short window with
     // transport playing, expect the BuiltinSine voice to produce audible
     // samples at the master output.
     let engine = DawEngine::new();
     add_midi_track(&engine, "Live MIDI test");
 
-    // Pre-load the injected event BEFORE render_offline. The shared
-    // midi_input means the throwaway audio thread inside render_offline
-    // drains the same queue.
+    // Pre-load the injected event, then play through the live path: a
+    // render has a MIDI input of its own that nothing plays into, so the
+    // key would never reach it.
     engine
         .midi_input
         .lock()
@@ -780,7 +782,7 @@ fn live_midi_noteon_drives_master_output() {
     engine.transport.playing.store(true, Ordering::Relaxed);
 
     let render_samples = SAMPLE_RATE as u64 / 4; // 0.25 s window
-    let stats = render_and_measure(&engine, SAMPLE_RATE, render_samples);
+    let stats = play_live_and_measure(&engine, SAMPLE_RATE, render_samples);
 
     assert_eq!(stats.nan_count, 0, "live MIDI produced NaN samples");
     assert_eq!(stats.inf_count, 0, "live MIDI produced Inf samples");
@@ -813,7 +815,7 @@ fn live_midi_noteon_audible_with_transport_stopped() {
     // Transport explicitly NOT started — playing stays false.
 
     let render_samples = SAMPLE_RATE as u64 / 4;
-    let stats = render_and_measure(&engine, SAMPLE_RATE, render_samples);
+    let stats = play_live_and_measure(&engine, SAMPLE_RATE, render_samples);
 
     assert!(
         stats.peak > 0.01,
@@ -833,8 +835,8 @@ fn armed_audio_track_drains_live_midi() {
     // marked `accepts_live_midi=true` during rebuild_graph and the
     // audio thread drains the queue and forwards to InsertChain.
     //
-    // Verify the drain step actually happens: inject MIDI, render
-    // offline against an armed audio track, then check the capture
+    // Verify the drain step actually happens: inject MIDI, play the
+    // live path against an armed audio track, then check the capture
     // ring — the audio thread pushes drained events into it as part
     // of the same per-block routine. A non-empty ring proves the
     // drain ran, which is the prerequisite for InsertChain forwarding
@@ -853,7 +855,7 @@ fn armed_audio_track_drains_live_midi() {
         });
     engine.transport.playing.store(true, Ordering::Relaxed);
 
-    let _ = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 10);
+    let _ = play_live_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 10);
 
     let entries = engine.midi_capture_ring.lock().entries_in_order();
     assert!(
@@ -867,7 +869,7 @@ fn armed_audio_track_drains_live_midi() {
 fn injected_events_land_in_capture_ring() {
     // PASS-required.
     // The rolling 3-min capture buffer is filled by the audio thread's
-    // post-drain push loop. After offline render, every injected event
+    // post-drain push loop. After playing the live path, every injected event
     // should be in the ring in oldest-first order.
     let engine = DawEngine::new();
     add_midi_track(&engine, "Capture test");
@@ -884,8 +886,8 @@ fn injected_events_land_in_capture_ring() {
     }
     engine.transport.playing.store(true, Ordering::Relaxed);
 
-    // Render long enough that the audio thread drains and pushes.
-    let _ = render_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 10);
+    // Play long enough that the callback drains and pushes.
+    let _ = play_live_and_measure(&engine, SAMPLE_RATE, SAMPLE_RATE as u64 / 10);
 
     let entries = engine.midi_capture_ring.lock().entries_in_order();
     assert_eq!(
@@ -2727,20 +2729,35 @@ fn a_prepared_render_runs_without_the_engine() {
 /// first tenth: a route from a track's level reads the meter of the block
 /// before, and the fader glides to a new level over a block.
 fn settled_peaks(engine: &DawEngine) -> (f32, f32) {
+    settled_peaks_of(|on_block| {
+        engine.render_offline(SAMPLE_RATE, SAMPLE_RATE as u64 / 2, on_block)
+    })
+}
+
+/// [`settled_peaks`] through the live path, which reads the engine's own
+/// MIDI input: a render has an input of its own that nothing plays into.
+fn settled_live_peaks(engine: &DawEngine) -> (f32, f32) {
+    settled_peaks_of(|on_block| {
+        engine.play_live_without_device(SAMPLE_RATE, SAMPLE_RATE as u64 / 2, on_block)
+    })
+}
+
+fn settled_peaks_of(
+    run: impl FnOnce(&mut dyn FnMut(&[f32]) -> bool) -> Result<(), String>,
+) -> (f32, f32) {
     let (mut peak_l, mut peak_r) = (0.0_f32, 0.0_f32);
     let mut frame = 0_usize;
-    engine
-        .render_offline(SAMPLE_RATE, SAMPLE_RATE as u64 / 2, |block| {
-            for pair in block.as_chunks::<2>().0 {
-                if frame > SAMPLE_RATE as usize / 10 {
-                    peak_l = peak_l.max(pair[0].abs());
-                    peak_r = peak_r.max(pair[1].abs());
-                }
-                frame += 1;
+    run(&mut |block: &[f32]| {
+        for pair in block.as_chunks::<2>().0 {
+            if frame > SAMPLE_RATE as usize / 10 {
+                peak_l = peak_l.max(pair[0].abs());
+                peak_r = peak_r.max(pair[1].abs());
             }
-            true
-        })
-        .expect("offline render");
+            frame += 1;
+        }
+        true
+    })
+    .expect("render");
     (peak_l, peak_r)
 }
 
@@ -2820,7 +2837,9 @@ fn a_midi_controller_moves_a_tracks_pan() {
         0.5,
     ));
     engine.rebuild_graph();
-    // The mod wheel all the way up: the pan knob moved fully right.
+    // The mod wheel all the way up while the song plays: the pan knob
+    // moved fully right. Played through the live path, since a render
+    // does not hear the controller.
     engine
         .midi_input
         .lock()
@@ -2830,7 +2849,8 @@ fn a_midi_controller_moves_a_tracks_pan() {
             cc: 1,
             value: 1.0,
         });
-    let (left, right) = settled_peaks(&engine);
+    engine.transport.playing.store(true, Ordering::Relaxed);
+    let (left, right) = settled_live_peaks(&engine);
     assert!(right > 0.3, "heard on the right: {right}");
     assert!(left < 0.01, "and not on the left: {left}");
 }
