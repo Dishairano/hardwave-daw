@@ -369,7 +369,10 @@ fn open_built(
     Ok(FlpImportReport {
         bpm: r.bpm,
         tracks: r.channels + r.mixer_inserts,
-        clips: r.audio_clips + r.pattern_clips + r.automation_clips + r.automation_clips_moving_nothing,
+        clips: r.audio_clips
+            + r.pattern_clips
+            + r.automation_clips
+            + r.automation_clips_moving_nothing,
         notes: r.notes,
         samples: r.missing_samples,
         left_behind,
