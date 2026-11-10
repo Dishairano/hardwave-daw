@@ -36,4 +36,16 @@ describe('taking the song from a room', () => {
     expect(invokeMock).toHaveBeenCalledWith('get_tracks_with_clips')
     expect(useProjectStore.getState()).toMatchObject({ filePath: null, projectName: 'Room Song', dirty: true })
   })
+
+  it('reads the rows again when the other person changed one', async () => {
+    const { usePlaylistRowsStore } = await import('../playlistRowsStore')
+    invokeMock.mockReset()
+    invokeMock.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'get_playlist_rows' ? [{ name: 'Drums', color: null, muted: true, soloed: false }] : []))
+    startSongPartSync()
+    await vi.waitFor(() => expect(handlers.has('daw:songChanged')).toBe(true))
+    handlers.get('daw:songChanged')!({ payload: 'rows' })
+    await vi.waitFor(() => expect(usePlaylistRowsStore.getState().rows[0]?.name).toBe('Drums'))
+    expect(usePlaylistRowsStore.getState().rows[0].muted).toBe(true)
+  })
 })

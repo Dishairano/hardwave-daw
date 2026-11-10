@@ -3,14 +3,18 @@ import { labelGap, rulerLabel } from './rulerLabel'
 import { followScroll } from './follow'
 import { usePlaylistScrollStore } from '../../stores/playlistScrollStore'
 import { useDropTarget } from '../../lib/pointerDrag'
-import { playlistRowLayout, playlistTracks } from './playlistRows'
+import {
+  rowIndexOf, itemAt, itemsInBox, itemsInView, rowAtY, shownRowCount, silentRows, trackPlaces,
+  type RowItem,
+} from './rowIndex'
+import { usePlaylistRowsStore } from '../../stores/playlistRowsStore'
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { TuneDialog } from './TuneDialog'
 import { StemsDialog } from './StemsDialog'
 import { useCollabStore } from '../../stores/collabStore'
 import { SpectralEditor } from './SpectralEditor'
 import { listen } from '@tauri-apps/api/event'
-import { useTrackStore, ClipInfo, ClipDragEdit, FadeCurveKind, WavePeak } from '../../stores/trackStore'
+import { useTrackStore, ClipInfo, ClipDragEdit, FadeCurveKind, WavePeak, type AutomationClipInfo, type AutomationTargetInfo, type TrackWithClips } from '../../stores/trackStore'
 import { useSampleWindowStore } from '../../stores/sampleWindowStore'
 import { invoke } from '@tauri-apps/api/core'
 import { sectionAt, sectionMoves } from './sectionMoves'
@@ -18,7 +22,6 @@ import { useTransportStore, snapToTicks } from '../../stores/transportStore'
 import { useShallow } from 'zustand/react/shallow'
 import { useMarkerStore } from '../../stores/markerStore'
 import { useClipGroupStore } from '../../stores/clipGroupStore'
-import { useTrackFolderStore } from '../../stores/trackFolderStore'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { useHistoryStore } from '../../stores/historyStore'
 import { usePickerStore } from '../../stores/pickerStore'
@@ -98,9 +101,17 @@ interface DragState {
   originalLengthTicks: number
   originalFadeInTicks: number
   originalFadeOutTicks: number
-  groupMoveOriginals?: { clipId: string; trackId: string; origPos: number }[]
-  /** The clip went to another track during the drag: no ripple then. */
-  crossedTracks?: boolean
+  groupMoveOriginals?: { clipId: string; trackId: string; origPos: number; origRow: number }[]
+  /** The playlist row the dragged clip was on when the drag started, and
+   *  the row the pointer started on: a drag up or down moves the clips
+   *  that many rows, on their own channels. */
+  originalRow?: number
+  startRow?: number
+  /** How many rows the drag has moved the clips so far. */
+  lastRowDelta?: number
+  /** An automation clip is being dragged (its id is `clipId`); a point of
+   *  it when `pointIndex` is set. */
+  automation?: { pointIndex?: number; pointTick?: number; pointValue?: number }
   /** The other clips' edges and the markers, for magnetic snap. Gathered on
    *  the first move of a drag and kept for the rest of it. */
   snapTargets?: number[]
@@ -251,6 +262,51 @@ function bucketTier(desired: number): number {
   // Quantise to powers of two so we don't hammer the backend on tiny zoom changes.
   const clamped = Math.max(100, Math.min(1 << 24, Math.ceil(desired)))
   return 2 ** Math.ceil(Math.log2(clamped))
+}
+
+/** What an automation clip moves, as its header names it. */
+function automationTargetLabel(target: AutomationTargetInfo): string {
+  switch (target.kind) {
+    case 'track_volume': return 'Volume'
+    case 'track_pan': return 'Pan'
+    case 'track_mute': return 'Mute'
+    case 'plugin_param': return `Parameter ${target.paramId}`
+    case 'send_level': return `Send ${target.sendIndex + 1}`
+    default: return 'Automation'
+  }
+}
+
+/** `#rrggbb` from an automation clip's ARGB colour. */
+function argbHex(argb: number): string {
+  return `#${(argb & 0xffffff).toString(16).padStart(6, '0')}`
+}
+
+/** An automation clip's value (0..1) at a tick inside it, straight between
+ *  its points, as the curve is drawn. */
+function automationValueAt(points: { tick: number; value: number }[], tick: number): number {
+  if (points.length === 0) return 0.5
+  if (tick <= points[0].tick) return points[0].value
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]
+    const b = points[i]
+    if (tick <= b.tick) {
+      const span = b.tick - a.tick
+      return span > 0 ? a.value + ((tick - a.tick) / span) * (b.value - a.value) : b.value
+    }
+  }
+  return points[points.length - 1].value
+}
+
+/** Where a clip's sound goes, for the hover note: "insert 4 (Kick)", its
+ *  own insert, or the master. */
+function insertOf(track: TrackWithClips, byId: Record<string, TrackWithClips>): string {
+  const target = track.outputBus ? byId[track.outputBus] : undefined
+  if (target) {
+    if (target.kind === 'Master') return 'the master'
+    return target.mixerNumber != null ? `insert ${target.mixerNumber} (${target.name})` : target.name
+  }
+  if (track.mixerNumber != null && track.mixerNumber > 0) return `its own insert, ${track.mixerNumber}`
+  return 'the master'
 }
 
 // Hardwave clip palette — vibrant on near-black
@@ -425,11 +481,13 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   const {
     tracks, selectedClipId, selectedClipIds, selectClip, toggleClipSelection, clearSelection,
-    moveClipLocal, resizeClipLocal, commitClipDrag, commitClipTrimStart,
-    moveClipToTrack, getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
+    moveClipLocal, placeClipsLocal, resizeClipLocal, commitClipDrag, commitClipTrimStart,
+    getWaveformPeaks, duplicateClip, splitClip, deleteClip, setClipFades,
     setClipFadeCurves, toggleClipReverse, setClipGain, setClipPitch, setClipStretch,
   } = useTrackStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  // The automation clip menu: what a right-click on one offers.
+  const [autoMenu, setAutoMenu] = useState<{ x: number; y: number; trackId: string; clipId: string; name: string } | null>(null)
   const [tuneTarget, setTuneTarget] = useState<{ trackId: string; clipId: string } | null>(null)
   const [stemsTarget, setStemsTarget] = useState<{ trackId: string; clipId: string; name: string } | null>(null)
   // Where the other person in the room is working, drawn as a line of
@@ -493,12 +551,20 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const groupClipsAction = useClipGroupStore(s => s.groupClips)
   const ungroupClipAction = useClipGroupStore(s => s.ungroupClip)
 
-  const folders = useTrackFolderStore(s => s.folders)
-  const audioTracks = useMemo(() => playlistTracks(tracks, folders), [tracks, folders])
-  // Rows: each track, then a row per automation lane or clip under it, the
-  // way the name column lays them out.
-  const rows = useMemo(() => playlistRowLayout(audioTracks), [audioTracks])
-  const contentH = rows.total * trackHeight
+  // Every track but the master, in the song's order: what plays. Where
+  // its clips show is up to the rows.
+  const audioTracks = useMemo(() => tracks.filter(t => t.kind !== 'Master'), [tracks])
+  // The playlist's rows (FL's playlist tracks) and what sits on each,
+  // sorted by time, so a frame draws and a click tests only what is in
+  // view. A clip sits on its own row whichever channel plays it.
+  const rowIndex = useMemo(() => rowIndexOf(tracks), [tracks])
+  // Each track's place among the tracks the playlist used to list, for
+  // the clip colour a track's clips have always had.
+  const colourPlace = useMemo(() => trackPlaces(tracks), [tracks])
+  const playlistRows = usePlaylistRowsStore(s => s.rows)
+  const silent = useMemo(() => silentRows(playlistRows), [playlistRows])
+  const rowCount = shownRowCount(rowIndex, playlistRows.length)
+  const contentH = rowCount * trackHeight
   // Tell the name column how far the playlist can scroll, so a wheel over
   // the names stops where the grid stops.
   useEffect(() => {
@@ -795,56 +861,76 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // above. Removing the loop exposes the grid that was always being
     // drawn underneath.)
 
-    // Clips. The y for each track shifts up by `verticalScroll` so the
-    // visible band slides under the ruler. Tracks fully scrolled off
-    // the bottom or top of the viewport are skipped at the for-loop
-    // boundaries below for the trivial paint-cost win.
-    for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight - verticalScroll
-      // Cull tracks that fall entirely outside the visible viewport.
-      if (y + trackHeight < RULER_HEIGHT) continue
-      if (y > h) break
-      const track = audioTracks[i]
-      const defaultColor = CLIP_COLORS[i % CLIP_COLORS.length]
-
-      // Take lanes: with several takes spread out, the track band is
-      // split into one row per lane so the passes can be compared
-      // instead of hiding behind each other.
-      const laneCount = track.clips.reduce((max, c) => Math.max(max, (c.lane ?? 0) + 1), 1)
-      for (const clip of track.clips) {
-        const color = clip.color || defaultColor
-        drawClip(ctx, clip, color, y, scrollOffset, w, pixelsPerTick, clip.lane ?? 0, laneCount)
+    // Clips, row by row: only the rows in view, and on each only what
+    // reaches into the visible bars. A row's clips can belong to any
+    // channel; each is drawn in its channel's colour. A clip on a row
+    // that is switched off (muted, or not soloed while another is) is
+    // drawn faded, as FL greys out a muted playlist track.
+    {
+      const firstRow = Math.max(0, Math.floor(verticalScroll / trackHeight))
+      const lastRow = Math.min(rowCount - 1, Math.floor((verticalScroll + h - RULER_HEIGHT) / trackHeight))
+      const fromTick = pixelsPerTick > 0 ? scrollOffset / pixelsPerTick : 0
+      const toTick = pixelsPerTick > 0 ? (scrollOffset + w) / pixelsPerTick : 0
+      // Take lanes: with several takes spread out, a track's band is split
+      // into one strip per lane so the passes can be compared instead of
+      // hiding behind each other.
+      const laneCounts = new Map<string, number>()
+      const lanesOf = (track: TrackWithClips) => {
+        let n = laneCounts.get(track.id)
+        if (n === undefined) {
+          n = track.clips.reduce((max, c) => Math.max(max, (c.lane ?? 0) + 1), 1)
+          laneCounts.set(track.id, n)
+        }
+        return n
       }
-    }
-
-    // Crossfade overlay — shade any overlap between adjacent clips on the same track.
-    for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight - verticalScroll
-      if (y + trackHeight < RULER_HEIGHT) continue
-      if (y > h) break
-      const clips = [...audioTracks[i].clips].sort((a, b) => a.position_ticks - b.position_ticks)
-      for (let j = 1; j < clips.length; j++) {
-        const prev = clips[j - 1]
-        const cur = clips[j]
-        const prevEnd = prev.position_ticks + prev.length_ticks
-        if (cur.position_ticks < prevEnd) {
-          const overlapTicks = prevEnd - cur.position_ticks
-          const xStart = cur.position_ticks * pixelsPerTick - scrollOffset
-          const width = overlapTicks * pixelsPerTick
-          if (xStart + width >= 0 && xStart <= w) {
-            ctx.save()
-            ctx.fillStyle = 'rgba(20, 184, 166, 0.12)'
-            ctx.fillRect(xStart, y + 2, width, trackHeight - 4)
-            ctx.strokeStyle = 'rgba(20, 184, 166, 0.45)'
-            ctx.lineWidth = 1
-            // X mark
-            ctx.beginPath()
-            ctx.moveTo(xStart, y + 2)
-            ctx.lineTo(xStart + width, y + trackHeight - 2)
-            ctx.moveTo(xStart + width, y + 2)
-            ctx.lineTo(xStart, y + trackHeight - 2)
-            ctx.stroke()
-            ctx.restore()
+      for (let r = firstRow; r <= lastRow; r++) {
+        const y = RULER_HEIGHT + r * trackHeight - verticalScroll
+        const items = itemsInView(rowIndex, r, fromTick, toTick)
+        if (items.length === 0) continue
+        for (const item of items) {
+          if (item.kind === 'auto') {
+            drawAutomationClip(ctx, item, y, scrollOffset, w, pixelsPerTick)
+            continue
+          }
+          const place = colourPlace[item.trackIndex]
+          const color = item.clip.color || CLIP_COLORS[Math.max(0, place) % CLIP_COLORS.length]
+          drawClip(ctx, item.clip, color, y, scrollOffset, w, pixelsPerTick, item.clip.lane ?? 0, lanesOf(item.track))
+        }
+        // A row switched off: its clips are veiled, as they are silent.
+        if (silent(r)) {
+          ctx.fillStyle = 'rgba(14,14,17,0.62)'
+          for (const item of items) {
+            const x = item.start * pixelsPerTick - scrollOffset
+            ctx.fillRect(x, y + 1, (item.end - item.start) * pixelsPerTick, trackHeight - 2)
+          }
+        }
+        // Crossfades: an overlap between two clips of one channel on the
+        // row is shaded, as they blend there.
+        for (let j = 1; j < items.length; j++) {
+          const cur = items[j]
+          if (cur.kind !== 'clip') continue
+          for (let k = j - 1; k >= 0; k--) {
+            const prev = items[k]
+            if (prev.kind !== 'clip' || prev.track.id !== cur.track.id) continue
+            if (cur.start < prev.end) {
+              const xStart = cur.start * pixelsPerTick - scrollOffset
+              const width = (Math.min(prev.end, cur.end) - cur.start) * pixelsPerTick
+              if (xStart + width >= 0 && xStart <= w) {
+                ctx.save()
+                ctx.fillStyle = 'rgba(20, 184, 166, 0.12)'
+                ctx.fillRect(xStart, y + 2, width, trackHeight - 4)
+                ctx.strokeStyle = 'rgba(20, 184, 166, 0.45)'
+                ctx.lineWidth = 1
+                ctx.beginPath()
+                ctx.moveTo(xStart, y + 2)
+                ctx.lineTo(xStart + width, y + trackHeight - 2)
+                ctx.moveTo(xStart + width, y + 2)
+                ctx.lineTo(xStart, y + trackHeight - 2)
+                ctx.stroke()
+                ctx.restore()
+              }
+            }
+            break
           }
         }
       }
@@ -1052,7 +1138,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
    drawMainRef.current = draw
    draw()
    drawPlayheadRef.current()
-  }, [tracks, layoutTempo, tempoEntries, tempoLaneShown, laneHot, laneScaleHeld, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, timecodeFps, followMode, sections, meterSegments, peer])
+  }, [tracks, rowIndex, rowCount, silent, colourPlace, layoutTempo, tempoEntries, tempoLaneShown, laneHot, laneScaleHeld, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, timecodeFps, followMode, sections, meterSegments, peer])
 
   // The playhead: one element over the arrangement, moved with a
   // transform straight from the transport store. No React render, no
@@ -1410,23 +1496,141 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
   }
 
-  // Hit test. The incoming mouseY is viewport-relative; we convert it
-  // to logical (unscrolled) Y once and compare against each track's
-  // y from there, so the user's wheel-scroll position stays
-  // transparent to every caller.
+  /** The name an automation clip carries in its header: the track whose
+   *  knob it moves, and the knob, as FL names one ("909 Snare - Volume"). */
+  function automationClipName(item: Extract<RowItem<TrackWithClips>, { kind: 'auto' }>): string {
+    const clip = item.clip as AutomationClipInfo
+    const target = clip.targetTrack ? useTrackStore.getState().tracksById[clip.targetTrack] : item.track
+    return `${target?.name ?? item.track.name} - ${automationTargetLabel(clip.target)}`
+  }
+
   /**
-   * The track row under a pointer position, or undefined past the last track.
-   *
-   * Goes through the same `mouseY + verticalScroll` lift as `hitTest`: the
-   * place-mode branch used to divide the raw viewport Y by the track height,
-   * so with the playlist scrolled down a click dropped the clip on a track
-   * several rows above the one under the cursor.
+   * An automation clip on the grid, like any clip: a body in its colour,
+   * its name in the header, and its curve with a dot on every point. It
+   * used to be a strip of its own under its track, drawn at a scale of its
+   * own that drifted from the bars, and it could not leave that strip.
    */
-  const trackRowAt = useCallback((mouseY: number) => {
-    const row = Math.floor((mouseY + verticalScroll - RULER_HEIGHT) / trackHeight)
-    const owner = row >= 0 ? rows.ownerOf[row] : undefined
-    return owner === undefined ? undefined : audioTracks[owner]
-  }, [audioTracks, rows, trackHeight, verticalScroll])
+  function drawAutomationClip(
+    ctx: CanvasRenderingContext2D,
+    item: Extract<RowItem<TrackWithClips>, { kind: 'auto' }>,
+    rowY: number,
+    scrollOffset: number,
+    viewWidth: number,
+    pxPerTick: number,
+  ) {
+    const clip = item.clip as AutomationClipInfo
+    const x = clip.startTick * pxPerTick - scrollOffset
+    const w = Math.max(2, clip.lengthTicks * pxPerTick)
+    if (x + w < 0 || x > viewWidth) return
+    const color = argbHex(clip.colorArgb)
+    const y = rowY + 1
+    const h = trackHeight - 2
+    const headerH = h >= 34 ? 15 : Math.min(12, Math.max(9, Math.round(h * 0.34)))
+    const radius = 3
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, h, radius)
+    ctx.fillStyle = '#100f15'
+    ctx.fill()
+    ctx.fillStyle = color
+    ctx.globalAlpha *= 0.22
+    ctx.fill()
+    ctx.globalAlpha /= 0.22
+    ctx.fillStyle = mixHex(color, '#000000', 0.28)
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, headerH, [radius, radius, 0, 0])
+    ctx.fill()
+    if (headerH >= 9 && w >= 18) {
+      ctx.fillStyle = hexLuma(color) > 0.62 ? 'rgba(10,10,12,0.92)' : 'rgba(255,255,255,0.95)'
+      ctx.font = `600 ${headerH >= 15 ? 10.5 : 9}px Inter, 'Segoe UI', system-ui, sans-serif`
+      ctx.textBaseline = 'middle'
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(x + 3, y, w - 6, headerH)
+      ctx.clip()
+      ctx.fillText(automationClipName(item), x + 6, y + headerH / 2 + 0.5)
+      ctx.restore()
+      ctx.textBaseline = 'alphabetic'
+    }
+    // The curve, in the body under the header.
+    const top = y + headerH + 2
+    const bottom = y + h - 3
+    const at = (p: { tick: number; value: number }) => ({
+      px: x + p.tick * pxPerTick,
+      py: bottom - Math.max(0, Math.min(1, p.value)) * (bottom - top),
+    })
+    const pts = clip.points.map(at)
+    if (bottom > top && pts.length > 0) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(x, y, w, h)
+      ctx.clip()
+      ctx.strokeStyle = '#ffffff'
+      ctx.globalAlpha *= 0.85
+      ctx.lineWidth = 1.25
+      ctx.beginPath()
+      ctx.moveTo(x, pts[0].py)
+      for (const p of pts) ctx.lineTo(p.px, p.py)
+      ctx.lineTo(x + w, pts[pts.length - 1].py)
+      ctx.stroke()
+      ctx.fillStyle = '#ffffff'
+      for (const p of pts) {
+        ctx.beginPath()
+        ctx.arc(p.px, p.py, 2.2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.restore()
+    }
+  }
+
+  /** The playlist row under a pointer position (scrolled), or -1 over the
+   *  ruler. */
+  const rowAt = useCallback((mouseY: number) => {
+    return rowAtY(mouseY, RULER_HEIGHT, trackHeight, verticalScroll)
+  }, [trackHeight, verticalScroll])
+
+  /** What is under the pointer, the one drawn on top: a clip or an
+   *  automation clip, and which part of it. Only the row under the pointer
+   *  and what reaches the pointer's bar on it are looked at. */
+  const itemHit = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
+    item: RowItem<TrackWithClips>
+    edge: 'body' | 'left' | 'right' | 'fade-in' | 'fade-out'
+    /** For an automation clip, the point under the pointer. */
+    point?: number
+  } | null => {
+    const row = rowAt(mouseY)
+    if (row < 0 || pixelsPerTick <= 0) return null
+    const rowTop = RULER_HEIGHT + row * trackHeight - verticalScroll
+    const localY = mouseY - rowTop
+    if (localY < 2 || localY > trackHeight - 2) return null
+    const tick = (mouseX + scrollOffset) / pixelsPerTick
+    const item = itemAt(rowIndex, row, tick)
+    if (!item) return null
+    const clipX = item.start * pixelsPerTick - scrollOffset
+    const clipW = (item.end - item.start) * pixelsPerTick
+    if (item.kind === 'auto') {
+      const clip = item.clip as AutomationClipInfo
+      const h = trackHeight - 2
+      const headerH = h >= 34 ? 15 : Math.min(12, Math.max(9, Math.round(h * 0.34)))
+      const top = rowTop + 1 + headerH + 2
+      const bottom = rowTop + trackHeight - 4
+      const point = clip.points.findIndex((p) => {
+        const px = clipX + p.tick * pixelsPerTick
+        const py = bottom - Math.max(0, Math.min(1, p.value)) * (bottom - top)
+        return Math.abs(px - mouseX) <= 5 && Math.abs(py - mouseY) <= 5
+      })
+      if (point >= 0) return { item, edge: 'body', point }
+      return { item, edge: mouseX > clipX + clipW - RESIZE_HANDLE_PX ? 'right' : 'body' }
+    }
+    const withinFadeBand = localY - 2 >= HEADER_H && localY - 2 <= HEADER_H + FADE_HANDLE_PX && clipW > FADE_HANDLE_PX * 3
+    // Fade handles take priority over resize edges within the narrow top band.
+    if (withinFadeBand) {
+      if (mouseX <= clipX + RESIZE_HANDLE_PX + FADE_HANDLE_PX) return { item, edge: 'fade-in' }
+      if (mouseX >= clipX + clipW - RESIZE_HANDLE_PX - FADE_HANDLE_PX) return { item, edge: 'fade-out' }
+    }
+    if (mouseX > clipX + clipW - RESIZE_HANDLE_PX) return { item, edge: 'right' }
+    if (mouseX < clipX + RESIZE_HANDLE_PX) return { item, edge: 'left' }
+    return { item, edge: 'body' }
+  }, [rowIndex, rowAt, pixelsPerTick, trackHeight, verticalScroll])
 
   /**
    * Drop one copy of the armed picker clip in a grid slot.
@@ -1437,57 +1641,37 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
    * chain: a placement is a duplicate followed by a move, and two of those
    * in parallel let one slot's move land on the other slot's copy.
    */
-  const paintClipAt = useCallback((drag: DragState, trackId: string, tick: number) => {
+  const paintClipAt = useCallback((drag: DragState, row: number, tick: number) => {
     const selection = usePickerStore.getState().selection
-    if (selection?.kind !== 'audioClip') return
-    const slot = `${trackId}:${tick}`
+    if (selection?.kind !== 'audioClip' || row < 0) return
+    const slot = `${row}:${tick}`
     if (!drag.paintedSlots || drag.paintedSlots.has(slot)) return
 
     const length = drag.paintStepTicks ?? PPQ
-    const target = useTrackStore.getState().tracks.find(t => t.id === trackId)
-    if (paintSlotOccupied(target?.clips, tick, length)) return
+    // Anything already on that stretch of the row, whichever channel.
+    const onRow = itemsInView(rowIndex, row, tick, tick + length)
+      .filter((i) => i.kind === 'clip')
+      .map((i) => i.clip as ClipInfo)
+    if (paintSlotOccupied(onRow, tick, length)) return
 
     drag.paintedSlots.add(slot)
     drag.paintChain = (drag.paintChain ?? Promise.resolve())
       .then(() => useTrackStore
         .getState()
         // No per-clip undo entry: the gesture pushes one when it ends.
-        .placeClipCopy(selection.trackId, selection.clipId, trackId, tick, null)
+        .placeClipCopy(selection.trackId, selection.clipId, row, tick, null)
         .then(() => undefined))
       .catch(err => console.error('paint placeClipCopy failed', err))
-  }, [])
+  }, [rowIndex])
 
+  /** The clip (audio or MIDI) under the pointer and which part of it. */
   const hitTest = useCallback((mouseX: number, mouseY: number, scrollOffset: number): {
-    clip: ClipInfo, trackId: string, edge: 'body' | 'left' | 'right' | 'fade-in' | 'fade-out'
+    clip: ClipInfo, trackId: string, row: number, edge: 'body' | 'left' | 'right' | 'fade-in' | 'fade-out'
   } | null => {
-    const logicalY = mouseY + verticalScroll
-    for (let i = 0; i < audioTracks.length; i++) {
-      const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight
-      if (logicalY < y + 2 || logicalY > y + trackHeight - 2) continue
-      const track = audioTracks[i]
-      for (const clip of track.clips) {
-        const clipX = clip.position_ticks * pixelsPerTick - scrollOffset
-        const clipW = clip.length_ticks * pixelsPerTick
-        if (mouseX < clipX || mouseX > clipX + clipW) continue
-        const localY = logicalY - (y + 2)
-        const withinFadeBand = localY >= HEADER_H && localY <= HEADER_H + FADE_HANDLE_PX && clipW > FADE_HANDLE_PX * 3
-        // Fade handles take priority over resize edges within the narrow top band.
-        if (withinFadeBand) {
-          if (mouseX <= clipX + RESIZE_HANDLE_PX + FADE_HANDLE_PX) {
-            return { clip, trackId: track.id, edge: 'fade-in' }
-          }
-          if (mouseX >= clipX + clipW - RESIZE_HANDLE_PX - FADE_HANDLE_PX) {
-            return { clip, trackId: track.id, edge: 'fade-out' }
-          }
-        }
-        let edge: 'body' | 'left' | 'right' = 'body'
-        if (mouseX > clipX + clipW - RESIZE_HANDLE_PX) edge = 'right'
-        else if (mouseX < clipX + RESIZE_HANDLE_PX) edge = 'left'
-        return { clip, trackId: track.id, edge }
-      }
-    }
-    return null
-  }, [audioTracks, rows, pixelsPerTick, trackHeight, verticalScroll])
+    const hit = itemHit(mouseX, mouseY, scrollOffset)
+    if (!hit || hit.item.kind !== 'clip') return null
+    return { clip: hit.item.clip as ClipInfo, trackId: hit.item.track.id, row: hit.item.row, edge: hit.edge }
+  }, [itemHit])
 
   const getScrollOffset = useCallback(() => {
     if (!followPlayhead) return scrollX
@@ -1557,6 +1741,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       return
     }
     setContextMenu(null)
+    showTipLater(null)
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
     const mouseY = e.clientY - rect.top
@@ -1632,20 +1817,22 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // length does, so painted copies sit end to end instead of on top of
       // each other.
       const step = snapTicks > 0 ? snapTicks : Math.max(1, source?.length_ticks ?? PPQ)
-      const targetTrack = trackRowAt(mouseY)
-      if (!targetTrack) return
+      // Copies land on the row under the pointer, each on the channel of
+      // the clip they copy, so they sound as that clip does.
+      const targetRow = rowAt(mouseY)
+      if (targetRow < 0) return
       const tick = paintSlotTick(mouseX, scrollOffset, pixelsPerTick, step)
       // One drag is one undo, however many clips it lays down.
       useTrackStore.getState().beginHistoryGroup()
       dragRef.current = {
-        mode: 'paint', clipId: '', trackId: targetTrack.id,
+        mode: 'paint', clipId: '', trackId: selection.trackId,
         startMouseX: mouseX, startMouseY: mouseY,
         currentMouseX: mouseX, currentMouseY: mouseY,
         originalPositionTicks: tick, originalLengthTicks: 0,
         originalFadeInTicks: 0, originalFadeOutTicks: 0,
         paintedSlots: new Set<string>(), paintStepTicks: step,
       }
-      paintClipAt(dragRef.current, targetTrack.id, tick)
+      paintClipAt(dragRef.current, targetRow, tick)
       return
     }
     if (currentTool === 'slice' || currentTool === 'delete') {
@@ -1723,6 +1910,29 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       forceRender(n => n + 1)
       return
     }
+    // An automation clip: grab a point to move it, the right edge to
+    // change its length, anywhere else to move it along the playlist and
+    // up or down the rows. It keeps moving the same knob wherever it sits.
+    const top = itemHit(mouseX, mouseY, scrollOffset)
+    if (top && top.item.kind === 'auto') {
+      const clip = top.item.clip as AutomationClipInfo
+      const point = top.point !== undefined ? clip.points[top.point] : undefined
+      dragRef.current = {
+        mode: top.point !== undefined ? 'move' : top.edge === 'right' ? 'resize-right' : 'move',
+        clipId: clip.id,
+        trackId: top.item.track.id,
+        startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
+        originalPositionTicks: clip.startTick,
+        originalLengthTicks: clip.lengthTicks,
+        originalFadeInTicks: 0, originalFadeOutTicks: 0,
+        originalRow: top.item.row,
+        startRow: top.item.row,
+        automation: point
+          ? { pointIndex: top.point, pointTick: point.tick, pointValue: point.value }
+          : {},
+      }
+      return
+    }
     const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
       const gid = clipToGroup[hit.clip.id]
@@ -1749,14 +1959,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         hit.edge === 'fade-in' ? 'fade-in' :
         hit.edge === 'fade-out' ? 'fade-out' :
         'move'
-      let groupMoveOriginals: { clipId: string; trackId: string; origPos: number }[] | undefined
+      let groupMoveOriginals: { clipId: string; trackId: string; origPos: number; origRow: number }[] | undefined
       if (mode === 'move' && gid && groupMemberIds.length > 1) {
         groupMoveOriginals = []
         for (const t of tracks) {
           for (const c of t.clips) {
             if (c.id === hit.clip.id) continue
             if (groupMemberIds.includes(c.id)) {
-              groupMoveOriginals.push({ clipId: c.id, trackId: t.id, origPos: c.position_ticks })
+              groupMoveOriginals.push({
+                clipId: c.id, trackId: t.id, origPos: c.position_ticks, origRow: rowIndex.rowOf.get(c.id) ?? 0,
+              })
             }
           }
         }
@@ -1774,6 +1986,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         originalFadeInTicks: hit.clip.fadeInTicks,
         originalFadeOutTicks: hit.clip.fadeOutTicks,
         groupMoveOriginals,
+        originalRow: hit.row,
+        startRow: rowAt(mouseY),
       }
     } else {
       // FL Studio place-mode: if the picker has an audio clip armed,
@@ -1781,24 +1995,23 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // The rubber-band fallback only runs when no picker selection
       // is active (so existing select-multiple workflow is untouched).
       const pickerSel = usePickerStore.getState().selection
-      if (pickerSel?.kind === 'audioClip') {
-        const targetTrack = trackRowAt(mouseY)
-        if (targetTrack) {
-          const tickAt = applySnap(
-            Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick)),
-          )
-          useTrackStore
-            .getState()
-            .placeClipCopy(pickerSel.trackId, pickerSel.clipId, targetTrack.id, tickAt)
-            .catch(err => console.error('placeClipCopy failed', err))
-          return
-        }
+      // The copy goes on the row under the pointer, on the channel of the
+      // clip it copies: it sounds as that clip does on any row.
+      const targetRow = rowAt(mouseY)
+      if (pickerSel?.kind === 'audioClip' && targetRow >= 0) {
+        const tickAt = applySnap(
+          Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick)),
+        )
+        useTrackStore
+          .getState()
+          .placeClipCopy(pickerSel.trackId, pickerSel.clipId, targetRow, tickAt)
+          .catch(err => console.error('placeClipCopy failed', err))
+        return
       }
       if (!(e.ctrlKey || e.metaKey)) clearSelection()
-      // A click in a track's row picks that track, as a click on its name
-      // does: it is where a paste goes.
-      const rowTrack = trackRowAt(mouseY)
-      if (rowTrack) useTrackStore.getState().selectTrack(rowTrack.id)
+      // A click on a row picks it, as a click on its name does: F2 renames
+      // it.
+      if (targetRow >= 0) usePlaylistRowsStore.getState().selectRow(targetRow)
       // Don't commit anything yet — defer the decision until we know if the
       // user is doing a simple click (paint/no-op) or a drag (marquee).
       // The edit cursor and the rubber band both only kick in once we cross
@@ -1813,7 +2026,43 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
       // No forceRender — pending state is invisible until promoted.
     }
-  }, [hitTest, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom, trackRowAt, paintClipAt, onSetHint, trackHeight, verticalScroll, followPlayhead, setFollowPlayhead])
+  }, [hitTest, itemHit, rowIndex, selectClip, toggleClipSelection, clearSelection, selectedClipIds, getScrollOffset, PIXELS_PER_SECOND, sampleRate, setPosition, pixelsPerTick, setEditCursor, snapTicks, clipToGroup, tracks, markers, bpm, horizontalZoom, setHorizontalZoom, rowAt, paintClipAt, onSetHint, trackHeight, verticalScroll, followPlayhead, setFollowPlayhead])
+
+  // The note shown over a clip the pointer rests on (mockup M1): what it
+  // is, the channel and insert it plays through, and its row.
+  const [tip, setTip] = useState<{ x: number; y: number; title: string; kind: string; through: string; row: string } | null>(null)
+  const tipTimer = useRef<number | null>(null)
+  const tipFor = useRef<string | null>(null)
+  const showTipLater = useCallback((at: { item: RowItem<TrackWithClips>; x: number; y: number } | null) => {
+    const id = at ? at.item.clip.id : null
+    if (id === tipFor.current) return
+    tipFor.current = id
+    if (tipTimer.current != null) window.clearTimeout(tipTimer.current)
+    tipTimer.current = null
+    setTip(null)
+    if (!at) return
+    tipTimer.current = window.setTimeout(() => {
+      const { item } = at
+      const byId = useTrackStore.getState().tracksById
+      const channel = item.track as TrackWithClips
+      const row = `On row ${item.row + 1}. Drag it to another row: it sounds the same.`
+      if (item.kind === 'auto') {
+        const clip = item.clip as AutomationClipInfo
+        const target = clip.targetTrack ? byId[clip.targetTrack] : channel
+        setTip({
+          x: at.x, y: at.y, title: automationClipName(item), kind: 'automation clip',
+          through: `Moves ${automationTargetLabel(clip.target).toLowerCase()} of ${target?.name ?? channel.name}.`, row,
+        })
+        return
+      }
+      const clip = item.clip as ClipInfo
+      setTip({
+        x: at.x, y: at.y, title: clip.name, kind: clip.kind === 'midi' ? 'MIDI clip' : 'audio clip',
+        through: `Plays through ${channel.name} into ${insertOf(channel, byId)}.`, row,
+      })
+    }, 600)
+  }, [])
+  useEffect(() => () => { if (tipTimer.current != null) window.clearTimeout(tipTimer.current) }, [])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     // Right-mouse-button pan takes priority over any other drag mode.
@@ -1839,11 +2088,19 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const rect = (e.target as HTMLElement).getBoundingClientRect()
       const mouseX = e.clientX - rect.left
       const mouseY = e.clientY - rect.top
-      const hit = hitTest(mouseX, mouseY, getScrollOffset())
+      const top = itemHit(mouseX, mouseY, getScrollOffset())
+      const hit = top && top.item.kind === 'clip'
+        ? { clip: top.item.clip as ClipInfo, edge: top.edge }
+        : null
+      // What a clip is, where its sound goes and that its row does not
+      // change it, shown once the pointer rests on it.
+      showTipLater(top ? { item: top.item, x: e.clientX, y: e.clientY } : null)
       const canvas = canvasRef.current
       if (canvas) {
         if (mouseY < RULER_HEIGHT) {
           canvas.style.cursor = 'pointer'
+        } else if (top && top.item.kind === 'auto') {
+          canvas.style.cursor = top.point !== undefined ? 'move' : top.edge === 'right' ? 'ew-resize' : 'grab'
         } else if (hit) {
           if (hit.edge === 'right' || hit.edge === 'left') canvas.style.cursor = 'ew-resize'
           else if (hit.edge === 'fade-in' || hit.edge === 'fade-out') canvas.style.cursor = 'ns-resize'
@@ -1954,13 +2211,61 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
 
     if (drag.mode === 'paint') {
-      // One copy per slot crossed, on whichever track the pointer is over,
-      // so a diagonal drag paints down the tracks as well as along the bar.
+      // One copy per slot crossed, on whichever row the pointer is over,
+      // so a diagonal drag paints down the rows as well as along the bar.
       const step = drag.paintStepTicks ?? PPQ
-      const track = trackRowAt(mouseY)
-      if (!track) return
+      const row = rowAt(mouseY)
+      if (row < 0) return
       const tick = paintSlotTick(mouseX, getScrollOffset(), pixelsPerTick, step)
-      paintClipAt(drag, track.id, tick)
+      paintClipAt(drag, row, tick)
+      return
+    }
+
+    if (drag.automation) {
+      // An automation clip: shown moving while held, sent on release.
+      const clip = useTrackStore.getState().tracksById[drag.trackId]?.automationClips?.find(c => c.id === drag.clipId)
+      if (!clip) return
+      const a = drag.automation
+      let next: AutomationClipInfo
+      if (a.pointIndex !== undefined) {
+        // A point: along the clip (snapped) and up or down its body.
+        const rowTop = RULER_HEIGHT + (drag.originalRow ?? 0) * trackHeight - verticalScroll
+        const h = trackHeight - 2
+        const headerH = h >= 34 ? 15 : Math.min(12, Math.max(9, Math.round(h * 0.34)))
+        const top = rowTop + 1 + headerH + 2
+        const bottom = rowTop + trackHeight - 4
+        const raw = (a.pointTick ?? 0) + dTicks
+        const tick = Math.max(0, Math.min(clip.lengthTicks, e.altKey ? raw : applySnap(raw)))
+        const value = bottom > top ? Math.max(0, Math.min(1, (bottom - mouseY) / (bottom - top))) : (a.pointValue ?? 0.5)
+        drag.lastPositionTicks = tick
+        drag.fadesSent = [tick, value]
+        const points = clip.points.map((p, i) => (i === a.pointIndex ? { ...p, tick, value } : p))
+        next = { ...clip, points }
+      } else if (drag.mode === 'resize-right') {
+        const len = Math.max(minLen, drag.originalLengthTicks + dTicks)
+        drag.lastLengthTicks = e.altKey ? len : Math.max(minLen, applySnap(len))
+        next = { ...clip, lengthTicks: drag.lastLengthTicks }
+      } else {
+        const raw = Math.max(0, drag.originalPositionTicks + dTicks)
+        drag.lastPositionTicks = e.altKey ? raw : applySnap(raw)
+        const row = rowAt(mouseY)
+        drag.lastRowDelta = row >= 0 ? row - (drag.startRow ?? row) : (drag.lastRowDelta ?? 0)
+        next = {
+          ...clip,
+          startTick: drag.lastPositionTicks,
+          row: Math.max(0, (drag.originalRow ?? 0) + (drag.lastRowDelta ?? 0)),
+        }
+      }
+      useTrackStore.setState(st => {
+        const tracks = st.tracks.map(t => t.id !== drag.trackId ? t : {
+          ...t,
+          automationClips: t.automationClips.map(c => (c.id === clip.id ? next : c)),
+        })
+        const tracksById = { ...st.tracksById }
+        const changed = tracks.find(t => t.id === drag.trackId)
+        if (changed) tracksById[changed.id] = changed
+        return { tracks, tracksById }
+      })
       return
     }
 
@@ -2007,56 +2312,30 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         : magnetSnap(raw, drag.originalLengthTicks, applySnap(raw), edgeTargets(), reach)
       const effectiveDelta = snapped - drag.originalPositionTicks
 
-      // Cross-track move — hit-test the cursor's vertical position
-      // against the visible audio-track stack. If the cursor lands
-      // inside a different track row than where the drag started, ship
-      // the clip to that track instead of just shifting position.
-      // Refuses on type mismatch (audio→midi or vice-versa); the
-      // backend command also enforces this with a hard error.
-      // Skip the ruler band so a near-top mouseY does not register as
-      // track index -1 / 0 incorrectly.
-      // Through trackRowAt, so a scrolled playlist moves the clip to the
-      // row under the pointer and not one several rows above it.
-      const targetTrack = mouseY >= RULER_HEIGHT ? trackRowAt(mouseY) : undefined
-      const sourceTrack = audioTracks.find(t => t.id === drag.trackId)
-      const canMoveAcross =
-        targetTrack &&
-        sourceTrack &&
-        targetTrack.id !== drag.trackId &&
-        targetTrack.kind === sourceTrack.kind
-
+      // Up or down: the clips go that many rows over, each staying on
+      // its own channel, so it sounds the same on any row. Dragging to
+      // another row used to move the clip to that row's track, through
+      // that track's instrument and effects.
+      const row = mouseY >= RULER_HEIGHT ? rowAt(mouseY) : -1
+      const rowDelta = row >= 0
+        ? Math.max(row - (drag.startRow ?? row), -(drag.originalRow ?? 0))
+        : (drag.lastRowDelta ?? 0)
       drag.lastPositionTicks = snapped
       drag.lastDeltaTicks = effectiveDelta
-      if (canMoveAcross) {
-        // Cross-track move still goes through the IPC path because it
-        // needs to mutate Rust-side track membership, not just a clip
-        // position. Rare event (one-off per drag), so the cost is OK.
-        // It opens the drag's undo step, so the release joins it.
-        const from = drag.trackId
-        const clipId = drag.clipId
-        openDragStep(drag)
-        drag.paintChain = (drag.paintChain ?? Promise.resolve())
-          .then(() => moveClipToTrack(from, targetTrack.id, clipId, snapped))
-          .catch(err => console.error('moveClipToTrack failed', err))
-        // Update the drag ref so subsequent mousemoves treat the new
-        // track as the source (otherwise the clip would teleport back
-        // every frame).
-        drag.trackId = targetTrack.id
-        drag.crossedTracks = true
-        drag.sentPositionTicks = snapped
-      } else {
-        // Hot path — fires every mousemove. Local-only update keeps the
-        // 60fps drag fluid even with 500 pre-allocated tracks. The
-        // backend gets the final position via commitClipDrag in
-        // handleMouseUp.
-        moveClipLocal(drag.trackId, drag.clipId, snapped)
+      drag.lastRowDelta = rowDelta
+      // Hot path, every mouse move: the store only, one update for the
+      // whole group. The song gets the final places on release.
+      const places = [{
+        trackId: drag.trackId, clipId: drag.clipId, positionTicks: snapped,
+        row: (drag.originalRow ?? 0) + rowDelta,
+      }]
+      for (const m of drag.groupMoveOriginals ?? []) {
+        places.push({
+          trackId: m.trackId, clipId: m.clipId, positionTicks: Math.max(0, m.origPos + effectiveDelta),
+          row: Math.max(0, m.origRow + rowDelta),
+        })
       }
-      if (drag.groupMoveOriginals) {
-        for (const m of drag.groupMoveOriginals) {
-          const memberPos = Math.max(0, m.origPos + effectiveDelta)
-          moveClipLocal(m.trackId, m.clipId, memberPos)
-        }
-      }
+      placeClipsLocal(places)
     } else if (drag.mode === 'resize-right') {
       const newLen = Math.max(minLen, drag.originalLengthTicks + dTicks)
       const start = drag.originalPositionTicks
@@ -2075,7 +2354,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       moveClipLocal(drag.trackId, drag.clipId, newPos)
       resizeClipLocal(drag.trackId, drag.clipId, newLen)
     }
-  }, [hitTest, getScrollOffset, pixelsPerTick, moveClipLocal, moveClipToTrack, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, audioTracks, trackRowAt, paintClipAt, markers])
+  }, [hitTest, itemHit, getScrollOffset, pixelsPerTick, moveClipLocal, placeClipsLocal, resizeClipLocal, setClipFades, snapTicks, PIXELS_PER_SECOND, sampleRate, setPosition, onSetHint, trackHeight, verticalScroll, audioTracks, rowAt, paintClipAt, markers])
 
   const handleMouseUp = useCallback(() => {
     // Right-mouse-button pan release. If we panned (moved past 4 px)
@@ -2141,19 +2420,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const scrollOffset = getScrollOffset()
       const x1 = Math.min(drag.startMouseX, drag.currentMouseX)
       const x2 = Math.max(drag.startMouseX, drag.currentMouseX)
-      const y1 = Math.min(drag.startMouseY, drag.currentMouseY) + verticalScroll
-      const y2 = Math.max(drag.startMouseY, drag.currentMouseY) + verticalScroll
-      const picked: string[] = []
-      for (let i = 0; i < audioTracks.length; i++) {
-        const y = RULER_HEIGHT + rows.rowOf[i] * trackHeight
-        if (y + trackHeight < y1 || y > y2) continue
-        for (const clip of audioTracks[i].clips) {
-          const cx = clip.position_ticks * pixelsPerTick - scrollOffset
-          const cw = clip.length_ticks * pixelsPerTick
-          if (cx + cw < x1 || cx > x2) continue
-          picked.push(clip.id)
-        }
-      }
+      const y1 = Math.min(drag.startMouseY, drag.currentMouseY)
+      const y2 = Math.max(drag.startMouseY, drag.currentMouseY)
+      // The rows the box covers, and on them what reaches into its bars.
+      const rowFrom = Math.max(0, rowAt(Math.max(RULER_HEIGHT, y1)))
+      const rowTo = rowAt(Math.max(RULER_HEIGHT, y2))
+      const picked = pixelsPerTick > 0 && rowTo >= 0
+        ? itemsInBox(rowIndex, rowFrom, rowTo, (x1 + scrollOffset) / pixelsPerTick, (x2 + scrollOffset) / pixelsPerTick)
+          .filter(i => i.kind === 'clip')
+          .map(i => i.clip.id)
+        : []
       if (picked.length > 0) {
         useTrackStore.setState(s => {
           const next = new Set(s.selectedClipIds)
@@ -2161,6 +2437,29 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           return { selectedClipIds: next, selectedClipId: picked[0] }
         })
       }
+    } else if (drag && drag.automation) {
+      // An automation clip let go: its point, length, or place and row,
+      // sent once, one undo step.
+      const { trackId, clipId } = drag
+      const store = useTrackStore.getState()
+      const a = drag.automation
+      let sent: Promise<unknown> | null = null
+      if (a.pointIndex !== undefined && drag.fadesSent) {
+        const [tick, value] = drag.fadesSent
+        sent = store.moveAutomationClipPoint(trackId, clipId, a.pointIndex, tick, value)
+      } else if (drag.mode === 'resize-right' && drag.lastLengthTicks !== undefined
+        && drag.lastLengthTicks !== drag.originalLengthTicks) {
+        sent = store.resizeAutomationClip(trackId, clipId, drag.lastLengthTicks)
+      } else if (drag.mode === 'move' && a.pointIndex === undefined) {
+        const startTick = drag.lastPositionTicks ?? drag.originalPositionTicks
+        const row = Math.max(0, (drag.originalRow ?? 0) + (drag.lastRowDelta ?? 0))
+        sent = store.placeAutomationClip(trackId, clipId, startTick, row)
+      }
+      ;(sent ?? store.refreshTrack(trackId)).catch(err => {
+        console.error('automation clip edit failed', err)
+        void store.refreshTrack(trackId)
+      })
+      if (sent) markEdited()
     } else if (drag && (drag.mode === 'fade-in' || drag.mode === 'fade-out')) {
       // Every fade sent on the way is in the drag's one undo step.
       closeDragStep(drag, 'Edit clip fades', drag.paintChain ?? Promise.resolve())
@@ -2177,7 +2476,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           commitClipTrimStart(drag.trackId, drag.clipId, liveClip.position_ticks)
             .catch(err => console.error('commitClipTrimStart failed', err))
         }
-      } else if (liveClip && drag.mode === 'move' && !drag.crossedTracks
+      } else if (liveClip && drag.mode === 'move' && !drag.lastRowDelta
         && usePlaylistToolStore.getState().ripple
         && liveClip.position_ticks !== drag.originalPositionTicks) {
         // Ripple editing: the clips after the moved ones move with them,
@@ -2188,15 +2487,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         forceRender(n => n + 1)
         return
       } else {
-        // The dragged clip and its group, where the drag put them, as one
-        // undo step with whatever the drag already sent (a move onto
-        // another track). Nothing is sent for a click that moved nothing.
+        // The dragged clip and its group, where the drag put them (their
+        // places and rows), as one undo step. Nothing is sent for a click
+        // that moved nothing.
         const delta = drag.lastDeltaTicks ?? 0
+        const rowDelta = drag.mode === 'move' ? (drag.lastRowDelta ?? 0) : 0
         const edits: ClipDragEdit[] = [{
           trackId: drag.trackId,
           clipId: drag.clipId,
           fromPositionTicks: drag.sentPositionTicks ?? drag.originalPositionTicks,
           positionTicks: drag.lastPositionTicks ?? drag.originalPositionTicks,
+          fromRow: drag.originalRow,
+          row: drag.originalRow === undefined ? undefined : drag.originalRow + rowDelta,
           ...(drag.mode === 'resize-right'
             ? { fromLengthTicks: drag.originalLengthTicks, lengthTicks: drag.lastLengthTicks ?? drag.originalLengthTicks }
             : {}),
@@ -2207,10 +2509,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             clipId: m.clipId,
             fromPositionTicks: m.origPos,
             positionTicks: Math.max(0, m.origPos + delta),
+            fromRow: m.origRow,
+            row: Math.max(0, m.origRow + rowDelta),
           })
         }
+        const onlyRows = rowDelta !== 0 && delta === 0
         const label = drag.mode === 'resize-right' ? 'Resize clip'
-          : drag.crossedTracks ? 'Move clip to track'
+          : onlyRows
+            ? (edits.length === 1 ? `Move clip to row ${(drag.originalRow ?? 0) + rowDelta + 1}` : `Move ${edits.length} clips to other rows`)
             : edits.length === 1 ? 'Move clip' : `Move ${edits.length} clips`
         const done = (drag.paintChain ?? Promise.resolve())
           .then(() => commitClipDrag(edits, label))
@@ -2220,14 +2526,33 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
     dragRef.current = null
     forceRender(n => n + 1)
-  }, [audioTracks, rows, pixelsPerTick, trackHeight, getScrollOffset, commitClipDrag, commitClipTrimStart])
+  }, [rowIndex, rowAt, pixelsPerTick, getScrollOffset, commitClipDrag, commitClipTrimStart])
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect()
     const mouseX = e.clientX - rect.left
     const mouseY = e.clientY - rect.top
     if (mouseY < RULER_HEIGHT) return
-    const hit = hitTest(mouseX, mouseY, getScrollOffset())
+    const scrollOffset = getScrollOffset()
+    const top = itemHit(mouseX, mouseY, scrollOffset)
+    if (top && top.item.kind === 'auto' && top.point === undefined) {
+      // A new point where the automation clip was double-clicked.
+      const clip = top.item.clip as AutomationClipInfo
+      const rowTop = RULER_HEIGHT + top.item.row * trackHeight - verticalScroll
+      const h = trackHeight - 2
+      const headerH = h >= 34 ? 15 : Math.min(12, Math.max(9, Math.round(h * 0.34)))
+      const upper = rowTop + 1 + headerH + 2
+      const lower = rowTop + trackHeight - 4
+      const raw = (mouseX + scrollOffset) / pixelsPerTick - clip.startTick
+      const tick = Math.max(0, Math.min(clip.lengthTicks, applySnap(Math.round(raw))))
+      const value = lower > upper
+        ? Math.max(0, Math.min(1, (lower - mouseY) / (lower - upper)))
+        : automationValueAt(clip.points, tick)
+      void useTrackStore.getState().addAutomationClipPoint(top.item.track.id, clip.id, tick, value)
+        .then(() => markEdited())
+      return
+    }
+    const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (!hit) return
     if (hit.clip.kind === 'midi') {
       useTrackStore.getState().setActiveMidiClip(hit.trackId, hit.clip.id)
@@ -2236,7 +2561,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // A sample's settings, as FL opens a sample's channel settings.
       useSampleWindowStore.getState().open(hit.trackId, hit.clip.id)
     }
-  }, [hitTest, getScrollOffset])
+  }, [hitTest, itemHit, getScrollOffset, pixelsPerTick, trackHeight, verticalScroll, applySnap])
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -2271,6 +2596,21 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       })
       return
     }
+    // An automation clip: right-click a point to remove it, the clip for
+    // its own short menu.
+    const top = itemHit(mouseX, mouseY, scrollOffset)
+    if (top && top.item.kind === 'auto') {
+      const trackId = top.item.track.id
+      const clipId = top.item.clip.id
+      setContextMenu(null)
+      setMarkerCtx(null)
+      if (top.point !== undefined) {
+        void useTrackStore.getState().removeAutomationClipPoint(trackId, clipId, top.point).then(() => markEdited())
+      } else {
+        setAutoMenu({ x: e.clientX, y: e.clientY, trackId, clipId, name: automationClipName(top.item) })
+      }
+      return
+    }
     const hit = hitTest(mouseX, mouseY, scrollOffset)
     if (hit) {
       if (!selectedClipIds.has(hit.clip.id)) {
@@ -2282,7 +2622,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       setContextMenu(null)
       setMarkerCtx(null)
     }
-  }, [hitTest, getScrollOffset, selectClip, selectedClipIds, markers, sections, pixelsPerTick, applySnap])
+  }, [hitTest, itemHit, getScrollOffset, selectClip, selectedClipIds, markers, sections, pixelsPerTick, applySnap])
 
   // A sample dragged from the browser. The drag is a pointer drag (see
   // lib/pointerDrag): HTML5 drag events never reach the page on Windows.
@@ -2293,39 +2633,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const mouseY = clientY - rect.top
     const scrollOffset = getScrollOffset()
 
-    // The audio track under the pointer, or the next audio track below it:
-    // a sample dropped on an instrument row used to land on whichever
-    // audio track came first, wherever that was.
-    const state = useTrackStore.getState()
-    const dropped = trackRowAt(Math.max(RULER_HEIGHT, mouseY))
-    let trackId: string | null = null
-    if (dropped) {
-      const from = audioTracks.findIndex(t => t.id === dropped.id)
-      trackId = audioTracks.slice(from).find(t => t.kind === 'Audio')?.id ?? null
-    }
-    if (!trackId) {
-      const audio = state.tracks.filter(t => t.kind === 'Audio')
-      const sel = state.selectedTrackId
-      trackId = sel && audio.some(t => t.id === sel) ? sel : audio[0]?.id ?? null
-    }
-    if (!trackId) {
-      await state.addAudioTrack()
-      trackId = useTrackStore.getState().tracks.find(t => t.kind === 'Audio')?.id ?? null
-    }
-    if (!trackId) return
-
+    // The row under the pointer, at the bar under it. The sample gets an
+    // audio clip channel of its own (the first time; it plays into the
+    // next free insert) and its clip goes on that channel, on this row.
+    // It used to land on the row's track, so the channel made for it held
+    // nothing and its mute and volume did nothing to the sample.
+    const row = Math.max(0, rowAt(Math.max(RULER_HEIGHT, mouseY)))
     const rawTicks = Math.max(0, Math.round((mouseX + scrollOffset) / pixelsPerTick))
     const positionTicks = applySnap(rawTicks)
 
     try {
-      await useTrackStore.getState().importAudioFile(trackId, path, positionTicks)
+      await useTrackStore.getState().placeSampleOnRow(path, row, positionTicks)
       const { useBrowserStore } = await import('../../stores/browserStore')
       useBrowserStore.getState().pushFileRecent(path)
     } catch (err) {
       console.error('browser drop import failed:', path, err)
       useNotificationStore.getState().push('error', tf('Could not add the sample: {error}', { error: String(err) }))
     }
-  }, [audioTracks, pixelsPerTick, getScrollOffset, applySnap, trackRowAt])
+  }, [pixelsPerTick, getScrollOffset, applySnap, rowAt])
 
   useDropTarget(containerRef, {
     accepts: (data) => data.startsWith('file:'),
@@ -2578,10 +2903,31 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
   // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)
+  // Where files dropped from the desktop go, from the drop's position in
+  // the window (in device pixels): the row and bar under it, or with no
+  // position, or one outside the playlist, the first empty row from the
+  // start. Read through a ref by the listeners, which are set up once.
+  const dropTargetRef = useRef<(at?: { x: number; y: number }) => { row: number; tick: number }>(() => ({ row: 0, tick: 0 }))
+  dropTargetRef.current = (at) => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (at && rect && pixelsPerTick > 0) {
+      const dpr = window.devicePixelRatio || 1
+      const x = at.x / dpr - rect.left
+      const y = at.y / dpr - rect.top
+      if (x >= 0 && y >= RULER_HEIGHT && x <= rect.width && y <= rect.height) {
+        return {
+          row: Math.max(0, rowAt(y)),
+          tick: applySnap(Math.max(0, Math.round((x + getScrollOffset()) / pixelsPerTick))),
+        }
+      }
+    }
+    let row = 0
+    while (rowIndex.byRow.has(row) || rowIndex.lanes.has(row)) row++
+    return { row, tick: 0 }
+  }
 
   useEffect(() => {
     const audioExts = ['wav', 'flac', 'mp3', 'ogg', 'aac', 'm4a', 'aiff', 'aif', 'aifc']
-    const { importAudioFile, addAudioTrack } = useTrackStore.getState()
     const pushNotif = useNotificationStore.getState().push
     useLogStore.getState().append({
       level: 'event',
@@ -2596,7 +2942,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // import is idempotent enough that an accidental double-fire just
     // imports twice (unlikely — only one channel actually fires per drop).
     const log = useLogStore.getState().append
-    const handleDropPayload = async (allPaths: string[]) => {
+    const handleDropPayload = async (allPaths: string[], at?: { x: number; y: number }) => {
       setDropHighlight(false)
       console.log('[playlist] drag-drop received', allPaths.length, 'paths', allPaths)
       log({
@@ -2621,69 +2967,24 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         return
       }
 
-      const state = useTrackStore.getState()
-      // Clip placement target: prefer a selected insert, else fall back
-      // to the first pre-allocated insert (insert-001). The 500-insert
-      // architecture means there's always at least one insert ready —
-      // the only reason addAudioTrack runs is the legacy edge case
-      // where a project was loaded without inserts.
-      let trackId: string | null = state.selectedTrackId
-      const inserts = state.tracks.filter(t => t.id.startsWith('insert-'))
-      if (!trackId || !inserts.find(t => t.id === trackId)) {
-        if (inserts.length === 0) {
-          trackId = await addAudioTrack()
-        } else {
-          trackId = inserts[0].id
-        }
-      }
-      if (!trackId) {
-        pushNotif('error', t('Could not find or create an audio track for dropped file'))
-        return
-      }
-
-      let offsetTicks = 0
-      const track = useTrackStore.getState().tracks.find(t => t.id === trackId)
-      if (track) {
-        for (const clip of track.clips) {
-          const end = clip.position_ticks + clip.length_ticks
-          if (end > offsetTicks) offsetTicks = end
-        }
-      }
+      // Where the files go: the row and bar under the pointer when the
+      // drop says where it was, else the first empty row from the start.
+      // One after another along the row, each on its own audio clip
+      // channel (made the first time a file is dropped).
+      const target = dropTargetRef.current(at)
+      const row = target.row
+      let offsetTicks = target.tick
 
       const { useBrowserStore } = await import('../../stores/browserStore')
       const pushRecent = useBrowserStore.getState().pushFileRecent
       let imported = 0
       for (const file of files) {
         try {
-          // Channel Rack entry per UNIQUE sample (FL Studio model).
-          // Dropping kick.wav three times must produce one "kick"
-          // channel and three playlist clips, not three identical
-          // channels. We dedupe on the basename: if a non-insert
-          // audio track named after this sample already exists, skip
-          // the addAudioTrack call and let the clip on the insert
-          // share the existing channel's identity.
-          const sampleName =
-            file
-              .split(/[\\/]/)
-              .pop()
-              ?.replace(/\.[^.]+$/, '') || 'Sample'
-          const existingChannel = useTrackStore
-            .getState()
-            .tracks.find(
-              t =>
-                t.kind === 'Audio' &&
-                !t.id.startsWith('insert-') &&
-                t.name === sampleName,
-            )
-          if (!existingChannel) {
-            await addAudioTrack(sampleName)
-          }
-
-          const result = await importAudioFile(trackId, file, offsetTicks)
-          offsetTicks += result.length_ticks
+          const placed = await useTrackStore.getState().placeSampleOnRow(file, row, offsetTicks)
+          offsetTicks += placed.clip.length_ticks
           pushRecent(file)
           imported++
-          log({ level: 'pass', test: 'drag-drop', message: `imported ${file.split(/[\\/]/).pop() || file}`, actual: `+${result.length_ticks} ticks` })
+          log({ level: 'pass', test: 'drag-drop', message: `imported ${file.split(/[\\/]/).pop() || file}`, actual: `+${placed.clip.length_ticks} ticks` })
         } catch (e) {
           console.error('Failed to import:', file, e)
           log({ level: 'fail', test: 'drag-drop', message: `import failed: ${file.split(/[\\/]/).pop() || file}`, actual: String(e) })
@@ -2691,7 +2992,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         }
       }
       if (imported > 0) {
-        log({ level: 'info', test: 'drag-drop', message: `imported ${imported}/${files.length} file(s) on track ${trackId}` })
+        log({ level: 'info', test: 'drag-drop', message: `imported ${imported}/${files.length} file(s) on row ${row + 1}` })
         pushNotif('info', imported === files.length
           ? (imported === 1 ? t('Imported 1 file') : tf('Imported {n} files', { n: imported }))
           : tf('Imported {n} of {total} files', { n: imported, total: files.length }))
@@ -2703,18 +3004,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // native `daw:drag-drop` first; macOS / Linux users get the
     // standard `tauri://drag-drop` channel.
     let lastDropAt = 0
-    const dispatchDrop = (paths: string[]) => {
+    const dispatchDrop = (paths: string[], at?: { x: number; y: number }) => {
       const now = Date.now()
       if (now - lastDropAt < 200) return
       lastDropAt = now
-      void handleDropPayload(paths)
+      void handleDropPayload(paths, at)
     }
 
-    const unlistenDrop = listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
+    const unlistenDrop = listen<{ paths: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', (event) => {
       log({ level: 'event', test: 'drag-drop', message: 'channel:tauri://drag-drop fired', actual: `${event.payload?.paths?.length ?? 0} path(s)` })
-      dispatchDrop(event.payload?.paths ?? [])
+      dispatchDrop(event.payload?.paths ?? [], event.payload?.position)
     })
-    const unlistenNativeDrop = listen<{ kind: string; paths?: string[] }>(
+    const unlistenNativeDrop = listen<{ kind: string; paths?: string[]; x?: number; y?: number }>(
       'daw:drag-drop',
       (event) => {
         const payload = event.payload
@@ -2723,7 +3024,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         else if (payload.kind === 'leave') setDropHighlight(false)
         else if (payload.kind === 'drop') {
           log({ level: 'event', test: 'drag-drop', message: 'channel:daw:drag-drop (native) fired', actual: `${payload.paths?.length ?? 0} path(s)` })
-          dispatchDrop(payload.paths ?? [])
+          dispatchDrop(payload.paths ?? [], payload.x !== undefined && payload.y !== undefined ? { x: payload.x, y: payload.y } : undefined)
         }
       },
     )
@@ -2861,6 +3162,43 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           />
         )
       })()}
+      {tip && (
+        <div
+          data-testid="clip-note"
+          style={{
+            position: 'fixed', left: Math.min(tip.x + 14, window.innerWidth - 370), top: tip.y + 90 > window.innerHeight ? tip.y - 78 : tip.y + 16, zIndex: 900, pointerEvents: 'none',
+            background: 'rgba(18,18,24,0.97)', border: `1px solid ${hw.border}`, borderRadius: 6,
+            padding: '7px 10px', maxWidth: 360, boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+            font: '500 11.5px Inter, system-ui, sans-serif', color: '#e4e4e7', lineHeight: 1.45,
+          }}
+        >
+          <div><b style={{ color: '#fff' }}>{tip.title}</b> <span style={{ color: '#a1a1aa' }}>· {tip.kind}</span></div>
+          <div>{tip.through}</div>
+          <div style={{ color: '#a1a1aa' }}>{tip.row}</div>
+        </div>
+      )}
+      {autoMenu && (
+        <div
+          data-testid="automation-clip-menu"
+          onMouseLeave={() => setAutoMenu(null)}
+          style={{
+            position: 'fixed', left: autoMenu.x, top: autoMenu.y,
+            background: '#12121a', border: `1px solid ${hw.border}`,
+            borderRadius: 6, padding: 4, minWidth: 200, zIndex: 1000,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+          }}
+        >
+          <div style={{ padding: '4px 10px 2px', fontSize: 8, color: hw.textFaint, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+            {autoMenu.name}
+          </div>
+          <MenuItem label={t('Delete automation clip')} onClick={async () => {
+            const { trackId, clipId } = autoMenu
+            setAutoMenu(null)
+            await useTrackStore.getState().deleteAutomationClip(trackId, clipId)
+            markEdited()
+          }} />
+        </div>
+      )}
       {contextMenu && (() => {
         const menuTrack = tracks.find(t => t.id === contextMenu.trackId)
         const menuClip = menuTrack?.clips.find(c => c.id === contextMenu.clipId)

@@ -5,6 +5,7 @@ import { useProjectStore } from './projectStore'
 import { rippleShifts } from './ripple'
 import { useHistoryStore } from './historyStore'
 import { usePatternStore } from './patternStore'
+import { usePlaylistRowsStore } from './playlistRowsStore'
 
 /**
  * True while a gesture is being grouped into one undo step.
@@ -87,6 +88,31 @@ export interface ClipDragEdit {
   positionTicks: number
   fromLengthTicks?: number
   lengthTicks?: number
+  /** The playlist row it was on and the one the drag put it on. */
+  fromRow?: number
+  row?: number
+}
+
+/** A clip to put on a playlist row. */
+export interface ClipRowMove {
+  trackId: string
+  clipId: string
+  row: number
+}
+
+/** A clip's place during a drag, set in the store before it is sent. */
+export interface ClipPlaceLocal {
+  trackId: string
+  clipId: string
+  positionTicks?: number
+  row?: number
+}
+
+/** A sample dropped on the playlist, as `place_sample_on_row` returns it. */
+export interface PlacedSample {
+  channelId: string
+  newChannel: boolean
+  clip: ImportedClip
 }
 
 export interface ClipInfo {
@@ -153,8 +179,9 @@ export interface ClipInfo {
   /** The fades in time, at the tempo where the clip sits. */
   fadeInMs?: number
   fadeOutMs?: number
-  /** The playlist row it is drawn on, from 0; null for a clip made before
-   *  rows were kept. Not used by the playlist yet. */
+  /** The playlist row it is drawn on, from 0; null for a clip made by
+   *  something not yet taught about rows (the playlist then draws it where
+   *  its channel's other clips are). Where it sits, never how it sounds. */
   row?: number | null
 }
 
@@ -266,7 +293,7 @@ export interface AutomationLaneInfo {
   target: AutomationTargetInfo
   points: AutomationPointInfo[]
   visible: boolean
-  /** The playlist row it is drawn on. Not used by the playlist yet. */
+  /** The playlist row it is drawn on. */
   row?: number | null
 }
 
@@ -277,7 +304,7 @@ export interface AutomationClipInfo {
   lengthTicks: number
   colorArgb: number
   points: AutomationPointInfo[]
-  /** The playlist row it is drawn on. Not used by the playlist yet. */
+  /** The playlist row it is drawn on. */
   row?: number | null
   /** The track whose knob it moves, when not the one it sits on. */
   targetTrack?: string | null
@@ -400,7 +427,11 @@ interface TrackState {
   deleteAutomationPoint: (trackId: string, laneId: string, pointIndex: number) => Promise<void>
   setAutomationLaneVisible: (trackId: string, laneId: string, visible: boolean) => Promise<void>
   // Automation clips (arrangement-level)
-  createAutomationClip: (trackId: string, target: AutomationTargetInfo, startTick: number, lengthTicks: number) => Promise<string>
+  /** A new automation clip, on `row` or else the first empty row. */
+  createAutomationClip: (trackId: string, target: AutomationTargetInfo, startTick: number, lengthTicks: number, row?: number) => Promise<string>
+  /** Move an automation clip along the playlist and onto another row, as
+   *  one undo step. */
+  placeAutomationClip: (trackId: string, clipId: string, startTick: number, row: number) => Promise<void>
   deleteAutomationClip: (trackId: string, clipId: string) => Promise<void>
   moveAutomationClip: (trackId: string, clipId: string, startTick: number) => Promise<void>
   resizeAutomationClip: (trackId: string, clipId: string, lengthTicks: number) => Promise<void>
@@ -421,6 +452,15 @@ interface TrackState {
   /// state refresh. Caller MUST call moveClip (or commitClipDrag) on
   /// mouseup to persist the final position to the backend.
   moveClipLocal: (trackId: string, clipId: string, newPositionTicks: number) => void
+  /// Many clips' positions and rows at once, local only, for a drag: one
+  /// store update (and one redraw) per mouse move however many clips move.
+  placeClipsLocal: (places: ClipPlaceLocal[]) => void
+  /// Put clips on other playlist rows. They stay on their channel, so they
+  /// sound the same.
+  setClipRows: (moves: ClipRowMove[], label?: string | null) => Promise<void>
+  /// A sample from the browser or the desktop on the playlist: on its own
+  /// audio clip channel (made the first time), on `row` at `positionTicks`.
+  placeSampleOnRow: (filePath: string, row: number, positionTicks: number) => Promise<PlacedSample>
   /// Same idea as moveClipLocal but for resize — local-only length update.
   resizeClipLocal: (trackId: string, clipId: string, newLengthTicks: number) => void
   /// Persist a finished drag that used moveClipLocal/resizeClipLocal: each
@@ -441,14 +481,13 @@ interface TrackState {
   deleteSelectedClip: () => Promise<void>
   deleteSelectedClips: () => Promise<void>
   duplicateClip: (trackId: string, clipId: string) => Promise<string>
-  /// Picker place-mode: clone an existing clip and drop it on (possibly
-  /// a different) track at the given tick. One commit, one fetch — the
-  /// canvas calls this on left-click while the picker has an audio
-  /// clip selected.
+  /// Picker place-mode: a copy of an existing clip on its own channel, on
+  /// the row under the mouse at the given tick. One undo step, one fetch;
+  /// the canvas calls this on left-click while the picker has a clip.
   placeClipCopy: (
     sourceTrackId: string,
     sourceClipId: string,
-    targetTrackId: string,
+    row: number,
     positionTicks: number,
     /// Label for the undo list. Pass null inside a gesture that places many
     /// clips (the paint tool), which pushes one label of its own at the end.
@@ -469,10 +508,10 @@ interface TrackState {
   copySelectedClips: () => void
   /** Copy the selected clips and take them out, as one undo step. */
   cutSelectedClips: () => Promise<void>
-  /** Paste what was copied at `positionTicks`, the top clip on
-   *  `targetTrackId` (else the selected track, else the tracks the clips
-   *  came from). The pasted clips end up selected. */
-  pasteClipsAtPosition: (positionTicks: number, targetTrackId?: string) => Promise<PasteOutcome>
+  /** Paste what was copied at `positionTicks`, each clip on its own
+   *  channel: the top one on `targetRow`, else every clip on the row it
+   *  came from. The pasted clips end up selected. */
+  pasteClipsAtPosition: (positionTicks: number, targetRow?: number) => Promise<PasteOutcome>
   setClipGain: (trackId: string, clipId: string, gainDb: number) => Promise<void>
   setClipFades: (trackId: string, clipId: string, fadeInTicks: number, fadeOutTicks: number) => Promise<void>
   setClipFadeCurves: (trackId: string, clipId: string, fadeInCurve: FadeCurveKind, fadeOutCurve: FadeCurveKind) => Promise<void>
@@ -488,8 +527,8 @@ interface TrackState {
   getWaveformPeaks: (sourceId: string, numBuckets: number) => Promise<WavePeak[]>
 }
 
-/** What a paste did: the new clips, and how many had no fitting track
- *  there (audio goes on audio tracks, MIDI on MIDI tracks). */
+/** What a paste did: the new clips, and how many could not go back (their
+ *  channel is gone). */
 export interface PasteOutcome {
   pasted: string[]
   skipped: number
@@ -551,6 +590,9 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       )
       const tracks: TrackWithClips[] = payload.map((p) => ({ ...p, clips: p.clips ?? [] }))
       set({ tracks, tracksById: indexTracks(tracks) })
+      // Whatever changed the tracks (an undo, an opened song, a room, an
+      // arrangement switch) may have changed the playlist's rows too.
+      void usePlaylistRowsStore.getState().fetch()
     } catch (e) {
       // Fallback for older backends that haven't shipped the one-shot
       // command yet (e.g. hot-swap frontend update against a stale
@@ -992,10 +1034,28 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     await get().refreshTrack(trackId)
   },
 
-  createAutomationClip: async (trackId, target, startTick, lengthTicks) => {
-    const id = await invoke<string>('create_automation_clip', { trackId, target, startTick, lengthTicks })
+  createAutomationClip: async (trackId, target, startTick, lengthTicks, row) => {
+    const id = await mut<string>(
+      'create_automation_clip',
+      { trackId, target, startTick, lengthTicks, row: row ?? null },
+      'Add automation clip',
+    )
     await get().refreshTrack(trackId)
     return id
+  },
+  placeAutomationClip: async (trackId, clipId, startTick, row) => {
+    const clip = get().tracksById[trackId]?.automationClips?.find(c => c.id === clipId)
+    const moves = clip ? clip.startTick !== startTick : true
+    const rows = clip ? clip.row !== row : true
+    if (!moves && !rows) return
+    await get().beginHistoryGroup()
+    try {
+      if (moves) await mut('move_automation_clip', { trackId, clipId, startTick })
+      if (rows) await mut('set_automation_clip_row', { trackId, clipId, row })
+    } finally {
+      await get().endHistoryGroup(rows && !moves ? `Move automation clip to row ${row + 1}` : 'Move automation clip')
+    }
+    await get().refreshTrack(trackId)
   },
   deleteAutomationClip: async (trackId, clipId) => {
     await invoke('delete_automation_clip', { trackId, clipId })
@@ -1060,6 +1120,55 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     await get().fetchTracks()
   },
 
+  placeClipsLocal: (places) => {
+    if (places.length === 0) return
+    const byTrack = new Map<string, Map<string, ClipPlaceLocal>>()
+    for (const p of places) {
+      let m = byTrack.get(p.trackId)
+      if (!m) byTrack.set(p.trackId, (m = new Map()))
+      m.set(p.clipId, p)
+    }
+    set(state => {
+      const tracks = state.tracks.map(t => {
+        const m = byTrack.get(t.id)
+        if (!m || !t.clips) return t
+        return {
+          ...t,
+          clips: t.clips.map(c => {
+            const p = m.get(c.id)
+            if (!p) return c
+            return {
+              ...c,
+              position_ticks: p.positionTicks ?? c.position_ticks,
+              row: p.row ?? c.row,
+            }
+          }),
+        }
+      })
+      return { tracks, tracksById: indexTracks(tracks) }
+    })
+  },
+
+  setClipRows: async (moves, label) => {
+    if (moves.length === 0) return
+    const name = label === undefined
+      ? (moves.length === 1 ? `Move clip to row ${moves[0].row + 1}` : `Move ${moves.length} clips to other rows`)
+      : label
+    await mut('set_clip_rows', { moves }, name ?? undefined)
+    await get().fetchTracks()
+  },
+
+  placeSampleOnRow: async (filePath, row, positionTicks) => {
+    const name = filePath.split(/[\\/]/).pop() || filePath
+    const placed = await mut<PlacedSample>(
+      'place_sample_on_row',
+      { filePath, row, positionTicks },
+      `Add "${name}" on row ${row + 1}`,
+    )
+    await get().fetchTracks()
+    return placed
+  },
+
   moveClipLocal: (trackId, clipId, newPositionTicks) => {
     set(state => ({
       tracks: state.tracks.map(t => {
@@ -1100,7 +1209,12 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     // group of clips moved together came back one clip per undo.
     const moves = edits.filter(e => e.positionTicks !== e.fromPositionTicks)
     const resizes = edits.filter(e => e.lengthTicks !== undefined && e.lengthTicks !== e.fromLengthTicks)
-    if (moves.length === 0 && resizes.length === 0) return
+    // A drag up or down puts the clips on other rows (on their own
+    // channels, so they sound the same), in the same undo step.
+    const rows: ClipRowMove[] = edits
+      .filter(e => e.row !== undefined && e.row !== e.fromRow)
+      .map(e => ({ trackId: e.trackId, clipId: e.clipId, row: e.row! }))
+    if (moves.length === 0 && resizes.length === 0 && rows.length === 0) return
     await get().beginHistoryGroup()
     try {
       // Through mut, so the song counts as changed: sent with a bare invoke,
@@ -1111,6 +1225,7 @@ export const useTrackStore = create<TrackState>((set, get) => ({
       for (const e of resizes) {
         await mut('resize_clip', { trackId: e.trackId, clipId: e.clipId, newLengthTicks: e.lengthTicks })
       }
+      if (rows.length > 0) await mut('set_clip_rows', { moves: rows })
     } finally {
       await get().endHistoryGroup(label)
     }
@@ -1217,26 +1332,20 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   placeClipCopy: async (
     sourceTrackId,
     sourceClipId,
-    targetTrackId,
+    row,
     positionTicks,
     label = 'Place clip',
   ) => {
+    // One command, one undo step: the copy stays on the channel of the
+    // clip it copies and lands on the row. It used to be a duplicate and
+    // then a move to the row's track, two steps, and a copy put on another
+    // instrument's row played that instrument.
     const newId = await mut<string>(
-      'duplicate_clip',
-      { trackId: sourceTrackId, clipId: sourceClipId },
+      'place_clip_copy',
+      { trackId: sourceTrackId, clipId: sourceClipId, positionTicks, row },
       label ?? undefined,
     )
-    if (sourceTrackId === targetTrackId) {
-      await invoke('move_clip', { trackId: targetTrackId, clipId: newId, newPositionTicks: positionTicks })
-    } else {
-      await invoke('move_clip_to_track', {
-        fromTrackId: sourceTrackId,
-        toTrackId: targetTrackId,
-        clipId: newId,
-        newPositionTicks: positionTicks,
-      })
-    }
-    await get().fetchTracks()
+    await get().refreshTrack(sourceTrackId)
     return newId
   },
 
@@ -1281,13 +1390,13 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     await get().fetchTracks()
   },
 
-  pasteClipsAtPosition: async (positionTicks, targetTrackId) => {
-    const { clipboard, selectedTrackId } = get()
+  pasteClipsAtPosition: async (positionTicks, targetRow) => {
+    const { clipboard } = get()
     if (clipboard.length === 0) return { pasted: [], skipped: 0 }
     const label = clipboard.length === 1 ? 'Paste clip' : `Paste ${clipboard.length} clips`
     const outcome = await mut<PasteOutcome>(
       'paste_clips',
-      { targetTrackId: targetTrackId ?? selectedTrackId ?? null, positionTicks },
+      { targetRow: targetRow ?? null, positionTicks },
       label,
     )
     set({ selectedClipIds: new Set(outcome.pasted), selectedClipId: outcome.pasted[0] ?? null })

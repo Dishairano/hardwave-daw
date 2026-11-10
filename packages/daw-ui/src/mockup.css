@@ -2125,3 +2125,54 @@ html.hw-high-vis :focus-visible {
   outline: 2px solid var(--brand, #ff2d4f) !important;
   outline-offset: 2px !important;
 }
+
+/* ─── Playlist row headers (FL's playlist tracks, mockup M1) ─────────── */
+/* A row header is its colour, its name and its M and S switches: no
+   record button and no automation +, as a row has no input or level of
+   its own. A row whose switch is off reads dimmed, as its clips do. */
+.fl-tr.fl-row .nm b { font-weight: 600; }
+.fl-tr.fl-row.silent .nm { opacity: 0.45; }
+.fl-row-rename {
+  width: 100%;
+  background: #0a0a0e;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  border-radius: 3px;
+  color: #fff;
+  font: inherit;
+  padding: 1px 4px;
+  outline: none;
+}
+.fl-row-menu {
+  background: #12121a;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 7px;
+  padding: 4px;
+  min-width: 190px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+  font-family: Inter, system-ui, sans-serif;
+}
+.fl-row-menu .hd {
+  padding: 5px 10px 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #71717a;
+}
+.fl-row-menu button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: #d4d4d8;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.fl-row-menu button:hover { background: rgba(239, 68, 68, 0.14); color: #fff; }
+.fl-row-menu kbd { font: 600 10px "JetBrains Mono", ui-monospace, monospace; color: #71717a; }
+.fl-row-menu .sep { height: 1px; margin: 4px 6px; background: rgba(255, 255, 255, 0.07); }

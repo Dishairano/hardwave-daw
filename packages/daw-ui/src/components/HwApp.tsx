@@ -12,11 +12,12 @@
  * Replaces `MainLayout` from App.tsx. The CSS lives in `../mockup.css`.
  */
 
-import { useTrackFolderStore } from '../stores/trackFolderStore'
 import { usePlaylistScrollStore } from '../stores/playlistScrollStore'
-import { playlistColumnRows, playlistTracks, visibleRows } from './arrangement/playlistRows'
+import { visibleRows } from './arrangement/playlistRows'
+import { rowIndexOf, rowName, shownRowCount, silentRows } from './arrangement/rowIndex'
+import { usePlaylistRowsStore } from '../stores/playlistRowsStore'
+import { useColorPickerStore } from '../stores/colorPickerStore'
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { TrackContextMenu } from './arrangement/TrackContextMenu'
 import { t, useLanguage } from '../i18n'
 import { Browser } from './browser/Browser'
 import { Arrangement } from './arrangement/Arrangement'
@@ -25,16 +26,12 @@ import { PianoRoll } from './piano-roll/PianoRoll'
 import { MixerPanel } from './mixer/MixerPanel'
 import { HwTopMenu, type MenuDef } from './HwTopMenu'
 import { AutomationLane } from './AutomationLane'
-import { AutomationClipLane } from './AutomationClipLane'
-import { KickSynthEditor } from './KickSynthEditor'
-import type { AutomationTargetInfo } from '../stores/trackStore'
 import { SNAP_VALUES, useTransportStore } from '../stores/transportStore'
 import { tempoChanged, tickOfSample, useTempoMapStore } from '../stores/tempoMapStore'
 import { TEMPO_COLOR, TEMPO_LANE_HEIGHT, tempoSummary } from './arrangement/tempoLaneDraw'
 import { barBeatAtTick, PPQ as PPQ_TICKS } from '../utils/meter'
 import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
-import { useTrackStore, type TrackInfo } from '../stores/trackStore'
-import { usePluginCatalogStore } from '../stores/pluginCatalogStore'
+import { useTrackStore } from '../stores/trackStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
@@ -1407,34 +1404,12 @@ export function HwPlaylistTools() {
   )
 }
 
-// ─── Playlist track-name column (mockup: .fl-pl-tracks) ─────────────────────
+// ─── Playlist row-name column (mockup M1 of the FL three lists design) ─────
 //
-// The arrangement grid (Arrangement.tsx) always renders 500 lanes per the
-// mockup. This column has to mirror that count or the tracks list and the
-// grid drift apart vertically — real tracks at the top, empty grid below
-// them. We render `tracks.map()` first, then pad with numbered placeholder
-// rows so the totals line up.
-const PLAYLIST_TOTAL_SLOTS = 500
-
-/** The small line under a track name: what kind of track it is, and for
- *  audio whether its clips follow the tempo or keep their speed. */
-function trackSubtitle(t: {
-  kind?: string
-  automationLanes: unknown[]
-  clips?: { kind: string; treatment?: { followBpm?: number | null }; warpMarkers?: unknown[] }[]
-}): string {
-  const kind = (t.kind || '').toLowerCase()
-  const base = kind === 'audio' ? 'Audio' : kind === 'bus' ? 'Bus' : kind === 'return' ? 'Return' : kind ? kind[0].toUpperCase() + kind.slice(1) : 'Track'
-  const parts = [base]
-  const audio = (t.clips ?? []).filter((c) => c.kind === 'audio')
-  if (audio.length > 0) {
-    const follows = audio.filter((c) => (c.treatment?.followBpm ?? 0) > 0 || (c.warpMarkers?.length ?? 0) > 0).length
-    parts.push(follows === audio.length ? 'follows tempo' : follows === 0 ? 'keeps its speed' : 'some follow tempo')
-  }
-  const lanes = t.automationLanes.length
-  if (lanes > 0) parts.push(`${lanes} lane${lanes === 1 ? '' : 's'}`)
-  return parts.join(' · ')
-}
+// One header per playlist row (FL's playlist track): its colour, its name
+// ("Track N" when nobody named it), and its M and S switches. A row with an
+// automation lane on it shows the lane instead. The rows are the grid's
+// rows, from the same index, padded to FL's 500.
 
 /** The tempo lane's name, beside the lane: the song's tempos in order. */
 function HwTempoLaneHead() {
@@ -1457,12 +1432,13 @@ function HwTempoLaneHead() {
 }
 
 export function HwPlaylistTracks() {
-  const allTracks = useTrackStore(s => s.tracks)
-  const folders = useTrackFolderStore(s => s.folders)
-  // The same tracks, in the same order, as the grid beside it draws. This
-  // listed only the numbered inserts while the grid drew every track, so
-  // the names and the clips drifted apart.
-  const tracks = useMemo(() => playlistTracks(allTracks, folders), [allTracks, folders])
+  const tracks = useTrackStore(s => s.tracks)
+  // The rows and what sits on them: the same index the grid beside it
+  // draws from, so a name and its clips are always on one line.
+  const index = useMemo(() => rowIndexOf(tracks), [tracks])
+  const rows = usePlaylistRowsStore(s => s.rows)
+  const selectedRow = usePlaylistRowsStore(s => s.selectedRow)
+  const silent = useMemo(() => silentRows(rows), [rows])
   // Scrolls with the grid; a wheel over the names scrolls both.
   const scrollY = usePlaylistScrollStore(s => s.y)
   const onWheel = (e: React.WheelEvent) => {
@@ -1472,27 +1448,10 @@ export function HwPlaylistTracks() {
     else if (e.deltaMode === 2) dy *= 400
     usePlaylistScrollStore.getState().scrollBy(dy)
   }
-  const toggleArm = useTrackStore(s => s.toggleArm)
-  const toggleMute = useTrackStore(s => s.toggleMute)
-  const toggleSolo = useTrackStore(s => s.toggleSolo)
   const tempoLaneShown = useGeneralPrefsStore(s => s.tempoLaneShown)
-  const addAutomationLane = useTrackStore(s => s.addAutomationLane)
-  const createAutomationClip = useTrackStore(s => s.createAutomationClip)
-  const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
-  const selectedTrackId = useTrackStore(s => s.selectedTrackId)
-  const selectTrack = useTrackStore(s => s.selectTrack)
-  // A channel with an instrument plug-in plays that, and the built-in
-  // voice under it is silent: its badge said SIN on a sampler channel.
-  const catalog = usePluginCatalogStore(s => s.plugins)
-  useEffect(() => { void usePluginCatalogStore.getState().ensureLoaded() }, [])
-  const pluginInstrument = (t: TrackInfo) =>
-    t.inserts?.find(s => catalog.find(p => p.id === s.pluginId)?.category === 'Instrument')?.pluginName.replace(/^Hardwave /, '')
-  const [trackMenu, setTrackMenu] = useState<{ trackId: string; x: number; y: number } | null>(null)
-  const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
-  // Only the rows in view are drawn. All 500 were, each with its buttons,
-  // and every change to any track drew them all again, which is what made a
-  // big song slow to work in. Every row is one track height, the same as
-  // the grid beside it, so the rows above and below are plain space.
+  // Only the rows in view are drawn: every row is one track height, the
+  // same as the grid beside it, so the rows above and below are plain
+  // space.
   const rowHeight = useTransportStore(s => s.trackHeight)
   const columnRef = useRef<HTMLDivElement>(null)
   const [viewHeight, setViewHeight] = useState(800)
@@ -1505,265 +1464,164 @@ export function HwPlaylistTracks() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
-  const rows = useMemo(() => playlistColumnRows(tracks, placeholderCount), [tracks, placeholderCount])
-  const { first, last } = visibleRows(rows.length, rowHeight, scrollY, viewHeight)
-  // Which track currently has its KickSynth editor open, if any.
-  // Editor pops up when the user double-clicks the instrument badge
-  // on a kick_synth-voiced track.
-  const [kickEditorTrack, setKickEditorTrack] = useState<string | null>(null)
+  const count = shownRowCount(index, rows.length)
+  const { first, last } = visibleRows(count, rowHeight, scrollY, viewHeight)
+  const [renaming, setRenaming] = useState<{ row: number; draft: string } | null>(null)
+  const [menu, setMenu] = useState<{ row: number; x: number; y: number } | null>(null)
+  const actions = usePlaylistRowsStore.getState
+  const startRename = (row: number) => {
+    setMenu(null)
+    setRenaming({ row, draft: rowName(rows, row) })
+  }
+  const finishRename = () => {
+    if (!renaming) return
+    const { row, draft } = renaming
+    setRenaming(null)
+    // "Track N" typed back, or nothing, leaves the row unnamed.
+    const name = draft.trim() === `Track ${row + 1}` ? '' : draft.trim()
+    if (name !== (rows[row]?.name ?? '')) void actions().rename(row, name)
+  }
+  // F2 renames the row last clicked, as in FL.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F2') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      const row = usePlaylistRowsStore.getState().selectedRow
+      if (row == null) return
+      e.preventDefault()
+      startRename(row)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+  useEffect(() => {
+    if (!menu) return
+    const close = (e: MouseEvent) => {
+      if ((e.target as HTMLElement).closest('[data-row-menu]')) return
+      setMenu(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [menu])
+  const pickColour = (row: number, anchor: DOMRect) => {
+    setMenu(null)
+    useColorPickerStore.getState().open({
+      anchor,
+      current: rows[row]?.color ?? null,
+      title: rowName(rows, row),
+      onPick: (color) => { void actions().setColor(row, color) },
+      onClear: () => { void actions().setColor(row, null) },
+    })
+  }
+  const shown: React.ReactNode[] = []
+  for (let r = first; r < last; r++) {
+    const lane = index.lanes.get(r)?.[0]
+    if (lane) {
+      shown.push(<AutomationLane key={`lane-${lane.lane.id}`} trackId={lane.track.id} lane={lane.lane} />)
+      continue
+    }
+    const row = rows[r]
+    const name = rowName(rows, r)
+    const muted = !!row?.muted
+    const soloed = !!row?.soloed
+    shown.push(
+      <div
+        key={`row-${r}`}
+        className={`fl-tr fl-row${r === selectedRow ? ' selected' : ''}${silent(r) ? ' silent' : ''}`}
+        style={{ ['--track-color' as any]: row?.color || '#3f3f46' }}
+        title={name}
+        data-row={r}
+        onClick={() => actions().selectRow(r)}
+        onDoubleClick={() => startRename(r)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          actions().selectRow(r)
+          setMenu({ row: r, x: e.clientX, y: e.clientY })
+        }}
+      >
+        <span className="strip" />
+        <span className="nm">
+          {renaming?.row === r ? (
+            <input
+              autoFocus
+              className="fl-row-rename"
+              value={renaming.draft}
+              aria-label={t('Row name')}
+              onChange={(e) => setRenaming({ row: r, draft: e.target.value })}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={finishRename}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') finishRename()
+                else if (e.key === 'Escape') setRenaming(null)
+              }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <b>{name}</b>
+          )}
+        </span>
+        <span className="btns">
+          <button
+            type="button"
+            className={`fl-tr-btn m${muted ? ' on' : ''}`}
+            onClick={(e) => { e.stopPropagation(); void actions().setMuted(r, !muted) }}
+            title={muted ? t('Unmute this row: its clips play again') : t('Mute this row: its clips go quiet')}
+            aria-label={muted ? `Unmute ${name}` : `Mute ${name}`}
+          >M</button>
+          <button
+            type="button"
+            className={`fl-tr-btn s${soloed ? ' on' : ''}`}
+            onClick={(e) => { e.stopPropagation(); void actions().setSoloed(r, !soloed) }}
+            title={soloed ? t('Unsolo this row') : t('Solo this row: only soloed rows play')}
+            aria-label={soloed ? `Unsolo ${name}` : `Solo ${name}`}
+          >S</button>
+        </span>
+      </div>,
+    )
+  }
+  const menuRow = menu ? rows[menu.row] : undefined
   return (
     <div className="fl-pl-tracks" onWheel={onWheel} ref={columnRef}>
-      <div className="fl-pl-tracks-head">TRACKS</div>
+      <div className="fl-pl-tracks-head">
+        ROWS <small style={{ opacity: 0.6, marginLeft: 6, fontWeight: 500 }}>
+          {index.used > 0 ? `1-${index.used} of ${count}` : `${count}`}
+        </small>
+      </div>
       {tempoLaneShown && <HwTempoLaneHead />}
       <div className="fl-pl-tracks-list" style={{ transform: `translateY(${-scrollY}px)` }}>
         <div style={{ height: first * rowHeight, flexShrink: 0 }} aria-hidden="true" />
-        {rows.slice(first, last).map((r) => {
-          if (r.kind === 'lane') return <AutomationLane key={r.lane.id} trackId={r.track.id} lane={r.lane} />
-          if (r.kind === 'clip') return <AutomationClipLane key={r.clip.id} trackId={r.track.id} clip={r.clip} />
-          if (r.kind === 'empty') {
-            return (
-              <div
-                key={`pl-slot-${r.slot}`}
-                className="fl-tr fl-tr-empty"
-                style={{ ['--track-color' as any]: 'transparent' }}
-                aria-hidden="true"
-              >
-                <span className="strip" />
-                <span className="nm" />
-              </div>
-            )
-          }
-          const t = r.track
-          const isMidi = (t.kind || '').toLowerCase() === 'midi'
-          return (
-            <div
-              key={t.id}
-              className={`fl-tr${t.armed ? ' armed' : ''}${t.id === selectedTrackId ? ' selected' : ''}`}
-              style={{ ['--track-color' as any]: t.color || '#06b6d4' }}
-              title={t.name}
-              // The track list this header replaced selected a track on a
-              // click; this one did not, so paste had nowhere to go but the
-              // track of the last clip clicked.
-              onClick={() => selectTrack(t.id)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                selectTrack(t.id)
-                setTrackMenu({ trackId: t.id, x: e.clientX, y: e.clientY })
-              }}
-            >
-              <span className="strip" />
-              <span className="nm">
-                <b>{t.name}</b>
-                {isMidi && pluginInstrument(t) ? (
-                  <small>{pluginInstrument(t)}</small>
-                ) : isMidi ? (
-                  <HwInstrumentPicker
-                    trackId={t.id}
-                    current={(t.instrument as any) || 'builtin_sine'}
-                    onPick={setTrackInstrument}
-                    onOpenEditor={
-                      t.instrument === 'kick_synth'
-                        ? () => setKickEditorTrack(t.id)
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <small>{trackSubtitle(t)}</small>
-                )}
-              </span>
-              <span className="btns">
-                <button
-                  type="button"
-                  className={`fl-tr-btn m${t.muted ? ' on' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); void toggleMute(t.id) }}
-                  title={t.muted ? 'Unmute' : 'Mute'}
-                  aria-label={t.muted ? `Unmute ${t.name}` : `Mute ${t.name}`}
-                >M</button>
-                <button
-                  type="button"
-                  className={`fl-tr-btn s${t.soloed ? ' on' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); void toggleSolo(t.id) }}
-                  title={t.soloed ? 'Unsolo' : 'Solo'}
-                  aria-label={t.soloed ? `Unsolo ${t.name}` : `Solo ${t.name}`}
-                >S</button>
-                <button
-                  type="button"
-                  className={`fl-tr-btn r${t.armed ? ' on' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); toggleArm(t.id) }}
-                  title={t.armed ? 'Track armed — click to disarm' : 'Arm for recording'}
-                  aria-label={t.armed ? `Disarm ${t.name}` : `Arm ${t.name} for recording`}
-                >
-                  <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.2" fill="currentColor" /></svg>
-                </button>
-                <HwAddLaneButton
-                  trackId={t.id}
-                  onAdd={addAutomationLane}
-                  onAddClip={() => createAutomationClip(t.id, { kind: 'track_volume' }, 0, 15360)}
-                />
-              </span>
-            </div>
-          )
-        })}
-        <div style={{ height: (rows.length - last) * rowHeight, flexShrink: 0 }} aria-hidden="true" />
+        {shown}
+        <div style={{ height: (count - last) * rowHeight, flexShrink: 0 }} aria-hidden="true" />
       </div>
-      {kickEditorTrack && (() => {
-        const t = tracks.find(x => x.id === kickEditorTrack)
-        if (!t) return null
-        return (
-          <KickSynthEditor
-            trackId={t.id}
-            patchLayers={t.kickPatch?.layers ?? [null, null, null, null]}
-            drive={t.kickPatch?.drive ?? 0}
-            onClose={() => setKickEditorTrack(null)}
-          />
-        )
-      })()}
-      {trackMenu && (
-        <TrackContextMenu {...trackMenu} onClose={() => setTrackMenu(null)} />
-      )}
-    </div>
-  )
-}
-
-// ─── Add automation lane button ─────────────────────────────────────────────
-// Click → opens a small popover to pick the target. Self-contained so we
-// don't have to thread Volume/Pan picker state through HwPlaylistTracks.
-
-const LANE_TARGETS: { spec: AutomationTargetInfo; label: string }[] = [
-  { spec: { kind: 'track_volume' }, label: 'Volume' },
-  { spec: { kind: 'track_pan' },    label: 'Pan' },
-  { spec: { kind: 'track_mute' },   label: 'Mute' },
-]
-
-/**
- * Compact "+L" pill in the track header that opens the automation lane
- * target picker. Replaces the old full-width row button which sat between
- * tracks at 18 px tall — a height that broke alignment with the canvas
- * grid (canvas assumes every row is `trackHeight`). Moving the affordance
- * INTO the row header eliminates the off-grid row entirely.
- */
-function HwAddLaneButton({
-  trackId,
-  onAdd,
-  onAddClip,
-}: {
-  trackId: string
-  onAdd: (trackId: string, target: AutomationTargetInfo) => Promise<string>
-  /** Adds a 4-bar volume automation clip at the start. */
-  onAddClip?: () => void
-}) {
-  const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (!open) return
-    const close = () => setOpen(false)
-    window.addEventListener('mousedown', close)
-    return () => window.removeEventListener('mousedown', close)
-  }, [open])
-  return (
-    <span style={{ position: 'relative', display: 'inline-flex' }}>
-      <button
-        type="button"
-        className="fl-tr-btn add"
-        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
-        onMouseDown={(e) => e.stopPropagation()}
-        title="Add automation"
-        aria-label="Add automation to this track"
-      >
-        +
-      </button>
-      {open && (
+      {menu && (
         <div
-          className="fl-lane-target-pop"
-          onMouseDown={(e) => e.stopPropagation()}
-          style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 20 }}
+          data-row-menu
+          className="fl-row-menu"
+          style={{ position: 'fixed', left: menu.x, top: menu.y, zIndex: 1000 }}
         >
-          {onAddClip && (
-            <div className="item" onClick={() => { setOpen(false); onAddClip() }}>
-              Volume automation clip (4 bars)
-            </div>
-          )}
-          {LANE_TARGETS.map(t => (
-            <div
-              key={t.label}
-              className="item"
-              onClick={async () => {
-                setOpen(false)
-                await onAdd(trackId, t.spec)
-              }}
-            >
-              {t.label}
-            </div>
-          ))}
-        </div>
-      )}
-    </span>
-  )
-}
-
-// ─── Instrument picker on a MIDI track row ──────────────────────────────────
-// Tiny inline dropdown that lets the user swap a MIDI track between the
-// default sine monosynth and Hardwave's KickSynth. New voicings land here
-// as we ship them.
-
-const NATIVE_INSTRUMENTS: { id: import('../stores/trackStore').NativeInstrumentId; label: string; abbr: string }[] = [
-  { id: 'builtin_sine',     label: 'Sine (default)', abbr: 'SIN' },
-  { id: 'builtin_saw',      label: 'Saw',            abbr: 'SAW' },
-  { id: 'builtin_square',   label: 'Square',         abbr: 'SQR' },
-  { id: 'builtin_triangle', label: 'Triangle',       abbr: 'TRI' },
-  { id: 'kick_synth',       label: 'KickSynth',      abbr: 'KIK' },
-]
-
-function HwInstrumentPicker({
-  trackId,
-  current,
-  onPick,
-  onOpenEditor,
-}: {
-  trackId: string
-  current: import('../stores/trackStore').NativeInstrumentId
-  onPick: (trackId: string, kind: import('../stores/trackStore').NativeInstrumentId) => Promise<void>
-  /** When set, double-clicking the badge opens the instrument's
-   *  per-track editor panel. Only wired for kick_synth right now. */
-  onOpenEditor?: () => void
-}) {
-  const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (!open) return
-    const close = () => setOpen(false)
-    window.addEventListener('mousedown', close)
-    return () => window.removeEventListener('mousedown', close)
-  }, [open])
-  const currentLabel = NATIVE_INSTRUMENTS.find(n => n.id === current)?.abbr ?? 'SIN'
-  return (
-    <div style={{ position: 'relative' }}>
-      <button
-        type="button"
-        className={`fl-tr-instr${current === 'kick_synth' ? ' kicksynth' : ''}`}
-        onMouseDown={(e) => { e.stopPropagation(); setOpen(v => !v) }}
-        onDoubleClick={(e) => { e.stopPropagation(); setOpen(false); onOpenEditor?.() }}
-        title={
-          onOpenEditor
-            ? `${currentLabel} — click to switch · double-click to edit patch`
-            : `Native instrument — currently ${currentLabel}`
-        }
-      >
-        {currentLabel}
-      </button>
-      {open && (
-        <div className="fl-tr-instr-pop" onMouseDown={(e) => e.stopPropagation()}>
-          {NATIVE_INSTRUMENTS.map(n => (
-            <div
-              key={n.id}
-              className={`item${n.id === current ? ' active' : ''}`}
-              onClick={async () => {
-                setOpen(false)
-                await onPick(trackId, n.id)
-              }}
-            >
-              <span>{n.label}</span>
-              {n.id === current && <span className="check">✓</span>}
-            </div>
-          ))}
+          <div className="hd">{rowName(rows, menu.row)}</div>
+          <button type="button" onClick={() => startRename(menu.row)}>
+            <span>{t('Rename')}</span><kbd>F2</kbd>
+          </button>
+          <button type="button" onClick={(e) => pickColour(menu.row, e.currentTarget.getBoundingClientRect())}>
+            <span>{t('Colour')}</span>
+          </button>
+          <div className="sep" />
+          <button type="button" onClick={() => { setMenu(null); void actions().setMuted(menu.row, !menuRow?.muted) }}>
+            <span>{menuRow?.muted ? t('Unmute row') : t('Mute row')}</span>
+          </button>
+          <button type="button" onClick={() => { setMenu(null); void actions().setSoloed(menu.row, !menuRow?.soloed) }}>
+            <span>{menuRow?.soloed ? t('Unsolo row') : t('Solo row')}</span>
+          </button>
+          <div className="sep" />
+          <button type="button" onClick={() => { setMenu(null); void actions().insertRows(menu.row, 1) }}>
+            <span>{t('Insert row above')}</span>
+          </button>
+          <button type="button" onClick={() => { setMenu(null); void actions().deleteRows(menu.row, 1) }}>
+            <span>{t('Delete row')}</span>
+          </button>
         </div>
       )}
     </div>
