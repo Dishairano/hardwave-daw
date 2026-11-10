@@ -30,18 +30,18 @@ use crate::Project;
 #[derive(Debug)]
 pub struct Snapshot {
     /// The song with its tracks and arrangements taken out.
-    rest: Arc<Project>,
-    arrangements: Arc<Vec<Arrangement>>,
-    tracks: Vec<Arc<TrackPart>>,
+    pub(crate) rest: Arc<Project>,
+    pub(crate) arrangements: Arc<Vec<Arrangement>>,
+    pub(crate) tracks: Vec<Arc<TrackPart>>,
 }
 
 /// One track in a snapshot.
 #[derive(Debug)]
-struct TrackPart {
+pub(crate) struct TrackPart {
     /// The track with its clips and automation clips taken out.
-    settings: Arc<Track>,
-    clips: Vec<Arc<ClipPlacement>>,
-    automation_clips: Vec<Arc<AutomationClip>>,
+    pub(crate) settings: Arc<Track>,
+    pub(crate) clips: Vec<Arc<ClipPlacement>>,
+    pub(crate) automation_clips: Vec<Arc<AutomationClip>>,
 }
 
 impl Snapshot {
@@ -223,6 +223,25 @@ impl TrackPart {
     }
 }
 
+/// Whether two kept items are equal: the same item, or equal ones.
+pub(crate) fn same<T: PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b) || **a == **b
+}
+
+/// Whether two kept lists hold equal items, in order. Items shared by
+/// the two snapshots are told equal by their pointers alone.
+pub(crate) fn same_items<T: PartialEq>(a: &[Arc<T>], b: &[Arc<T>]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b))
+}
+
+/// Whether two kept tracks are equal.
+pub(crate) fn same_track(a: &Arc<TrackPart>, b: &Arc<TrackPart>) -> bool {
+    Arc::ptr_eq(a, b)
+        || (same(&a.settings, &b.settings)
+            && same_items(&a.clips, &b.clips)
+            && same_items(&a.automation_clips, &b.automation_clips))
+}
+
 /// Whether `kept` holds exactly the items of `live`, in order.
 fn same_list<T: PartialEq>(kept: &[Arc<T>], live: &[T]) -> bool {
     kept.len() == live.len() && kept.iter().zip(live).all(|(k, l)| **k == *l)
@@ -257,7 +276,7 @@ fn share_list<T: PartialEq + Clone>(
         .collect()
 }
 
-fn clip_id(clip: &ClipPlacement) -> &str {
+pub(crate) fn clip_id(clip: &ClipPlacement) -> &str {
     match &clip.content {
         ClipContent::Audio(audio) => &audio.id,
         ClipContent::Midi(midi) => &midi.id,

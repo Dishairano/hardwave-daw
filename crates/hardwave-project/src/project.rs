@@ -661,6 +661,25 @@ impl Project {
         rmp_serde::from_slice(blob).ok()
     }
 
+    /// The project format a song's bytes (as `to_bytes` writes them) are
+    /// in, read without opening the song. None when they are not a song.
+    ///
+    /// A room partner on an older build sends its song in its own format,
+    /// and opening it here would bring it up to this one: the song would
+    /// be taken, and every edit made to it sent back to a build that drops
+    /// the fields it does not know. The format is read first, so such a
+    /// song is never taken.
+    pub fn bytes_format(bytes: &[u8]) -> Option<u32> {
+        #[derive(Deserialize)]
+        struct Probe {
+            version: u32,
+        }
+        let data = decompress_capped(bytes).ok()?;
+        rmp_serde::from_slice::<Probe>(&data)
+            .ok()
+            .map(|p| p.version)
+    }
+
     /// Whether a track a room sent came from a build that keeps where
     /// things show in FL's three lists (format 3 on). A build from before
     /// them writes a track without its mixer number; taking its tracks
@@ -1160,6 +1179,20 @@ mod tests {
         })
         .unwrap();
         assert!(!Project::arrangements_section_knows_layout(&old));
+    }
+
+    /// A room partner's song says its format before it is opened: the
+    /// current one, an older build's, or not a song at all.
+    #[test]
+    fn a_songs_format_is_read_without_opening_it() {
+        let mut song = Project::default();
+        song.ensure_arrangements();
+        assert_eq!(
+            Project::bytes_format(&song.to_bytes().unwrap()),
+            Some(FORMAT_VERSION)
+        );
+        assert_eq!(Project::bytes_format(&song.older_format_bytes()), Some(2));
+        assert_eq!(Project::bytes_format(b"not a song"), None);
     }
 
     /// A room partner cannot stop the transport with a tempo of 0 or NaN.
