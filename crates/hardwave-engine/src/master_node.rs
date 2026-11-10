@@ -193,6 +193,10 @@ impl AudioNode for MasterNode {
         self.chain = chain;
     }
 
+    fn chain_len(&self) -> usize {
+        self.chain.slots.len()
+    }
+
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
         self.chain.set_slot_sidechain(slot_id, active);
     }
