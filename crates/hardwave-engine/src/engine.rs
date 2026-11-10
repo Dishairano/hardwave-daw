@@ -3170,6 +3170,11 @@ impl OfflineRender {
     /// usual law) is given back. Without this a bounced, frozen or
     /// consolidated part came back 3 dB quieter than the part it replaced,
     /// and lower again by wherever the master fader sat.
+    ///
+    /// It is also the track's part on the playlist. A render takes the
+    /// transport's mode, so freezing, bouncing or consolidating while the
+    /// transport was in pattern mode rendered the channel rack's pattern,
+    /// looped, in place of the part.
     pub fn for_a_track(mut self) -> Self {
         self.callback
             .transport
@@ -3177,7 +3182,19 @@ impl OfflineRender {
             .store(0.0, std::sync::atomic::Ordering::Relaxed);
         let (centre, _) = crate::pan::gains(0.0, self.callback.audio_prefs.pan_law());
         self.output_gain = if centre > 1e-6 { 1.0 / centre } else { 1.0 };
+        self.play_mode(false);
         self
+    }
+
+    /// Render in pattern mode or out of it, whatever the transport is in.
+    /// The graph was built in the transport's mode, so it is built again
+    /// before the first block (the plug-ins carry over).
+    fn play_mode(&mut self, pattern: bool) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let transport = &self.callback.transport;
+        if transport.pattern_mode.swap(pattern, Relaxed) != pattern {
+            self.callback.needs_rebuild = true;
+        }
     }
 
     /// Render `total_samples` frames of the song from where the render was
@@ -9171,6 +9188,61 @@ mod track_render_tests {
         let t = project.track_mut(track).unwrap();
         t.clips.push(placed);
         t.frozen = true;
+    }
+
+    /// An instrument track with one note on the playlist, and a channel
+    /// rack whose pattern plays nothing on it.
+    fn note_and_empty_pattern() -> (DawEngine, String) {
+        let engine = DawEngine::new();
+        let id = {
+            let mut p = engine.project.lock();
+            let id = p.add_midi_track("Lead".into());
+            let mut midi = hardwave_midi::MidiClip::new("m".into(), "m".into(), LEN_TICKS);
+            midi.notes.push(hardwave_midi::MidiNote {
+                start_tick: 0,
+                duration_ticks: LEN_TICKS,
+                pitch: 69,
+                velocity: 0.8,
+                ..Default::default()
+            });
+            p.track_mut(&id).unwrap().clips.push(ClipPlacement {
+                content: ClipContent::Midi(hardwave_project::clip::MidiClipRef {
+                    id: "m".into(),
+                    clip: midi,
+                }),
+                track_id: id.clone(),
+                position_ticks: 0,
+                length_ticks: LEN_TICKS,
+                lane: 0,
+                color: None,
+            });
+            p.channel_rack_state = Some(r#"{"patterns":[{"id":"p"}],"activeId":"p"}"#.into());
+            p.refresh_step_rack();
+            id
+        };
+        (engine, id)
+    }
+
+    /// Freezing, bouncing or consolidating with the transport in pattern
+    /// mode renders the track's part on the playlist. It rendered the
+    /// pattern, here nothing at all.
+    #[test]
+    fn a_render_for_a_track_is_the_playlist_in_pattern_mode() {
+        let (engine, id) = note_and_empty_pattern();
+        let len = engine
+            .project
+            .lock()
+            .tempo_map
+            .tick_to_samples(LEN_TICKS, SR as f64);
+        let song = render_for_a_track(&engine, &id, len, |_| {});
+        assert!(peak(&song) > 0.05, "the note plays: {}", peak(&song));
+        engine
+            .transport
+            .pattern_mode
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let in_pattern_mode = render_for_a_track(&engine, &id, len, |_| {});
+        let diff = worst_difference(&song, &in_pattern_mode);
+        assert!(diff < 1e-6, "the part, not the pattern: off by {diff}");
     }
 
     /// The loudest difference between two renders, away from the first and
