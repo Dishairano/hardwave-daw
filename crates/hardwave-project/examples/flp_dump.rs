@@ -138,9 +138,10 @@ fn main() {
         let built = hardwave_project::fl_build::build_project(&fl, "dump", &|_| None);
         let r = &built.report;
         println!(
-            "   import: {} instrument + {} audio tracks, {} audio + {} pattern clips, {} notes, {} samples to find, {} automation clips",
-            r.instrument_tracks,
-            r.audio_tracks,
+            "   import: {} channels, {} inserts, {} rows, {} audio + {} pattern clips, {} notes, {} samples to find, {} automation clips",
+            r.channels,
+            r.mixer_inserts,
+            r.rows,
             r.audio_clips,
             r.pattern_clips,
             r.notes,
@@ -155,7 +156,7 @@ fn main() {
             .take(14)
             .map(|t| format!("{} ({})", t.name, t.clips.len()))
             .collect();
-        println!("   rows: {}", rows.join(", "));
+        println!("   channels: {}", rows.join(", "));
         println!("   plug-ins left: {}", r.plugins_left_behind.join(", "));
         println!("   playlist tracks off: {:?}", fl.playlist_tracks_off);
         println!(

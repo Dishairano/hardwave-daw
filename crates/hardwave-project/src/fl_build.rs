@@ -1,12 +1,16 @@
-//! A Hardwave project made from a parsed FL Studio project.
+//! A Hardwave project made from a parsed FL Studio project, in FL's shape.
 //!
-//! The import used to add to whatever song was open, put every track it
-//! made after the five hundred empty insert rows (where the playlist
-//! never showed them), and keep only the patterns, while a hardstyle
-//! project is mostly samples on the playlist. Now it makes a song of its
-//! own: the instruments on the first rows, then the playlist's audio
-//! tracks in FL's order, every sample clip where FL had it, at the level,
-//! pan, pitch, direction and length its channel gave it in FL.
+//! FL shows a song as three lists, and the song comes across as the same
+//! three: every channel of FL's channel rack is a channel track in FL's
+//! order and filter groups (played or not); every clip sits on the
+//! playlist row FL had it on, on the channel it belongs to; and the mixer
+//! is the master and the inserts the song uses, numbered and named as in
+//! FL. A channel plays into its FL insert, an insert into the master or
+//! another insert, as in FL. A channel's volume and pan are the channel's,
+//! an automation clip sits on its own automation channel and moves the
+//! knob it moved in FL. The import used to put a row's samples on a track
+//! per insert they played through, after five hundred empty rows, and
+//! folded each channel's level into every clip.
 //!
 //! Some of that waits for the samples to be loaded, which happens outside
 //! this crate: where an audio clip starts in its file (FL counts in
@@ -19,8 +23,9 @@ use crate::fl_import::{
     read_wrapper, FlChannel, FlChannelKind, FlClipContent, FlMixerTrack, FlPluginFormat, FlProject,
     FlRoute, FlWrappedPlugin, WRAPPER,
 };
+use crate::layout::PlaylistRow;
 use crate::project::Project;
-use crate::track::TrackKind;
+use crate::track::{Track, TrackKind};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The song, and what is still to be done to it once the samples load.
@@ -231,17 +236,27 @@ impl AudioFixup {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct FlBuildReport {
     pub bpm: f32,
-    pub instrument_tracks: usize,
-    pub audio_tracks: usize,
+    /// Channel tracks: one per channel of FL's channel rack.
+    pub channels: usize,
+    /// Playlist rows: FL's, down to the last one the song uses.
+    pub rows: usize,
     pub audio_clips: usize,
+    /// MIDI clips made from pattern placements: one per channel the
+    /// pattern plays.
     pub pattern_clips: usize,
+    /// FL's pattern clips on the playlist. Each comes as a MIDI clip per
+    /// channel on its row, not yet as one clip.
+    pub pattern_placements: usize,
     pub notes: usize,
     /// Samples the project points at that were not found here.
     pub missing_samples: Vec<String>,
     /// Instrument channels whose plug-in could not come across.
     pub plugins_left_behind: Vec<String>,
-    /// Automation clips that came across.
+    /// Automation clips that came across moving what they moved in FL.
     pub automation_clips: usize,
+    /// Automation clips placed on their channel's rows that move nothing
+    /// here: what they move has no counterpart.
+    pub automation_clips_moving_nothing: usize,
     /// Automation clips whose knob has nothing here to move, by FL's name
     /// for them ("Build Snare - Channel pitch").
     pub automation_left_behind: Vec<String>,
@@ -277,9 +292,9 @@ pub fn fl_volume_db(raw: u32) -> f64 {
     (48.2 * (raw as f64 / 12_800.0).log10()).max(-100.0)
 }
 
-/// An audio clip's gain from its channel's volume. FL plays an audio clip
-/// at the file's own level when its channel sits at the 78 % default, so
-/// the knob counts from there.
+/// An audio clip channel's volume as its track's fader. FL plays an audio
+/// clip at the file's own level when its channel sits at the 78 % default,
+/// so the knob counts from there.
 pub fn fl_audio_clip_gain_db(raw: u32) -> f64 {
     if raw == 0 {
         return -100.0;
@@ -316,6 +331,31 @@ fn channel_semitones(channel: &FlChannel) -> f64 {
     (s.pitch_cents + s.stretch.pitch_cents) as f64 / 100.0 + (60.0 - s.root_note as f64)
 }
 
+/// The playlist row of FL's playlist track `track` (FL counts from 1, the
+/// rows from 0).
+fn row_of(track: u32) -> u32 {
+    track
+        .saturating_sub(1)
+        .min(crate::sanitize::MAX_ROWS as u32 - 1)
+}
+
+/// An FL colour (`#rrggbb`) as an automation clip's ARGB.
+fn argb(color: &str) -> Option<u32> {
+    let hex = color.strip_prefix('#').filter(|h| h.len() == 6)?;
+    u32::from_str_radix(hex, 16)
+        .ok()
+        .map(|rgb| 0xff00_0000 | rgb)
+}
+
+/// What each FL channel became: the track that is the channel, and for a
+/// channel playing notes that also has samples on the playlist, the audio
+/// track its samples are on.
+#[derive(Default)]
+struct ChannelTracks {
+    track: BTreeMap<u32, String>,
+    audio: BTreeMap<u32, String>,
+}
+
 /// Make the song. `resolve` turns a sample path as FL wrote it into a
 /// file on this machine, or None when it cannot be found.
 pub fn build_project(
@@ -324,6 +364,11 @@ pub fn build_project(
     resolve: &dyn Fn(&str) -> Option<String>,
 ) -> FlBuild {
     let mut project = Project::default();
+    // FL's shape: the master, a track per channel and one per insert in
+    // use, none of the empty rows a new song starts with.
+    project
+        .tracks
+        .retain(|t| matches!(t.kind, TrackKind::Master));
     project.metadata.name = name.to_string();
     if let Some(entry) = project.tempo_map.entries.get_mut(0) {
         entry.bpm = fl.bpm as f64;
@@ -353,24 +398,43 @@ pub fn build_project(
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("Channel {index}"))
     };
-    // A soloed playlist track is soloed here too, which silences the rest
-    // as FL does and gives it all back with one click. FL soloes by
-    // switching every other track off, so the switches then mean nothing.
-    // These are the open arrangement's; a clip in another one is checked
-    // against its own with `switched_off`.
-    let soloed = |fl_track: u32| fl.playlist_tracks_solo.contains(&fl_track);
-    let track_off = |fl_track: u32| {
-        fl.playlist_tracks_solo.is_empty() && fl.playlist_tracks_off.contains(&fl_track)
+
+    // The rack's filter groups, FL's own. A channel the file puts in no
+    // group, or in one it does not name, is listed under "Unsorted".
+    let mut groups = fl.rack_groups.clone();
+    groups.truncate(crate::sanitize::MAX_RACK_GROUPS - 1);
+    let named = groups.len();
+    let unsorted = || -> u16 {
+        fl.rack_groups
+            .iter()
+            .take(named)
+            .position(|g| g == crate::layout::DEFAULT_RACK_GROUP)
+            .unwrap_or(named) as u16
     };
-    let mut row = 0usize;
+    let group_of = |channel: Option<&FlChannel>| -> u16 {
+        channel
+            .and_then(|c| c.settings.group)
+            .filter(|g| (*g as usize) < named)
+            .map_or_else(unsorted, |g| g as u16)
+    };
+    if fl
+        .channels
+        .iter()
+        .any(|c| group_of(Some(c)) as usize >= named)
+        || fl.channels.is_empty()
+    {
+        groups.push(crate::layout::DEFAULT_RACK_GROUP.to_string());
+    }
+    project.rack_groups = groups;
+
     // The arrangement each clip made is in, by the clip's id; those not in
     // the one open in FL are moved into arrangements of their own at the end.
     let mut arrangement_of: BTreeMap<String, usize> = BTreeMap::new();
-    // Each track made, with the FL insert it plays into.
+    // Each track that makes sound, with the FL insert it plays into.
     let mut sources: Vec<(String, u32)> = Vec::new();
 
-    // An instrument track per channel that plays notes, on the first rows.
-    let playing: BTreeSet<u32> = fl
+    // The channels that play notes, and those with samples on the playlist.
+    let with_notes: BTreeSet<u32> = fl
         .pattern_notes
         .iter()
         .filter(|(_, channel, notes)| {
@@ -382,39 +446,64 @@ pub fn build_project(
         })
         .map(|(_, channel, _)| *channel)
         .collect();
-    // A layer that plays brings its children, each with a track of its own,
-    // even when they have no notes themselves; layers of layers too.
-    let mut playing = playing;
-    let mut layers = playing.iter().copied().collect::<Vec<_>>();
-    while let Some(index) = layers.pop() {
-        for child in fl
-            .channels
-            .get(index as usize)
-            .map_or(&[][..], |c| &c.layer_children)
-        {
-            if (*child as usize) < fl.channels.len() && playing.insert(*child) {
-                layers.push(*child);
+    let with_samples: BTreeSet<u32> = fl
+        .playlist_clips
+        .iter()
+        .filter_map(|c| match &c.content {
+            FlClipContent::AudioSample { channel_index, .. } => Some(*channel_index),
+            _ => None,
+        })
+        .collect();
+
+    // A track per channel, in the rack's order, played or not.
+    let mut made = ChannelTracks::default();
+    for (index, channel) in fl.channels.iter().enumerate() {
+        let index = index as u32;
+        let name = channel_name(index);
+        let id = uuid::Uuid::new_v4().to_string();
+        let settings = &channel.settings;
+        let kind = match channel.kind {
+            FlChannelKind::Automation => TrackKind::Automation,
+            FlChannelKind::AudioClip => TrackKind::Audio,
+            FlChannelKind::Sampler | FlChannelKind::Instrument | FlChannelKind::Layer => {
+                TrackKind::Midi
             }
+            FlChannelKind::Other if with_notes.contains(&index) => TrackKind::Midi,
+            FlChannelKind::Other => TrackKind::Audio,
+        };
+        let mut track = match kind {
+            TrackKind::Automation => Track::new_automation(id.clone(), name.clone()),
+            TrackKind::Midi => Track::new_midi(id.clone(), name.clone()),
+            _ => Track::new_audio(id.clone(), name.clone()),
+        };
+        track.rack_group = Some(group_of(Some(channel)));
+        if let Some(color) = &channel.color {
+            track.color = color.clone();
         }
-    }
-    let mut instrument_track: BTreeMap<u32, String> = BTreeMap::new();
-    for channel_index in playing {
-        row += 1;
-        let name = channel_name(channel_index);
-        let id = project.claim_row(row, &name, true);
-        report.instrument_tracks += 1;
-        if let Some(channel) = fl.channels.get(channel_index as usize) {
-            sources.push((id.clone(), channel_insert(channel)));
-            let settings = &channel.settings;
-            if let Some(track) = project.track_mut(&id) {
-                if let Some(color) = &channel.color {
-                    track.color = color.clone();
-                }
+        match kind {
+            TrackKind::Automation => {}
+            TrackKind::Midi => {
                 track.volume_db = fl_volume_db(settings.volume);
                 track.pan = fl_pan(settings.pan);
                 track.muted = !settings.enabled;
+                sources.push((id.clone(), channel_insert(channel)));
             }
+            _ => {
+                // An audio clip channel's level, pan, stereo swap and
+                // polarity, which FL applies to each of its clips.
+                track.volume_db = fl_audio_clip_gain_db(settings.volume);
+                track.pan = fl_pan(settings.pan);
+                track.swap_lr = settings.swap_stereo;
+                track.phase_invert = settings.polarity_inverted;
+                track.muted = !settings.enabled;
+                sources.push((id.clone(), channel_insert(channel)));
+                made.audio.insert(index, id.clone());
+            }
+        }
+        if matches!(kind, TrackKind::Midi) {
             match (channel.kind, &channel.sample_path) {
+                // A sampler plays its sample in the built-in sampler, also
+                // when no pattern plays it, so it is there to play.
                 (FlChannelKind::Sampler, Some(path)) => {
                     if let Some(file) = find(path) {
                         // The pitch knob moves the root the other way, so
@@ -431,7 +520,9 @@ pub fn build_project(
                             setup: settings.sampler,
                         });
                     }
-                    if settings.fade_in > 0 || settings.fade_out > 0 {
+                    if with_notes.contains(&index)
+                        && (settings.fade_in > 0 || settings.fade_out > 0)
+                    {
                         report.sample_fades_left_behind.push(name.clone());
                     }
                 }
@@ -444,19 +535,15 @@ pub fn build_project(
                     let (slot, external) =
                         external_slot(plugin, &id, name.clone(), true, 1.0, true, &mut report);
                     external_plugins.push(external);
-                    if let Some(track) = project.track_mut(&id) {
-                        track.inserts.insert(0, slot);
-                        // Without its settings it would play its default
-                        // sound where FL played the song's.
-                        track.muted |= !carried;
-                    }
+                    track.inserts.insert(0, slot);
+                    // Without its settings it would play its default sound
+                    // where FL played the song's.
+                    track.muted |= !carried;
                 }
                 // A layer has no sound of its own: its notes play on its
                 // children (routed to them below).
                 (FlChannelKind::Layer, _) if !channel.layer_children.is_empty() => {
-                    if let Some(track) = project.track_mut(&id) {
-                        track.muted = true;
-                    }
+                    track.muted = true;
                 }
                 (FlChannelKind::Instrument | FlChannelKind::Layer, _) => {
                     report.plugins_left_behind.push(match &channel.plugin_name {
@@ -468,22 +555,72 @@ pub fn build_project(
                     // leads and screeches as bare sines, summed at full
                     // level, came out as a harsh distorted noise. The notes
                     // stay; the track is muted until a plug-in is put on it.
-                    if let Some(track) = project.track_mut(&id) {
-                        track.muted = true;
-                    }
+                    track.muted = true;
                 }
                 _ => {}
             }
         }
-        instrument_track.insert(channel_index, id);
+        project.tracks.push(track);
+        made.track.insert(index, id.clone());
+
+        // A channel playing notes that also has samples on the playlist
+        // (FL does not make one, but a file can say so): its samples go on
+        // an audio track of their own beside it, where they can play.
+        if matches!(kind, TrackKind::Midi) && with_samples.contains(&index) {
+            let audio_id = uuid::Uuid::new_v4().to_string();
+            let mut audio = Track::new_audio(audio_id.clone(), format!("{name} (audio)"));
+            audio.rack_group = Some(group_of(Some(channel)));
+            audio.color = project
+                .tracks
+                .last()
+                .map_or(audio.color, |t| t.color.clone());
+            audio.volume_db = fl_audio_clip_gain_db(settings.volume);
+            audio.pan = fl_pan(settings.pan);
+            audio.muted = !settings.enabled;
+            sources.push((audio_id.clone(), channel_insert(channel)));
+            made.audio.insert(index, audio_id);
+            project.tracks.push(audio);
+        }
     }
-    for (index, layer_id) in &instrument_track {
+    // Samples of a channel the rack does not have still come, on a channel
+    // of their own, so the song keeps its shape.
+    for index in &with_samples {
+        if made.audio.contains_key(index) {
+            continue;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut track = Track::new_audio(id.clone(), channel_name(*index));
+        track.rack_group = Some(unsorted());
+        if project.rack_groups.len() <= unsorted() as usize {
+            project
+                .rack_groups
+                .push(crate::layout::DEFAULT_RACK_GROUP.to_string());
+        }
+        sources.push((id.clone(), 0));
+        made.audio.insert(*index, id.clone());
+        made.track.insert(*index, id);
+        project.tracks.push(track);
+    }
+    report.channels = project
+        .tracks
+        .iter()
+        .filter(|t| t.rack_group.is_some())
+        .count();
+
+    // A layer plays its notes on its children.
+    for (index, layer_id) in &made.track {
         let children: Vec<String> = fl
             .channels
             .get(*index as usize)
             .map_or(&[][..], |c| &c.layer_children)
             .iter()
-            .filter_map(|child| instrument_track.get(child).cloned())
+            .filter(|child| {
+                matches!(
+                    fl.channels.get(**child as usize).map(|c| c.kind),
+                    Some(FlChannelKind::Sampler | FlChannelKind::Instrument | FlChannelKind::Layer)
+                )
+            })
+            .filter_map(|child| made.track.get(child).cloned())
             .filter(|child| child != layer_id)
             .collect();
         if let (false, Some(track)) = (children.is_empty(), project.track_mut(layer_id)) {
@@ -492,7 +629,7 @@ pub fn build_project(
     }
 
     // Each placement of a pattern brings its notes, per channel, to that
-    // channel's track.
+    // channel's track, on the pattern clip's row.
     let pattern_name = |pattern: u32| -> String {
         fl.pattern_names
             .iter()
@@ -509,22 +646,14 @@ pub fn build_project(
         else {
             continue;
         };
-        // A muted placement, or one on a track switched off, stays silent
-        // here too, its notes kept.
-        let silent = clip.muted || switched_off(fl, clip.arrangement, clip.track_index);
-        let open = clip.arrangement == fl.current_arrangement;
+        report.pattern_placements += 1;
         for (pattern, channel, notes) in &fl.pattern_notes {
-            if pattern != pattern_index || notes.is_empty() {
+            if pattern != pattern_index || notes.is_empty() || !with_notes.contains(channel) {
                 continue;
             }
-            let Some(track_id) = instrument_track.get(channel) else {
+            let Some(track_id) = made.track.get(channel) else {
                 continue;
             };
-            if open && soloed(clip.track_index) {
-                if let Some(track) = project.track_mut(track_id) {
-                    track.soloed = true;
-                }
-            }
             let mut midi = hardwave_midi::MidiClip::new(
                 uuid::Uuid::new_v4().to_string(),
                 pattern_name(*pattern),
@@ -545,7 +674,8 @@ pub fn build_project(
             };
             // Notes past the end of the placement are cut off in FL too. A
             // note held over where a clip trimmed at its start begins plays
-            // its tail from there, as FL plays truncated notes.
+            // its tail from there, as FL plays truncated notes. A muted
+            // placement keeps its notes, silent.
             midi.notes = notes
                 .iter()
                 .filter(|n| n.tick + n.length_ticks > offset && n.tick < offset + clip.length_ticks)
@@ -555,7 +685,7 @@ pub fn build_project(
                     pitch: n.pitch,
                     velocity: n.velocity as f32 / 127.0,
                     channel: 0,
-                    muted: silent,
+                    muted: clip.muted,
                     ..Default::default()
                 })
                 .collect();
@@ -575,273 +705,128 @@ pub fn build_project(
                         .iter()
                         .find(|(p, _)| p == pattern_index)
                         .map(|(_, c)| c.clone()),
-                    row: None,
+                    row: Some(row_of(clip.track_index)),
                 });
                 report.pattern_clips += 1;
             }
         }
     }
 
-    // The playlist's tracks that hold samples, in FL's order, after the
-    // instruments.
-    // Grouped by the insert they play into as well: a row whose samples go
-    // to different inserts becomes a track per insert, so each sample plays
-    // through the one FL played it through. The whole row used to go to the
-    // insert most of its samples used.
-    let mut audio_lanes: BTreeMap<(u32, u32), Vec<&crate::fl_import::FlPlaylistClip>> =
-        BTreeMap::new();
-    for clip in &fl.playlist_clips {
-        if let FlClipContent::AudioSample { channel_index, .. } = &clip.content {
-            let insert = fl
-                .channels
-                .get(*channel_index as usize)
-                .map(channel_insert)
-                .unwrap_or(0);
-            audio_lanes
-                .entry((clip.track_index, insert))
-                .or_default()
-                .push(clip);
-        }
-    }
-    let mut inserts_on_row: BTreeMap<u32, usize> = BTreeMap::new();
-    for (fl_track, _) in audio_lanes.keys() {
-        *inserts_on_row.entry(*fl_track).or_default() += 1;
-    }
-    let insert_label = |insert: u32| -> String {
-        fl.mixer
-            .iter()
-            .find(|m| m.index == insert)
-            .map(|m| m.name.clone())
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| {
-                if insert == 0 {
-                    "Master".into()
-                } else {
-                    format!("Insert {insert}")
-                }
-            })
-    };
+    // Every sample on the playlist, on its channel, on its FL row, in FL's
+    // order. The channel's level, pan, swap and polarity are on its track;
+    // the clip keeps its own volume and fades.
     let mut faded = BTreeSet::new();
-    let mut lanes_of_channel: BTreeMap<u32, Vec<(String, f64)>> = BTreeMap::new();
-    for ((fl_track, insert), clips) in audio_lanes {
-        let channels: BTreeSet<u32> = clips
-            .iter()
-            .filter_map(|c| match &c.content {
-                FlClipContent::AudioSample { channel_index, .. } => Some(*channel_index),
-                _ => None,
-            })
-            .collect();
-        let lane_name = fl
-            .playlist_track_names
-            .iter()
-            .find(|(n, _)| *n == fl_track)
-            .map(|(_, name)| name.clone())
-            .or_else(|| {
-                (channels.len() == 1).then(|| channel_name(*channels.iter().next().unwrap_or(&0)))
-            })
-            .unwrap_or_else(|| format!("Track {fl_track}"));
-        let lane_name = if inserts_on_row.get(&fl_track).copied().unwrap_or(1) > 1 {
-            format!("{lane_name} ({})", insert_label(insert))
-        } else {
-            lane_name
+    for clip in &fl.playlist_clips {
+        let FlClipContent::AudioSample {
+            channel_index,
+            sample_path,
+            start_offset_ms,
+            fade_in_ms,
+            fade_out_ms,
+            volume,
+            ..
+        } = &clip.content
+        else {
+            continue;
         };
-        row += 1;
-        let track_id = project.claim_row(row, &lane_name, false);
-        // The row's colour in FL, or its one channel's.
-        let lane_color = fl
-            .playlist_track_colors
-            .iter()
-            .find(|(n, _)| *n == fl_track)
-            .map(|(_, c)| c.clone())
-            .or_else(|| match &channels.iter().collect::<Vec<_>>()[..] {
-                [only] => fl
-                    .channels
-                    .get(**only as usize)
-                    .and_then(|c| c.color.clone()),
-                _ => None,
-            });
-        if let (Some(color), Some(track)) = (lane_color, project.track_mut(&track_id)) {
-            track.color = color;
+        let Some(track_id) = made.audio.get(channel_index).cloned() else {
+            continue;
+        };
+        let channel = fl.channels.get(*channel_index as usize);
+        let settings = channel.map(|c| c.settings.clone()).unwrap_or_default();
+        if (settings.fade_in > 0 || settings.fade_out > 0) && faded.insert(*channel_index) {
+            report
+                .sample_fades_left_behind
+                .push(channel_name(*channel_index));
         }
-        report.audio_tracks += 1;
-        // A lane of one channel is where that channel's volume and pan
-        // automation goes.
-        if let [only] = channels.iter().collect::<Vec<_>>()[..] {
-            let gain = fl
-                .channels
-                .get(*only as usize)
-                .map(|c| fl_audio_clip_gain_db(c.settings.volume))
-                .unwrap_or(0.0);
-            lanes_of_channel
-                .entry(*only)
-                .or_default()
-                .push((track_id.clone(), gain));
-        }
-
-        // Pan, stereo swap and polarity belong to the channel in FL. When
-        // the lane's channels agree they go on the track, where a lane of
-        // one channel also gets that channel's pan automation. When they
-        // do not, each clip carries its own channel's, as FL plays it.
-        let settings: Vec<_> = channels
-            .iter()
-            .filter_map(|c| fl.channels.get(*c as usize))
-            .map(|c| {
-                (
-                    c.settings.pan,
-                    c.settings.swap_stereo,
-                    c.settings.polarity_inverted,
-                )
-            })
-            .collect();
-        let mut per_clip = false;
-        if let Some(first) = settings.first().copied() {
-            if settings.iter().all(|s| *s == first) {
-                if let Some(track) = project.track_mut(&track_id) {
-                    track.pan = fl_pan(first.0);
-                    track.swap_lr = first.1;
-                    track.phase_invert = first.2;
+        // A sample that is not here still gets its clip, pointing at
+        // where FL had it, so the song keeps its shape and the file can be
+        // found later.
+        let file = find(sample_path).unwrap_or_else(|| sample_path.clone());
+        let clip_id = uuid::Uuid::new_v4().to_string();
+        arrangement_of.insert(clip_id.clone(), clip.arrangement);
+        // The clip's own fades, in milliseconds, and its own volume.
+        let length = clip.length_ticks.max(1);
+        let ticks = |ms: f32| ((ms as f64 / 1000.0 / seconds_per_tick).round() as u64).min(length);
+        let fade_in_ticks = ticks(*fade_in_ms);
+        let fade_out_ticks = ticks(*fade_out_ms).min(length - fade_in_ticks);
+        let own_gain_db = if *volume > 0.0 {
+            (20.0 * (*volume as f64).log10()).max(-100.0)
+        } else {
+            -100.0
+        };
+        let audio = AudioClip {
+            id: clip_id.clone(),
+            name: channel_name(*channel_index),
+            source_path: file.clone(),
+            source_hash: String::new(),
+            source_start: 0,
+            source_end: 0,
+            gain_db: own_gain_db,
+            fade_in_ticks,
+            fade_out_ticks,
+            muted: clip.muted,
+            reversed: settings.reversed,
+            pitch_semitones: 0.0,
+            stretch_ratio: 1.0,
+            fade_in_curve: FadeCurve::default(),
+            fade_out_curve: FadeCurve::default(),
+            warp_markers: Vec::new(),
+            source_file: file,
+            // The sample's own effects, as FL keeps them on its channel:
+            // they reach every clip of it.
+            treatment: {
+                let fx = &settings.sampler;
+                SampleTreatment {
+                    normalize: fx.normalize,
+                    remove_dc: fx.remove_dc,
+                    fade_stereo: fx.fade_stereo,
+                    trim: fx.trim.clamp(0.0, 1.0) as f64,
+                    declick: crate::clip::DeclickMode::from_fl(fx.declick).unwrap_or_default(),
+                    start: fx.start.unwrap_or(0.0).clamp(0.0, 1.0) as f64,
+                    length: fx.length.unwrap_or(1.0).clamp(0.0, 1.0) as f64,
+                    ..Default::default()
                 }
-            } else {
-                per_clip = true;
-            }
-        }
-        sources.push((track_id.clone(), insert));
-        // With one arrangement the row's switch is the track's. With
-        // several it is each arrangement's own, so it goes on each clip:
-        // on the track, the open arrangement's switch silenced the row in
-        // every other arrangement too once it was switched to.
-        let several = fl.arrangements.len() >= 2;
+            },
+            tuned_notes: Vec::new(),
+        };
+        let stretch = settings.stretch;
+        audio_fixups.push(AudioFixup {
+            track_id: track_id.clone(),
+            clip_id,
+            start_ms: *start_offset_ms,
+            length_seconds: clip.length_ticks as f64 * seconds_per_tick,
+            fit_seconds: (stretch.time_ticks > 0.0)
+                .then_some(stretch.time_ticks * seconds_per_tick),
+            multiplier: stretch.multiplier,
+            pitch_semitones: channel.map(channel_semitones).unwrap_or(0.0),
+            resample: stretch.is_resample(),
+            reversed: settings.reversed,
+        });
         if let Some(track) = project.track_mut(&track_id) {
-            if !several {
-                track.muted |= track_off(fl_track);
-            }
-            track.soloed = soloed(fl_track);
-        }
-
-        for clip in clips {
-            let FlClipContent::AudioSample {
-                channel_index,
-                sample_path,
-                start_offset_ms,
-                fade_in_ms,
-                fade_out_ms,
-                volume,
-                ..
-            } = &clip.content
-            else {
-                continue;
-            };
-            let channel = fl.channels.get(*channel_index as usize);
-            let settings = channel.map(|c| c.settings.clone()).unwrap_or_default();
-            if (settings.fade_in > 0 || settings.fade_out > 0) && faded.insert(*channel_index) {
-                report
-                    .sample_fades_left_behind
-                    .push(channel_name(*channel_index));
-            }
-            // A sample that is not here still gets its clip, pointing at
-            // where FL had it, so the song keeps its shape and the file
-            // can be found later.
-            let file = find(sample_path).unwrap_or_else(|| sample_path.clone());
-            let clip_id = uuid::Uuid::new_v4().to_string();
-            arrangement_of.insert(clip_id.clone(), clip.arrangement);
-            // The clip's own fades, in milliseconds, and its own volume on
-            // top of its channel's.
-            let length = clip.length_ticks.max(1);
-            let ticks =
-                |ms: f32| ((ms as f64 / 1000.0 / seconds_per_tick).round() as u64).min(length);
-            let fade_in_ticks = ticks(*fade_in_ms);
-            let fade_out_ticks = ticks(*fade_out_ms).min(length - fade_in_ticks);
-            let own_gain_db = if *volume > 0.0 {
-                20.0 * (*volume as f64).log10()
-            } else {
-                -100.0
-            };
-            let audio = AudioClip {
-                id: clip_id.clone(),
-                name: channel_name(*channel_index),
-                source_path: file.clone(),
-                source_hash: String::new(),
-                source_start: 0,
-                source_end: 0,
-                gain_db: (fl_audio_clip_gain_db(settings.volume) + own_gain_db).max(-100.0),
-                fade_in_ticks,
-                fade_out_ticks,
-                // The row's switch: on the track with one arrangement,
-                // on the clip by its own arrangement with several.
-                muted: clip.muted
-                    || !settings.enabled
-                    || ((several || clip.arrangement != fl.current_arrangement)
-                        && switched_off(fl, clip.arrangement, clip.track_index)),
-                reversed: settings.reversed,
-                pitch_semitones: 0.0,
-                stretch_ratio: 1.0,
-                fade_in_curve: FadeCurve::default(),
-                fade_out_curve: FadeCurve::default(),
-                warp_markers: Vec::new(),
-                source_file: file,
-                treatment: {
-                    // The sample's own effects, as FL keeps them on its
-                    // channel: they reach every clip of it.
-                    let fx = &settings.sampler;
-                    let mut t = SampleTreatment {
-                        normalize: fx.normalize,
-                        remove_dc: fx.remove_dc,
-                        fade_stereo: fx.fade_stereo,
-                        trim: fx.trim.clamp(0.0, 1.0) as f64,
-                        declick: crate::clip::DeclickMode::from_fl(fx.declick).unwrap_or_default(),
-                        start: fx.start.unwrap_or(0.0).clamp(0.0, 1.0) as f64,
-                        length: fx.length.unwrap_or(1.0).clamp(0.0, 1.0) as f64,
-                        ..Default::default()
-                    };
-                    if per_clip {
-                        t.pan = fl_pan(settings.pan);
-                        t.swap_stereo = settings.swap_stereo;
-                        t.polarity_inverted = settings.polarity_inverted;
-                    }
-                    t
-                },
-                tuned_notes: Vec::new(),
-            };
-            let stretch = settings.stretch;
-            audio_fixups.push(AudioFixup {
+            track.clips.push(ClipPlacement {
+                content: ClipContent::Audio(audio),
                 track_id: track_id.clone(),
-                clip_id,
-                start_ms: *start_offset_ms,
-                length_seconds: clip.length_ticks as f64 * seconds_per_tick,
-                fit_seconds: (stretch.time_ticks > 0.0)
-                    .then_some(stretch.time_ticks * seconds_per_tick),
-                multiplier: stretch.multiplier,
-                pitch_semitones: channel.map(channel_semitones).unwrap_or(0.0),
-                resample: stretch.is_resample(),
-                reversed: settings.reversed,
+                position_ticks: clip.start_tick,
+                length_ticks: length,
+                lane: 0,
+                // FL draws an audio clip in its channel's colour.
+                color: channel.and_then(|c| c.color.clone()),
+                row: Some(row_of(clip.track_index)),
             });
-            if let Some(track) = project.track_mut(&track_id) {
-                track.clips.push(ClipPlacement {
-                    content: ClipContent::Audio(audio),
-                    track_id: track_id.clone(),
-                    position_ticks: clip.start_tick,
-                    length_ticks: clip.length_ticks.max(1),
-                    lane: 0,
-                    // FL draws an audio clip in its channel's colour.
-                    color: channel.and_then(|c| c.color.clone()),
-                    row: None,
-                });
-                report.audio_clips += 1;
-            }
+            report.audio_clips += 1;
         }
     }
 
     let mut mixer = build_mixer(
         fl,
         &mut project,
-        &mut row,
         &sources,
         &mut external_plugins,
         &mut report,
     );
     let places = AutomationPlaces {
-        instruments: &instrument_track,
-        lanes: &lanes_of_channel,
+        channels: &made,
         external: &external_plugins,
     };
     build_automation(
@@ -852,6 +837,8 @@ pub fn build_project(
         &mut report,
         &mut arrangement_of,
     );
+    project.rows = rows_of(fl, fl.current_arrangement);
+    report.rows = project.rows.len();
     split_arrangements(&mut project, fl, &arrangement_of);
 
     report.missing_samples = missing.into_iter().collect();
@@ -865,20 +852,65 @@ pub fn build_project(
     }
 }
 
-/// Whether FL's playlist track `track` is switched off in `arrangement`.
-/// While one is soloed the switches say nothing: the solo comes across as
-/// a solo, which gives everything back with one click.
-fn switched_off(fl: &FlProject, arrangement: usize, track: u32) -> bool {
-    let (off, solo) = match fl.arrangements.get(arrangement) {
-        Some(a) => (&a.tracks_off, &a.tracks_solo),
-        None => (&fl.playlist_tracks_off, &fl.playlist_tracks_solo),
+/// How many playlist rows the song needs: FL's, down to the last one a
+/// clip sits on or FL named or switched, in any arrangement.
+fn row_count(fl: &FlProject) -> usize {
+    let tracks = fl
+        .playlist_clips
+        .iter()
+        .map(|c| c.track_index)
+        .chain(fl.playlist_track_names.iter().map(|(t, _)| *t))
+        .chain(fl.playlist_tracks_off.iter().copied())
+        .chain(fl.playlist_tracks_solo.iter().copied())
+        .chain(fl.arrangements.iter().flat_map(|a| {
+            a.track_names
+                .iter()
+                .map(|(t, _)| *t)
+                .chain(a.tracks_off.iter().copied())
+                .chain(a.tracks_solo.iter().copied())
+        }));
+    tracks.map(|t| row_of(t) as usize + 1).max().unwrap_or(0)
+}
+
+/// FL's playlist tracks in `arrangement` as our rows: their names, colours
+/// and switches. FL soloes a track by switching every other one off, so
+/// while one is soloed the switches say nothing else: the solo comes
+/// across as a solo, which gives everything back with one click.
+fn rows_of(fl: &FlProject, arrangement: usize) -> Vec<PlaylistRow> {
+    // A file from before FL's arrangements keeps them for its one playlist.
+    let (names, colors, off, solo) = match fl.arrangements.get(arrangement) {
+        Some(a) => (
+            &a.track_names,
+            &a.track_colors,
+            &a.tracks_off,
+            &a.tracks_solo,
+        ),
+        None => (
+            &fl.playlist_track_names,
+            &fl.playlist_track_colors,
+            &fl.playlist_tracks_off,
+            &fl.playlist_tracks_solo,
+        ),
     };
-    solo.is_empty() && off.contains(&track)
+    let find = |list: &[(u32, String)], track: u32| {
+        list.iter()
+            .find(|(t, _)| *t == track)
+            .map(|(_, v)| v.clone())
+    };
+    (1..=row_count(fl) as u32)
+        .map(|track| PlaylistRow {
+            name: find(names, track).unwrap_or_default(),
+            color: find(colors, track),
+            muted: solo.is_empty() && off.contains(&track),
+            soloed: solo.contains(&track),
+        })
+        .collect()
 }
 
 /// FL's arrangements as ours: the open one stays on the tracks, each other
-/// one is stored with its clips, by name and in FL's order. Every FL
-/// arrangement's clips used to land on the one playlist at once.
+/// one is stored with its clips and its own rows, by name and in FL's
+/// order. Every FL arrangement's clips used to land on the one playlist at
+/// once.
 fn split_arrangements(
     project: &mut Project,
     fl: &FlProject,
@@ -930,7 +962,7 @@ fn split_arrangements(
             id: uuid::Uuid::new_v4().to_string(),
             name: fl_arrangement.name.clone(),
             timelines,
-            rows: Vec::new(),
+            rows: rows_of(fl, index),
         });
         if index == open {
             project.active_arrangement = arrangements[index].id.clone();
@@ -943,11 +975,7 @@ fn split_arrangements(
 
 /// Where the channels went, for their automation to find them.
 struct AutomationPlaces<'a> {
-    /// A channel's instrument track.
-    instruments: &'a BTreeMap<u32, String>,
-    /// The audio tracks holding only a channel's samples, with the gain its
-    /// volume knob gave their clips.
-    lanes: &'a BTreeMap<u32, Vec<(String, f64)>>,
+    channels: &'a ChannelTracks,
     external: &'a [ExternalPlugin],
 }
 
@@ -960,9 +988,9 @@ enum Scale {
     /// A fader to our -60..+6 dB: FL's knob runs 0 to `top` on its own
     /// curve; `offset_db` is added after.
     Fader { top: f64, offset_db: f64 },
-    /// A sample channel's volume as its audio track's fader, around the gain
-    /// its clips already have.
-    ClipGain { baseline_db: f64 },
+    /// An audio clip channel's volume as its track's fader, counted from
+    /// FL's 78 % default as the track's level is.
+    AudioChannel,
     /// A Parametric EQ 2 band's gain (+-18 dB) as the built-in EQ's (+-24).
     EqGain,
     /// A Parametric EQ 2 band's frequency (20 Hz to 20 kHz evenly in
@@ -977,19 +1005,18 @@ impl Scale {
         match self {
             Scale::Same => v,
             Scale::Fader { top, offset_db } => fader(fl_volume_db((v * top) as u32) + offset_db),
-            Scale::ClipGain { baseline_db } => {
-                fader(fl_audio_clip_gain_db((v * 12_800.0) as u32) - baseline_db)
-            }
+            Scale::AudioChannel => fader(fl_audio_clip_gain_db((v * 12_800.0) as u32)),
             Scale::EqGain => (((v * 2.0 - 1.0) * 18.0 + 24.0) / 48.0).clamp(0.0, 1.0),
             Scale::EqFreq => ((20.0 * 1000f64.powf(v) - 20.0) / 19_980.0).clamp(0.0, 1.0),
         }
     }
 }
 
-/// FL's automation clips, as automation clips on the tracks whose knobs they
-/// move. A clip moving something that has no counterpart here is named in
-/// the report. The points come across where they are; FL's curves between
-/// them run straight here.
+/// FL's automation clips, on their own automation channels, each moving
+/// the knob it moved in FL on the track that has it. A clip moving
+/// something that has no counterpart here still sits where FL had it,
+/// moving nothing, and is named in the report. The points come across
+/// where they are; FL's curves between them run straight here.
 fn build_automation(
     fl: &FlProject,
     project: &mut Project,
@@ -1001,13 +1028,13 @@ fn build_automation(
     use crate::automation::{AutomationTarget, CurveMode};
     use crate::fl_import::FlAutomationTarget as T;
 
-    // Each automation channel's knob, as (track, target, scale) here: one
-    // per track it reaches (a sample channel can be on several lanes).
+    let kind_of = |project: &Project, id: &str| project.track(id).map(|t| t.kind.clone());
+    // Each automation channel's knob, as (track, target, scale) here.
     let mut resolved: BTreeMap<u32, Vec<(String, AutomationTarget, Scale)>> = BTreeMap::new();
     for link in &fl.automation_links {
         let mut found = Vec::new();
         let instrument_plugin = |channel: u32| {
-            let track = places.instruments.get(&channel)?;
+            let track = places.channels.track.get(&channel)?;
             places
                 .external
                 .iter()
@@ -1035,27 +1062,26 @@ fn build_automation(
             }
             T::ChannelVolume(channel) | T::ChannelPan(channel) => {
                 let volume = matches!(link.target, T::ChannelVolume(_));
-                if let Some(track) = places.instruments.get(&channel) {
+                // The channel's own track, and the audio track beside it
+                // where it has one.
+                let tracks = places
+                    .channels
+                    .track
+                    .get(&channel)
+                    .into_iter()
+                    .chain(places.channels.audio.get(&channel))
+                    .collect::<BTreeSet<_>>();
+                for track in tracks {
+                    let scale = match kind_of(project, track) {
+                        Some(TrackKind::Midi) => Scale::Fader {
+                            top: 12_800.0,
+                            offset_db: 0.0,
+                        },
+                        Some(TrackKind::Audio) => Scale::AudioChannel,
+                        _ => continue,
+                    };
                     found.push(if volume {
-                        (
-                            track.clone(),
-                            AutomationTarget::TrackVolume,
-                            Scale::Fader {
-                                top: 12_800.0,
-                                offset_db: 0.0,
-                            },
-                        )
-                    } else {
-                        (track.clone(), AutomationTarget::TrackPan, Scale::Same)
-                    });
-                }
-                for (track, gain) in places.lanes.get(&channel).into_iter().flatten() {
-                    found.push(if volume {
-                        (
-                            track.clone(),
-                            AutomationTarget::TrackVolume,
-                            Scale::ClipGain { baseline_db: *gain },
-                        )
+                        (track.clone(), AutomationTarget::TrackVolume, scale)
                     } else {
                         (track.clone(), AutomationTarget::TrackPan, Scale::Same)
                     });
@@ -1136,38 +1162,90 @@ fn build_automation(
         else {
             continue;
         };
-        // Muted, or on a track switched off: it moves nothing in FL either.
-        if clip.muted || switched_off(fl, clip.arrangement, clip.track_index) {
+        // Muted on the playlist: it moves nothing in FL either, and an
+        // automation clip here has no mute of its own.
+        if clip.muted {
             continue;
         }
-        let targets = resolved.get(channel_index).filter(|t| !t.is_empty());
-        let points = fl
-            .channels
-            .get(*channel_index as usize)
-            .map(|c| c.automation.as_slice())
+        let targets = resolved
+            .get(channel_index)
+            .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let (Some(targets), false) = (targets, points.is_empty()) else {
-            if left_behind.insert(name.clone()) {
-                report.automation_left_behind.push(name.clone());
-            }
-            continue;
-        };
+        let channel = fl.channels.get(*channel_index as usize);
+        let points = channel.map(|c| c.automation.as_slice()).unwrap_or(&[]);
+        // Its own automation channel, where FL lists it.
+        let home = places
+            .channels
+            .track
+            .get(channel_index)
+            .filter(|id| kind_of(project, id) == Some(TrackKind::Automation))
+            .cloned();
+        let moves = !targets.is_empty() && !points.is_empty();
+        if !moves && left_behind.insert(name.clone()) {
+            report.automation_left_behind.push(name.clone());
+        }
         let length = clip.length_ticks.max(1);
         let window = automation_window(points, *offset_ticks, length);
-        report.automation_curves_straightened |= points.iter().any(|p| p.tension.abs() > 0.01);
-        for (track_id, target, scale) in targets {
+        let color = channel.and_then(|c| c.color.as_deref()).and_then(argb);
+        let mut place = |project: &mut Project,
+                         on: &str,
+                         target: AutomationTarget,
+                         moves_track: Option<String>,
+                         scale: Scale| {
             let mut automation = crate::automation_clip::AutomationClip::new(
                 uuid::Uuid::new_v4().to_string(),
-                target.clone(),
+                target,
                 clip.start_tick,
                 length,
             );
             for (tick, value) in &window {
                 automation.insert_point(*tick, scale.apply(*value), CurveMode::Linear);
             }
+            automation.row = Some(row_of(clip.track_index));
+            automation.target_track = moves_track;
+            if let Some(color) = color {
+                automation.color_argb = color;
+            }
             arrangement_of.insert(automation.id.clone(), clip.arrangement);
-            if let Some(track) = project.track_mut(track_id) {
-                track.automation_clips.push(automation);
+            match project.track_mut(on) {
+                Some(track) => {
+                    track.automation_clips.push(automation);
+                    true
+                }
+                None => false,
+            }
+        };
+        if !moves {
+            // It sits where FL had it with FL's points, on its channel,
+            // moving nothing: an automation channel plays nothing itself.
+            if let Some(home) = &home {
+                if place(
+                    project,
+                    home,
+                    AutomationTarget::TrackVolume,
+                    None,
+                    Scale::Same,
+                ) {
+                    report.automation_clips_moving_nothing += 1;
+                }
+            }
+            continue;
+        }
+        report.automation_curves_straightened |= points.iter().any(|p| p.tension.abs() > 0.01);
+        for (track_id, target, scale) in targets {
+            // On its channel, moving the track's knob; a channel that is not
+            // an automation channel puts it on the track it moves.
+            let placed = match &home {
+                Some(home) => place(
+                    project,
+                    home,
+                    target.clone(),
+                    Some(track_id.clone()),
+                    *scale,
+                ),
+                None => place(project, track_id, target.clone(), None, *scale),
+            };
+            if placed {
                 report.automation_clips += 1;
             }
         }
@@ -1209,20 +1287,27 @@ fn automation_window(
     out
 }
 
-/// FL's mixer. Every track made so far plays into the insert its channel
-/// was routed to; the inserts that sound reaches become tracks of their own
-/// after the playlist's rows, with FL's fader, pan and switches, and send on
-/// where FL sent them. Insert 0 is the master.
+/// FL's mixer, numbered as in FL. An insert comes as a track when it holds
+/// something of the song: a name, a colour, an effect, a fader away from
+/// FL's 0 dB, or sound routed into it (from a channel, or from another
+/// insert that comes). FL's "current" insert never does. Each track made
+/// so far plays into the insert its channel was routed to; the inserts
+/// keep FL's fader, pan and switches, and send on where FL sent them.
+/// Insert 0 is the master.
 fn build_mixer(
     fl: &FlProject,
     project: &mut Project,
-    row: &mut usize,
     sources: &[(String, u32)],
     external: &mut Vec<ExternalPlugin>,
     report: &mut FlBuildReport,
 ) -> MixerMap {
     let mut map = MixerMap::default();
-    let inserts: BTreeMap<u32, &FlMixerTrack> = fl.mixer.iter().map(|m| (m.index, m)).collect();
+    let inserts: BTreeMap<u32, &FlMixerTrack> = fl
+        .mixer
+        .iter()
+        .filter(|m| !m.current && m.index <= crate::sanitize::MAX_MIXER_NUMBER as u32)
+        .map(|m| (m.index, m))
+        .collect();
     // The routes that carry sound: FL makes a route at zero for a sidechain.
     let live = |m: &FlMixerTrack| -> Vec<FlRoute> {
         m.routes
@@ -1233,13 +1318,25 @@ fn build_mixer(
             .copied()
             .collect()
     };
-    let mut reached = BTreeSet::new();
-    let mut queue: Vec<u32> = sources.iter().map(|(_, insert)| *insert).collect();
+    let holds_something = |m: &FlMixerTrack| {
+        !m.name.is_empty() || m.color.is_some() || !m.slots.is_empty() || m.volume != 12_800
+    };
+    let mut used = BTreeSet::new();
+    let mut queue: Vec<u32> = sources
+        .iter()
+        .map(|(_, insert)| *insert)
+        .chain(
+            inserts
+                .values()
+                .filter(|m| holds_something(m))
+                .map(|m| m.index),
+        )
+        .collect();
     while let Some(insert) = queue.pop() {
         let Some(m) = inserts.get(&insert) else {
             continue;
         };
-        if insert != 0 && reached.insert(insert) {
+        if insert != 0 && used.insert(insert) {
             queue.extend(live(m).iter().map(|r| r.to));
         }
     }
@@ -1252,12 +1349,15 @@ fn build_mixer(
         }
     };
     let mut insert_track: BTreeMap<u32, String> = BTreeMap::new();
-    for insert in &reached {
-        *row += 1;
-        let id = project.claim_row(*row, &name_of(inserts[insert]), false);
-        if let (Some(color), Some(track)) = (&inserts[insert].color, project.track_mut(&id)) {
+    for insert in &used {
+        let m = inserts[insert];
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut track = Track::new_bus(id.clone(), name_of(m));
+        track.mixer_number = Some(*insert as u16);
+        if let Some(color) = &m.color {
             track.color = color.clone();
         }
+        project.tracks.push(track);
         insert_track.insert(*insert, id);
     }
     report.mixer_inserts = insert_track.len();
@@ -1272,6 +1372,7 @@ fn build_mixer(
     // Inserts something plays its whole output into are groups; the ones
     // only sent to are returns.
     let mut fed: BTreeSet<u32> = sources.iter().map(|(_, insert)| *insert).collect();
+    let mut sent_to = BTreeSet::new();
     let levels = |track: &mut crate::track::Track, m: &FlMixerTrack| {
         track.volume_db = fl_volume_db(m.volume.max(0) as u32);
         track.pan = fl_insert_pan(m.pan);
@@ -1347,6 +1448,7 @@ fn build_mixer(
             .iter()
             .filter(|r| r.to != 0 && Some(**r) != main)
             .filter_map(|r| {
+                sent_to.insert(r.to);
                 Some(crate::mixer::Send {
                     target: track_of(r.to)?,
                     gain_db: (fl_volume_db(r.level as u32) - offset_db).min(24.0),
@@ -1357,12 +1459,13 @@ fn build_mixer(
             .collect();
         track.inserts = effects(m, &name, track_id, &mut map, external, report);
     }
+    // An insert nothing reaches stays a group, as every insert is in FL.
     for (insert, track_id) in &insert_track {
         if let Some(track) = project.track_mut(track_id) {
-            track.kind = if fed.contains(insert) {
-                TrackKind::Bus
-            } else {
+            track.kind = if !fed.contains(insert) && sent_to.contains(insert) {
                 TrackKind::Return
+            } else {
+                TrackKind::Bus
             };
         }
     }
@@ -1684,29 +1787,105 @@ mod tests {
             .then(|| path.replace("C:\\packs", "/home/me/packs"))
     }
 
+    /// The channel track named `name`.
+    fn channel_track<'a>(p: &'a Project, name: &str) -> &'a crate::track::Track {
+        p.tracks
+            .iter()
+            .find(|t| t.name == name && t.rack_group.is_some())
+            .unwrap_or_else(|| panic!("no channel {name}"))
+    }
+
+    /// The track that is insert `number` in the mixer.
+    fn insert_track(p: &Project, number: u16) -> &crate::track::Track {
+        p.tracks
+            .iter()
+            .find(|t| t.mixer_number == Some(number))
+            .unwrap_or_else(|| panic!("no insert {number}"))
+    }
+
+    /// FL's three lists: every channel of the rack a track, in the rack's
+    /// order, played or not; no empty rows; no insert nothing uses.
     #[test]
-    fn instruments_take_the_first_rows_and_samples_the_rows_after() {
+    fn every_channel_is_a_track_in_the_rack_s_order() {
         let built = build_project(&song(), "Industrial", &here);
         let p = &built.project;
-        let row = |n: usize| p.track(&format!("insert-{n:03}")).expect("row");
-        assert_eq!(row(1).name, "Screech");
-        assert_eq!(row(2).name, "808 Kick");
+        let names: Vec<&str> = p.tracks.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(
-            row(3).name,
-            "Kick render",
-            "one channel on the lane names it"
+            names,
+            [
+                "Master",
+                "Screech",
+                "Kick render",
+                "808 Kick",
+                "Cutoff",
+                "Lost vocal"
+            ],
+            "the master and one track per channel; none of a new song's 500"
         );
-        assert_eq!(row(4).name, "Vocals", "a named FL track keeps its name");
-        assert_eq!(row(5).name, "Insert 5", "the rest stay empty inserts");
+        let kinds: Vec<TrackKind> = p.tracks[1..].iter().map(|t| t.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            [
+                TrackKind::Midi,
+                TrackKind::Audio,
+                TrackKind::Midi,
+                TrackKind::Automation,
+                TrackKind::Audio
+            ]
+        );
+        assert!(p.tracks[1..]
+            .iter()
+            .all(|t| t.rack_group == Some(0) && t.mixer_number.is_none()));
+        assert_eq!(p.rack_groups, ["Unsorted"], "FL named no groups");
+        assert_eq!(built.report.channels, 5);
+        assert_eq!(
+            built.report.mixer_inserts, 0,
+            "everything plays into the master"
+        );
+        assert!(p.tracks[1..].iter().all(|t| t.output_bus.is_none()));
         assert_eq!(p.metadata.name, "Industrial");
         assert_eq!(p.tempo_map.entries[0].bpm, 160.0);
+    }
+
+    /// FL's rows down to the last one used, with their names, and every
+    /// clip on its FL row whatever channel it is on.
+    #[test]
+    fn clips_sit_on_fl_s_rows() {
+        let built = build_project(&song(), "Industrial", &here);
+        let p = &built.project;
+        assert_eq!(p.rows.len(), 9, "FL's track 9 is the last one used");
+        assert_eq!(built.report.rows, 9);
+        assert_eq!(p.rows[8].name, "Vocals", "a named FL track keeps its name");
+        assert_eq!(p.rows[0].name, "", "the others read Track N");
+        let rows = |name: &str| -> Vec<Option<u32>> {
+            let t = channel_track(p, name);
+            t.clips
+                .iter()
+                .map(|c| c.row)
+                .chain(t.automation_clips.iter().map(|c| c.row))
+                .collect()
+        };
+        assert_eq!(rows("Screech"), [Some(0)]);
+        assert_eq!(rows("Kick render"), [Some(4), Some(4)]);
+        assert_eq!(rows("Lost vocal"), [Some(8)]);
+        assert_eq!(rows("Cutoff"), [Some(1)]);
+        // Opened as a song, it keeps all of it.
+        let opened = Project::from_bytes(&p.to_bytes().unwrap()).unwrap();
+        assert_eq!(opened.rows, p.rows);
+        let fields = |p: &Project| -> Vec<_> {
+            p.tracks
+                .iter()
+                .map(|t| (t.id.clone(), t.mixer_number, t.rack_group))
+                .collect()
+        };
+        assert_eq!(fields(&opened), fields(p));
     }
 
     #[test]
     fn patterns_land_on_their_channels_and_samples_where_fl_had_them() {
         let built = build_project(&song(), "Industrial", &here);
         let p = &built.project;
-        let screech = p.track("insert-001").unwrap();
+        let screech = channel_track(p, "Screech");
         assert_eq!(screech.clips.len(), 1);
         match &screech.clips[0].content {
             ClipContent::Midi(m) => {
@@ -1715,7 +1894,7 @@ mod tests {
             }
             _ => panic!("expected notes"),
         }
-        let kicks = p.track("insert-003").unwrap();
+        let kicks = channel_track(p, "Kick render");
         assert_eq!(kicks.clips.len(), 2);
         assert_eq!(kicks.clips[1].position_ticks, 1920);
         match &kicks.clips[0].content {
@@ -1734,11 +1913,11 @@ mod tests {
     fn what_waits_for_the_samples_and_what_did_not_come_is_said() {
         let built = build_project(&song(), "Industrial", &here);
         assert!(
-            built.project.track("insert-001").unwrap().muted,
+            channel_track(&built.project, "Screech").muted,
             "the track whose plug-in did not come is muted"
         );
         assert!(
-            !built.project.track("insert-002").unwrap().muted,
+            !channel_track(&built.project, "808 Kick").muted,
             "the sampler track plays"
         );
         assert_eq!(built.audio_fixups.len(), 3, "one for every audio clip");
@@ -1746,7 +1925,7 @@ mod tests {
         assert_eq!(
             built.sampler_samples,
             vec![SamplerSample {
-                track_id: "insert-002".to_string(),
+                track_id: channel_track(&built.project, "808 Kick").id.clone(),
                 file: "/home/me/packs\\808.wav".to_string(),
                 root_note: 60,
                 reversed: false,
@@ -1763,15 +1942,65 @@ mod tests {
             built.report.plugins_left_behind,
             vec!["Screech".to_string()]
         );
-        // The automation clip moves nothing FL told us about.
+        // The automation clip moves nothing FL told us about: it sits on
+        // its channel, on its row, moving nothing.
         assert_eq!(built.report.automation_clips, 0);
+        assert_eq!(built.report.automation_clips_moving_nothing, 1);
         assert_eq!(
             built.report.automation_left_behind,
             vec!["Cutoff".to_string()]
         );
+        let cutoff = channel_track(&built.project, "Cutoff");
+        assert_eq!(cutoff.automation_clips.len(), 1);
+        assert_eq!(cutoff.automation_clips[0].target_track, None);
         // The missing sample still has its clip, pointing where FL had it.
-        let vocals = built.project.track("insert-004").unwrap();
+        let vocals = channel_track(&built.project, "Lost vocal");
         assert_eq!(vocals.clips.len(), 1);
+    }
+
+    /// Channels no pattern plays come too, ready to play: a sampler with
+    /// its sample in the built-in sampler, an instrument whose plug-in
+    /// cannot come muted. Each is in its FL group.
+    #[test]
+    fn channels_that_never_play_come_ready_and_in_fl_s_groups() {
+        let mut fl = song();
+        fl.pattern_notes.clear();
+        fl.playlist_clips
+            .retain(|c| !matches!(c.content, FlClipContent::Pattern { .. }));
+        fl.rack_groups = vec!["Audio".into(), "Automation".into(), "Unsorted".into()];
+        fl.channels.push(channel(
+            "FLEX Bass",
+            FlChannelKind::Instrument,
+            None,
+            Some("FLEX"),
+        ));
+        for (c, g) in fl.channels.iter_mut().zip([2, 0, 2, 1, 0, 9]) {
+            c.settings.group = Some(g);
+        }
+        let built = build_project(&fl, "Kit", &here);
+        let p = &built.project;
+        assert_eq!(p.rack_groups, ["Audio", "Automation", "Unsorted"]);
+        let group = |name: &str| channel_track(p, name).rack_group;
+        assert_eq!(group("808 Kick"), Some(2));
+        assert_eq!(group("Kick render"), Some(0));
+        assert_eq!(group("Cutoff"), Some(1));
+        assert_eq!(
+            group("FLEX Bass"),
+            Some(2),
+            "a group FL does not name is Unsorted"
+        );
+        let kick = channel_track(p, "808 Kick");
+        assert!(kick.clips.is_empty() && !kick.muted);
+        assert_eq!(built.sampler_samples.len(), 1);
+        assert_eq!(built.sampler_samples[0].track_id, kick.id);
+        let flex = channel_track(p, "FLEX Bass");
+        assert!(flex.muted && flex.inserts.is_empty());
+        assert!(matches!(flex.kind, TrackKind::Midi));
+        assert_eq!(
+            built.report.plugins_left_behind,
+            ["Screech".to_string(), "FLEX Bass (FLEX)".into()]
+        );
+        assert_eq!(built.report.pattern_placements, 0);
     }
 
     #[test]
@@ -1808,33 +2037,39 @@ mod tests {
         fl
     }
 
+    /// A channel's level, pan and switch are on its track, as FL keeps them
+    /// on the channel; they used to be folded into every clip.
     #[test]
-    fn a_channel_s_settings_reach_its_clips_and_tracks() {
+    fn a_channel_s_settings_are_on_its_track() {
         let built = build_project(&lane_song(), "Industrial", &here);
         let p = &built.project;
-        let kicks = p.track("insert-003").unwrap();
-        assert_eq!(kicks.pan, 0.5, "the lane's one channel pans the track");
+        let kicks = channel_track(p, "Kick render");
+        assert_eq!(kicks.pan, 0.5, "the channel's pan");
+        assert!((kicks.volume_db - fl_audio_clip_gain_db(7_456)).abs() < 1e-9);
         let audio = |i: usize| match &kicks.clips[i].content {
             ClipContent::Audio(a) => a.clone(),
             _ => panic!("expected audio"),
         };
-        assert!((audio(0).gain_db - fl_audio_clip_gain_db(7_456)).abs() < 1e-9);
+        assert_eq!(audio(0).gain_db, 0.0, "the clip keeps only its own level");
+        assert_eq!(audio(0).treatment.pan, 0.0, "and pans with its channel");
         assert!(audio(0).reversed);
         assert!(!audio(0).muted);
         assert!(audio(1).muted, "muted on the playlist");
-        let vocals = p.track("insert-004").unwrap();
-        assert!(vocals.muted, "its FL track is off");
+        let vocals = channel_track(p, "Lost vocal");
+        assert!(vocals.muted, "its channel is off");
         match &vocals.clips[0].content {
-            ClipContent::Audio(a) => assert!(a.muted, "its channel is off"),
+            ClipContent::Audio(a) => assert!(!a.muted, "the clip itself is not"),
             _ => panic!("expected audio"),
         }
-        let sampler = p.track("insert-002").unwrap();
+        assert!(p.rows[8].muted, "its FL track is switched off: the row is");
+        assert!(!p.rows[4].muted);
+        let sampler = channel_track(p, "808 Kick");
         assert_eq!(sampler.volume_db, 0.0);
         assert_eq!(
             built.sampler_samples[0].root_note, 62,
             "two semitones down is the root two up"
         );
-        let screech = p.track("insert-001").unwrap();
+        let screech = channel_track(p, "Screech");
         assert_eq!(format!("{:.1}", screech.volume_db), "-5.2");
     }
 
@@ -1851,7 +2086,7 @@ mod tests {
             fx.length = Some(1.0);
         }
         let built = build_project(&fl, "Industrial", &here);
-        let kicks = built.project.track("insert-003").unwrap();
+        let kicks = channel_track(&built.project, "Kick render");
         let ClipContent::Audio(a) = &kicks.clips[0].content else {
             panic!("expected audio");
         };
@@ -1862,7 +2097,7 @@ mod tests {
         assert_eq!((t.start, t.length), (0.0, 1.0));
         // Left alone, a clip keeps FL's defaults: nothing precomputed.
         let plain = build_project(&lane_song(), "Industrial", &here);
-        let ClipContent::Audio(b) = &plain.project.track("insert-003").unwrap().clips[0].content
+        let ClipContent::Audio(b) = &channel_track(&plain.project, "Kick render").clips[0].content
         else {
             panic!("expected audio");
         };
@@ -1870,72 +2105,66 @@ mod tests {
         assert_eq!(b.treatment.declick, crate::clip::DeclickMode::OutOnly);
     }
 
+    /// Two channels' samples on one row: each stays on its channel, with
+    /// the channel's own pan and polarity, on the row FL had it on.
     #[test]
-    fn lanes_whose_channels_disagree_pan_each_clip() {
+    fn samples_of_two_channels_on_one_row_keep_their_own_channel() {
         let mut fl = lane_song();
         fl.channels[4].settings.pan = 0;
         fl.channels[4].settings.polarity_inverted = true;
-        fl.channels[4].settings.mixer_insert = fl.channels[1].settings.mixer_insert;
         fl.playlist_clips[3].track_index = 5;
-        let built = build_project(&fl, "Industrial", &here);
-        // The track stays centred; each clip pans as its own channel.
-        let lane = built.project.track("insert-003").unwrap();
-        assert_eq!(lane.pan, 0.0);
-        assert!(!lane.phase_invert);
-        let treatments: Vec<_> = lane
-            .clips
-            .iter()
-            .filter_map(|c| match &c.content {
-                ClipContent::Audio(a) => Some((a.name.clone(), a.treatment)),
-                _ => None,
-            })
-            .collect();
-        assert!(treatments
-            .iter()
-            .any(|(_, t)| t.pan == 0.5 && !t.polarity_inverted));
-        assert!(treatments
-            .iter()
-            .any(|(_, t)| t.pan == -1.0 && t.polarity_inverted));
-    }
-
-    /// A row whose samples play into different inserts becomes a track per
-    /// insert, each routed as FL routed its samples; the whole row used to
-    /// play into the insert most of them used.
-    #[test]
-    fn a_row_whose_samples_go_to_different_inserts_becomes_a_track_each() {
-        let mut fl = mixer_song();
-        fl.playlist_clips[3].track_index = 5;
-        let row: Vec<_> = fl
-            .playlist_clips
-            .iter()
-            .filter(|c| c.track_index == 5)
-            .collect();
-        assert!(row.len() >= 2, "the row holds samples of two channels");
         let built = build_project(&fl, "Industrial", &here);
         let p = &built.project;
-        // FL never named row 5, so each track is named by its one channel,
-        // and by the insert it plays into.
-        let names: Vec<&str> = p.tracks.iter().map(|t| t.name.as_str()).collect();
-        let lane = |name: &str| {
-            p.tracks
-                .iter()
-                .find(|t| t.name == name)
-                .unwrap_or_else(|| panic!("{name} in {names:?}"))
-        };
-        let insert = |name: &str| lane(name).id.clone();
+        let kicks = channel_track(p, "Kick render");
+        let vocal = channel_track(p, "Lost vocal");
+        assert_eq!((kicks.pan, kicks.phase_invert), (0.5, false));
+        assert_eq!((vocal.pan, vocal.phase_invert), (-1.0, true));
+        assert!(kicks.clips.iter().all(|c| c.row == Some(4)));
+        assert_eq!(vocal.clips[0].row, Some(4));
+    }
+
+    /// Samples on one row playing into different inserts each play through
+    /// their own channel's insert. The row used to be split into a track
+    /// per insert.
+    #[test]
+    fn samples_on_one_row_play_through_their_own_channel_s_insert() {
+        let mut fl = mixer_song();
+        fl.playlist_clips[3].track_index = 5;
+        let built = build_project(&fl, "Industrial", &here);
+        let p = &built.project;
         assert_eq!(
-            lane("Kick render (Insert 2)").output_bus,
-            Some(insert("Insert 2"))
+            channel_track(p, "Kick render").output_bus.as_ref(),
+            Some(&insert_track(p, 2).id)
         );
-        assert_eq!(lane("Lost vocal (Ghost)").output_bus, Some(insert("Ghost")));
+        assert_eq!(
+            channel_track(p, "Lost vocal").output_bus.as_ref(),
+            Some(&insert_track(p, 7).id)
+        );
+        assert_eq!(insert_track(p, 7).name, "Ghost");
+        assert!(!p.tracks.iter().any(|t| t.name.contains("(Insert 2)")));
     }
 
     #[test]
-    fn placements_on_a_switched_off_track_keep_their_notes_silent() {
+    fn a_switched_off_track_is_a_switched_off_row() {
         let mut fl = song();
         fl.playlist_tracks_off = vec![1];
         let built = build_project(&fl, "Industrial", &here);
-        match &built.project.track("insert-001").unwrap().clips[0].content {
+        let p = &built.project;
+        assert!(p.rows[0].muted, "FL's track switch is the row's");
+        assert!(p.rows[1..].iter().all(|r| !r.muted));
+        let screech = channel_track(p, "Screech");
+        match &screech.clips[0].content {
+            ClipContent::Midi(m) => assert!(
+                m.clip.notes.iter().all(|n| !n.muted),
+                "the notes are kept as they are; the row silences them"
+            ),
+            _ => panic!("expected notes"),
+        }
+        // A muted placement keeps its notes, silent.
+        let mut fl = song();
+        fl.playlist_clips[0].muted = true;
+        let built = build_project(&fl, "Industrial", &here);
+        match &channel_track(&built.project, "Screech").clips[0].content {
             ClipContent::Midi(m) => assert!(m.clip.notes.iter().all(|n| n.muted)),
             _ => panic!("expected notes"),
         }
@@ -2262,23 +2491,42 @@ mod tests {
             },
         ];
         fl.current_arrangement = 1;
+        fl.arrangements[1].track_names = vec![(5, "Kicks".into())];
+        fl.arrangements[1].track_colors = vec![(5, "#e5243b".into())];
         let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
-        let kicks = p.track("insert-003").unwrap();
-        assert!(!kicks.muted, "the track is not muted in every arrangement");
+        let kicks = channel_track(&p, "Kick render");
+        assert!(
+            !kicks.muted,
+            "the channel is not muted in every arrangement"
+        );
         let ClipContent::Audio(open) = &kicks.clips[0].content else {
             panic!("expected audio");
         };
-        assert!(open.muted, "switched off where it is");
-        let other = &p
+        assert!(!open.muted, "the row's switch is the row's, not the clip's");
+        assert!(p.rows[4].muted, "switched off where it is");
+        assert_eq!(p.rows[4].name, "Kicks");
+        assert_eq!(p.rows[4].color.as_deref(), Some("#e5243b"));
+        let other = p
             .arrangements
             .iter()
             .find(|a| a.name == "Extended")
             .unwrap();
-        let stored = &other.timelines["insert-003"].clips[0].content;
-        let ClipContent::Audio(stored) = stored else {
-            panic!("expected audio");
-        };
-        assert!(!stored.muted, "on in the other arrangement");
+        assert!(!other.rows[4].muted, "on in the other arrangement");
+        assert_eq!(other.rows[4].name, "", "with its own names");
+        let open = p
+            .arrangements
+            .iter()
+            .find(|a| a.name == "Radio edit")
+            .unwrap();
+        assert_eq!(open.rows, p.rows);
+        let stored = &other.timelines[&kicks.id].clips[0];
+        assert_eq!(stored.row, Some(4));
+        // Switching to it shows its rows.
+        let mut switched = p.clone();
+        let id = other.id.clone();
+        switched.capture_active_arrangement();
+        switched.apply_arrangement(&id).unwrap();
+        assert!(!switched.rows[4].muted);
     }
 
     /// A note held over the start of a clip trimmed there plays its tail,
@@ -2301,7 +2549,7 @@ mod tests {
         };
         set_offset(&mut fl, 480);
         let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
-        let screech = p.track("insert-001").unwrap();
+        let screech = channel_track(&p, "Screech");
         let ClipContent::Midi(midi) = &screech.clips[0].content else {
             panic!("expected notes");
         };
@@ -2310,7 +2558,7 @@ mod tests {
 
         set_offset(&mut fl, 1_065_353_216);
         let p = build_project(&fl, "s", &|p| Some(p.to_string())).project;
-        let ClipContent::Midi(midi) = &p.track("insert-001").unwrap().clips[0].content else {
+        let ClipContent::Midi(midi) = &channel_track(&p, "Screech").clips[0].content else {
             panic!("expected notes");
         };
         assert!(
@@ -2488,27 +2736,43 @@ mod tests {
         let insert_2 = by_name("Insert 2");
         let eight = by_name("808");
         let ghost = by_name("Ghost");
-        assert!(
-            p.tracks.iter().all(|t| t.name != "Unused"),
-            "nothing reaches it"
-        );
-        assert_eq!(built.report.mixer_inserts, 6);
+        // Named, so it comes, though nothing plays into it.
+        let unused = by_name("Unused");
+        assert!(matches!(unused.kind, TrackKind::Bus));
+        assert!(p
+            .tracks
+            .iter()
+            .all(|t| t.output_bus.as_deref() != Some(unused.id.as_str())));
+        assert_eq!(built.report.mixer_inserts, 7);
+        // Numbered as in FL.
+        for (name, number) in [
+            ("Screech", 1),
+            ("Insert 2", 2),
+            ("808", 3),
+            ("Group", 4),
+            ("Reverb", 5),
+            ("Unused", 6),
+            ("Ghost", 7),
+        ] {
+            assert_eq!(by_name(name).mixer_number, Some(number), "{name}");
+            assert_eq!(by_name(name).rack_group, None, "{name} is no channel");
+        }
 
         // The tracks play into their channels' inserts.
         assert_eq!(
-            p.track("insert-001").unwrap().output_bus.as_ref(),
+            channel_track(p, "Screech").output_bus.as_ref(),
             Some(&screech.id)
         );
         assert_eq!(
-            p.track("insert-002").unwrap().output_bus.as_ref(),
+            channel_track(p, "808 Kick").output_bus.as_ref(),
             Some(&eight.id)
         );
         assert_eq!(
-            p.track("insert-003").unwrap().output_bus.as_ref(),
+            channel_track(p, "Kick render").output_bus.as_ref(),
             Some(&insert_2.id)
         );
         assert_eq!(
-            p.track("insert-004").unwrap().output_bus.as_ref(),
+            channel_track(p, "Lost vocal").output_bus.as_ref(),
             Some(&ghost.id)
         );
 
@@ -2539,6 +2803,85 @@ mod tests {
             .find(|t| matches!(t.kind, TrackKind::Master))
             .unwrap();
         assert!((master.volume_db - fl_volume_db(10_000)).abs() < 1e-9);
+    }
+
+    /// An insert comes when it holds something of the song: a name, a
+    /// colour, an effect, a fader away from 0 dB, or sound. FL's "current"
+    /// insert never does, and an untouched one nothing reaches is only a
+    /// number.
+    #[test]
+    fn inserts_come_numbered_as_in_fl_and_the_current_one_does_not() {
+        let mut fl = mixer_song();
+        let blank = |index: u32| FlMixerTrack {
+            index,
+            routes: vec![FlRoute {
+                to: 0,
+                level: 12_800,
+            }],
+            ..Default::default()
+        };
+        fl.mixer.extend([
+            // Untouched.
+            blank(8),
+            FlMixerTrack {
+                color: Some("#3b82f6".into()),
+                ..blank(9)
+            },
+            FlMixerTrack {
+                volume: 9_000,
+                ..blank(10)
+            },
+            FlMixerTrack {
+                slots: vec![crate::fl_import::FlMixerSlot {
+                    index: 0,
+                    plugin: "Fruity Limiter".into(),
+                    name: None,
+                    enabled: true,
+                    mix: 12_800,
+                    data: Vec::new(),
+                }],
+                ..blank(11)
+            },
+            // Only an insert that comes routes into it.
+            blank(12),
+            // FL's current insert, here with a channel pointed at it.
+            FlMixerTrack {
+                current: true,
+                ..blank(13)
+            },
+        ]);
+        fl.mixer[10].routes.push(FlRoute {
+            to: 12,
+            level: 6_400,
+        });
+        fl.channels[4].settings.mixer_insert = 13;
+        let built = build_project(&fl, "Mixer", &here);
+        let p = &built.project;
+        let numbers: Vec<u16> = p.tracks.iter().filter_map(|t| t.mixer_number).collect();
+        assert_eq!(numbers, [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12]);
+        assert_eq!(insert_track(p, 9).color, "#3b82f6");
+        assert_eq!(insert_track(p, 9).name, "Insert 9");
+        assert!(insert_track(p, 10).volume_db < -6.0);
+        assert_eq!(
+            insert_track(p, 11).inserts.len(),
+            0,
+            "a limiter cannot come"
+        );
+        assert_eq!(insert_track(p, 10).sends[0].target, insert_track(p, 12).id);
+        assert_eq!(
+            channel_track(p, "Lost vocal").output_bus,
+            None,
+            "a channel on the current insert plays into the master"
+        );
+        assert_eq!(built.report.mixer_inserts, 11);
+        // Opened as a song, every number stays where FL had it.
+        let opened = Project::from_bytes(&p.to_bytes().unwrap()).unwrap();
+        let again: Vec<u16> = opened
+            .tracks
+            .iter()
+            .filter_map(|t| t.mixer_number)
+            .collect();
+        assert_eq!(again, numbers);
     }
 
     /// A Parametric EQ 2's data: every band a bell at 0 dB in the middle of
@@ -2666,7 +3009,7 @@ mod tests {
         let built = build_project(&fl, "Plug-ins", &here);
         let p = &built.project;
 
-        let serum = p.track("insert-001").unwrap();
+        let serum = channel_track(p, "Screech");
         assert!(!serum.muted, "its sound comes with it");
         assert_eq!(serum.inserts[0].plugin_id, "vst3:serum2");
         assert!(serum.inserts[0].enabled);
@@ -2678,7 +3021,7 @@ mod tests {
         assert!(serum_plugin.plays_track);
         assert_eq!(serum_plugin.plugin.state, b"the patch");
 
-        let eight = p.track("insert-002").unwrap();
+        let eight = channel_track(p, "808");
         assert!(
             eight.muted,
             "a VST2's patch cannot come, so it would play the wrong sound"
@@ -2821,12 +3164,21 @@ mod tests {
 
         let built = build_project(&fl, "Automation", &here);
         let p = &built.project;
-        let group = p.tracks.iter().find(|t| t.name == "Group").unwrap();
-        let fader = &group
-            .automation_clips
-            .iter()
-            .find(|c| c.target == AutomationTarget::TrackVolume)
-            .unwrap();
+        let group = insert_track(p, 4);
+        // Each sits on its own automation channel, on its FL row, moving
+        // the knob of the track that has it.
+        let on = |channel: &str| -> &crate::automation_clip::AutomationClip {
+            let home = channel_track(p, channel);
+            assert!(matches!(home.kind, TrackKind::Automation), "{channel}");
+            assert!(home.automation_clips.iter().all(|c| c.row == Some(19)));
+            home.automation_clips
+                .iter()
+                .find(|c| c.start_tick == 8 * beat)
+                .unwrap_or_else(|| panic!("{channel} has its clip"))
+        };
+        let fader = on("Group - Volume");
+        assert_eq!(fader.target, AutomationTarget::TrackVolume);
+        assert_eq!(fader.target_track.as_ref(), Some(&group.id));
         assert_eq!((fader.start_tick, fader.length_ticks), (8 * beat, 4 * beat));
         let first = fader.lane.points.first().unwrap().value;
         let last = fader.lane.points.last().unwrap().value;
@@ -2840,11 +3192,12 @@ mod tests {
         );
 
         let eq_slot = &group.inserts[0].id;
-        let eq_freq = group
-            .automation_clips
-            .iter()
-            .find(|c| matches!(&c.target, AutomationTarget::PluginParam { slot_id, param_id: 9 } if slot_id == eq_slot))
-            .expect("band 3's frequency, the built-in EQ's parameter 9");
+        let eq_freq = on("EQ - Group - Band 3 freq");
+        assert!(
+            matches!(&eq_freq.target, AutomationTarget::PluginParam { slot_id, param_id: 9 } if slot_id == eq_slot),
+            "band 3's frequency, the built-in EQ's parameter 9"
+        );
+        assert_eq!(eq_freq.target_track.as_ref(), Some(&group.id));
         let hz = |v: f64| 20.0 + v * 19_980.0;
         assert!((hz(eq_freq.lane.points.last().unwrap().value) - 20_000.0).abs() < 1e-6);
         let eq = built
@@ -2858,49 +3211,112 @@ mod tests {
             "the automated band is switched on"
         );
 
-        let serum = p.track("insert-001").unwrap();
-        assert!(serum.automation_clips.iter().any(|c| c.target
-            == AutomationTarget::PluginParam {
+        let serum = channel_track(p, "Screech");
+        let macro_2 = on("Serum 2 - Macro 2");
+        assert_eq!(
+            macro_2.target,
+            AutomationTarget::PluginParam {
                 slot_id: serum.inserts[0].id.clone(),
                 param_id: 7,
-            }));
+            }
+        );
+        assert_eq!(macro_2.target_track.as_ref(), Some(&serum.id));
 
-        let kicks = p.track("insert-003").unwrap();
-        let volume = kicks
-            .automation_clips
-            .iter()
-            .find(|c| c.target == AutomationTarget::TrackVolume)
-            .expect("the kick render's lane has only its channel");
-        // At the knob's default the lane is where the clips already are.
-        let at_default = Scale::ClipGain {
-            baseline_db: fl_audio_clip_gain_db(10_000),
-        }
-        .apply(10_000.0 / 12_800.0);
-        assert!((at_default - 60.0 / 66.0).abs() < 1e-3);
+        let kicks = channel_track(p, "Kick render");
+        let volume = on("Kick render - Channel volume");
+        assert_eq!(volume.target, AutomationTarget::TrackVolume);
+        assert_eq!(volume.target_track.as_ref(), Some(&kicks.id));
         assert_eq!(volume.lane.points.len(), 2);
+        // At the knob's default the fader is at 0 dB, where the track is.
+        let at_default = Scale::AudioChannel.apply(10_000.0 / 12_800.0);
+        assert!((at_default - 60.0 / 66.0).abs() < 1e-3);
+        assert!(kicks.volume_db.abs() < 1e-9);
 
+        // Channel pitch has nothing to move here: its clip sits on its row
+        // moving nothing, and the report says so.
+        let pitch = on("Screech - Channel pitch");
+        assert_eq!(pitch.target_track, None);
         assert_eq!(
             built.report.automation_left_behind,
             vec!["Cutoff".to_string(), "Screech - Channel pitch".into()]
         );
         assert_eq!(built.report.automation_clips, 4);
+        assert_eq!(built.report.automation_clips_moving_nothing, 2);
+        // The muted placement is not there.
+        assert!(p
+            .tracks
+            .iter()
+            .flat_map(|t| &t.automation_clips)
+            .all(|c| c.start_tick != 0 || c.row != Some(19)));
+    }
+
+    /// A sample channel's volume automation lands on the channel, also when
+    /// its samples share a row with others': it had nowhere to go when a
+    /// row was a track.
+    #[test]
+    fn channel_volume_automation_is_on_the_channel_whatever_its_row() {
+        use crate::fl_import::{FlAutomationLink, FlAutomationTarget as T};
+        let mut fl = song();
+        // The lost vocal on the kick render's row.
+        fl.playlist_clips[3].track_index = 5;
+        let mut automation = channel(
+            "Vocal - Channel volume",
+            FlChannelKind::Automation,
+            None,
+            None,
+        );
+        automation.automation = vec![point(0.0, 0.0), point(1.0, 1.0)];
+        fl.channels.push(automation);
+        fl.automation_links.push(FlAutomationLink {
+            channel: 5,
+            target: T::ChannelVolume(4),
+        });
+        fl.playlist_clips.push(FlPlaylistClip {
+            arrangement: 0,
+            track_index: 7,
+            start_tick: 0,
+            length_ticks: 960,
+            content: FlClipContent::Automation {
+                channel_index: 5,
+                target: "Vocal - Channel volume".into(),
+                offset_ticks: 0,
+            },
+            muted: false,
+        });
+        let built = build_project(&fl, "s", &here);
+        let p = &built.project;
+        let clips = &channel_track(p, "Vocal - Channel volume").automation_clips;
+        assert_eq!(clips.len(), 1);
+        assert_eq!(
+            clips[0].target_track.as_ref(),
+            Some(&channel_track(p, "Lost vocal").id)
+        );
+        assert_eq!(clips[0].row, Some(6));
+        assert_eq!(built.report.automation_clips, 1);
     }
 
     #[test]
-    fn a_track_soloed_in_fl_is_soloed_and_the_rest_are_not_switched_off() {
+    fn a_track_soloed_in_fl_is_a_soloed_row_and_the_rest_are_not_switched_off() {
         let mut fl = song();
-        // The kick lane (playlist track 5) soloed: FL switched every other
-        // track off for it, the patterns' track 1 among them.
+        // The kick render's playlist track 5 soloed: FL switched every
+        // other track off for it, the patterns' track 1 among them.
         fl.playlist_tracks_solo = vec![5];
         fl.playlist_tracks_off = vec![1, 9];
         let built = build_project(&fl, "Solo", &here);
         let p = &built.project;
-        let kicks = p.track("insert-003").unwrap();
-        assert!(kicks.soloed && !kicks.muted);
-        let vocals = p.track("insert-004").unwrap();
-        assert!(!vocals.muted && !vocals.soloed, "unsoloing gives it back");
-        let screech = p.track("insert-001").unwrap();
-        assert!(!screech.soloed);
+        assert!(p.rows[4].soloed && !p.rows[4].muted);
+        assert!(
+            p.rows
+                .iter()
+                .enumerate()
+                .all(|(i, r)| i == 4 || (!r.muted && !r.soloed)),
+            "unsoloing gives them back"
+        );
+        assert!(p
+            .tracks
+            .iter()
+            .all(|t| !t.soloed && !t.muted || t.name == "Screech"));
+        let screech = channel_track(p, "Screech");
         let ClipContent::Midi(midi) = &screech.clips[0].content else {
             panic!("expected notes");
         };
@@ -2925,7 +3341,7 @@ mod tests {
         *fade_out_ms = 187.5;
         *volume = 0.631;
         let built = build_project(&fl, "Fades", &here);
-        let kicks = built.project.track("insert-003").unwrap();
+        let kicks = channel_track(&built.project, "Kick render");
         let ClipContent::Audio(clip) = &kicks.clips[0].content else {
             panic!("expected audio");
         };
@@ -2934,8 +3350,8 @@ mod tests {
             (clip.fade_in_ticks, clip.fade_out_ticks),
             (beat / 4, beat / 2)
         );
-        let channel_db = fl_audio_clip_gain_db(fl.channels[1].settings.volume);
-        assert!((clip.gain_db - channel_db - 20.0 * 0.631f64.log10()).abs() < 1e-6);
+        // Its own volume; the channel's is on the channel.
+        assert!((clip.gain_db - 20.0 * 0.631f64.log10()).abs() < 1e-6);
         assert!((20.0 * 0.631f64.log10() + 4.0).abs() < 0.01);
 
         // A fade longer than its clip fills the clip and no more.
@@ -2945,7 +3361,8 @@ mod tests {
             *fade_out_ms = 10_000.0;
         }
         let built = build_project(&long, "Fades", &here);
-        let ClipContent::Audio(clip) = &built.project.track("insert-003").unwrap().clips[0].content
+        let ClipContent::Audio(clip) =
+            &channel_track(&built.project, "Kick render").clips[0].content
         else {
             panic!("expected audio");
         };
