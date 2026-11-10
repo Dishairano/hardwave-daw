@@ -298,4 +298,123 @@ mod tests {
             assert!(r.parameter_options(id).is_none());
         }
     }
+
+    /// Runs `input` (mono, on both sides) through the plug-in in blocks
+    /// the way a track does, and returns the left output.
+    fn run(r: &mut NativeReverb, input: &[f32]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(input.len());
+        let mut outputs = vec![Vec::new(), Vec::new()];
+        let mut midi_out = Vec::new();
+        for block in input.chunks(512) {
+            r.process(
+                &[block, block],
+                &mut outputs,
+                &[],
+                &mut midi_out,
+                block.len(),
+            );
+            out.extend_from_slice(&outputs[0]);
+        }
+        out
+    }
+
+    fn started() -> NativeReverb {
+        let mut r = NativeReverb::new();
+        r.activate(48_000.0, 512).unwrap();
+        r
+    }
+
+    fn energy(x: &[f32]) -> f64 {
+        x.iter().map(|&v| v as f64 * v as f64).sum()
+    }
+
+    /// Half a second of steady noise, then silence for `tail_secs`.
+    fn noise_burst(tail_secs: f32) -> Vec<f32> {
+        let mut seed: u32 = 0x2545_f491;
+        let mut x: Vec<f32> = (0..24_000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.5
+            })
+            .collect();
+        x.resize(24_000 + (tail_secs * 48_000.0) as usize, 0.0);
+        x
+    }
+
+    /// The time the tail takes to fall 60 dB, from the energy left in it
+    /// (Schroeder's backward integration), timed from -5 to -35 dB.
+    fn rt60(out: &[f32]) -> f32 {
+        let mut left = vec![0.0_f64; out.len() + 1];
+        for i in (0..out.len()).rev() {
+            left[i] = left[i + 1] + out[i] as f64 * out[i] as f64;
+        }
+        let total = left[0];
+        let when = |db: f64| {
+            let level = total * 10f64.powf(db / 10.0);
+            left.iter().position(|&e| e < level).unwrap_or(out.len()) as f32
+        };
+        2.0 * (when(-35.0) - when(-5.0)) / 48_000.0
+    }
+
+    /// An impulse rings out for the decay the knob is set to. The wet
+    /// path went through a tail filter that was never set up, whose
+    /// coefficients were all zero: 100 % mix gave silence and 30 % only
+    /// turned the dry signal down.
+    #[test]
+    fn an_impulse_rings_out_for_the_decay_it_is_set_to() {
+        for secs in [1.0_f64, 3.0] {
+            let mut r = started();
+            r.set_parameter_value(PARAM_MIX, 1.0);
+            r.set_parameter_value(PARAM_DAMPING, 0.0);
+            r.set_parameter_value(PARAM_PRE_DELAY, 0.0);
+            r.set_parameter_value(PARAM_DECAY, (secs - 0.1) / 9.9);
+            let mut impulse = vec![0.0_f32; (secs as usize + 2) * 48_000];
+            impulse[0] = 1.0;
+            let out = run(&mut r, &impulse);
+            assert!(energy(&out) > 0.01, "the reverb rings: {}", energy(&out));
+            let measured = rt60(&out) as f64;
+            assert!(
+                (measured - secs).abs() < secs * 0.2,
+                "set to {secs} s, rang for {measured} s"
+            );
+        }
+    }
+
+    /// Mix 0 is the dry signal untouched, 100 % is the reverb alone, and
+    /// anything between is a blend about as loud as the dry signal.
+    #[test]
+    fn mix_gives_dry_only_a_blend_or_wet_only_at_a_matched_level() {
+        let dry = noise_burst(3.0);
+        let e_dry = energy(&dry);
+
+        let mut r = started();
+        r.set_parameter_value(PARAM_MIX, 0.0);
+        assert_eq!(run(&mut r, &dry), dry, "mix 0 is the dry signal");
+
+        let mut r = started();
+        r.set_parameter_value(PARAM_MIX, 1.0);
+        let wet = run(&mut r, &dry);
+        // The default 20 ms pre-delay: nothing comes out before it, so
+        // none of the dry signal is in there.
+        assert!(wet[..900].iter().all(|v| v.abs() < 1e-6), "no dry at 100 %");
+        let wet_db = 10.0 * (energy(&wet) / e_dry).log10();
+        assert!(
+            wet_db.abs() < 3.0,
+            "100 % is {wet_db:.2} dB from the dry signal"
+        );
+        let tail = &wet[24_000 + 4_800..24_000 + 9_600];
+        assert!(
+            energy(tail) > 1e-3,
+            "the tail goes on after the sound stops"
+        );
+
+        let mut r = started();
+        let blend = run(&mut r, &dry);
+        let blend_db = 10.0 * (energy(&blend) / e_dry).log10();
+        assert!(
+            blend_db.abs() < 3.0,
+            "30 % is {blend_db:.2} dB from the dry signal"
+        );
+        assert!(energy(&blend[24_000 + 4_800..]) > 1e-4, "30 % has a tail");
+    }
 }
