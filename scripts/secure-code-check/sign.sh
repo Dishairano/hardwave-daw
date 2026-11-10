@@ -2,7 +2,7 @@
 # Secure Code Check: sign the release report with our own key.
 #
 #   sign.sh check          the key is there and is the one whose public
-#                          half is in security/secure-code-check/
+#                          half is in the product's security/secure-code-check/
 #   sign.sh sign FILE...   writes FILE.sig for each, then verifies it
 #                          against allowed_signers, as a buyer would
 #
@@ -13,8 +13,10 @@
 # already has, so checking a signature needs no extra tool.
 set -euo pipefail
 
-here="$(cd "$(dirname "$0")" && pwd)"
-keys="$here/../../security/secure-code-check"
+# The public key lives in the product's own repository, so a buyer can
+# compare it with the copy on the page. SCC_KEYS_DIR points there; the
+# default is the product checked out in the current folder.
+keys="${SCC_KEYS_DIR:-$PWD/security/secure-code-check}"
 namespace="hardwave-secure-code-check"
 identity="secure-code-check@hardwavestudios.com"
 

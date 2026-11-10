@@ -10,9 +10,9 @@ Built in CI from the run's own results, never by hand:
   report.py --repo . --scan-dir scc --out-dir out [release options]
       Writes <base>.json and <base>.html to out/. Without release options
       it is a preview of the scans alone (every push). With them it is
-      the release report: the scans, the release's own tests and build,
-      every release file with its SHA-256 and Windows signature, and the
-      SBOMs copied next to it under release names.
+      the release report: the scans, the release's own tests, every
+      release file with its SHA-256 (and Windows signature, for .exe
+      files), and the SBOMs copied next to it under release names.
 
   Release options:
       --tag vX.Y.Z           the release tag
@@ -22,7 +22,12 @@ Built in CI from the run's own results, never by hand:
       --authenticode FILE    Windows signature status per file (build job)
 
 The scan results come from scc/: scan-needs.json (toJSON(needs) of the
-results job), semgrep.json and sbom/*.cdx.json.
+results job), scan-inputs.json (toJSON(inputs) of the workflow: which
+lock files, npm folders and optional checks this product has),
+semgrep.json and sbom/*.cdx.json.
+
+What the product is comes from the repository's own
+security/secure-code-check/config.toml (see config.py).
 
 What it never says: that anything is certified or compliant. It lists
 evidence, mapped to the ISO 27001:2022 Annex A controls it supports.
@@ -44,19 +49,11 @@ import sys
 import tomllib
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import config as product_config  # noqa: E402
 import render  # noqa: E402
 
-# One product per repo for now. Step 2 (Suite, WettBoi, Analyser) moves
-# this into a small config file per repo.
-PRODUCT = {
-    "id": "hardwave-daw",
-    "name": "Hardwave DAW",
-    "platforms": "Windows x64",
-    "default_repository": "Dishairano/hardwave-daw",
-}
-
 TOOLS = {
-    "cargo_deny": "cargo deny (cargo-deny-action 2.1.1)",
+    "cargo_deny": "cargo deny 0.20.2",
     "npm_audit": "npm audit",
     "gitleaks": "gitleaks 8.30.1",
     "semgrep": "Semgrep CE 1.182.1",
@@ -82,14 +79,6 @@ NOTICE = (
     "that you can use in your own supplier assessment (Annex A 5.19 to 5.22)."
 )
 
-SBOM_PARTS = {
-    "app-crates.cdx.json": "DAW app: Rust crates",
-    "plugin-bridge-crates.cdx.json": "Plug-in bridge: Rust crates",
-    "launcher-crates.cdx.json": "Launcher and uninstaller: Rust crates",
-    "ui-npm.cdx.json": "DAW interface: npm packages",
-    "launcher-npm.cdx.json": "Launcher interface: npm packages",
-}
-
 CONTROL_TITLES = {
     "8.8": "Management of technical vulnerabilities",
     "8.25": "Secure development life cycle",
@@ -101,6 +90,8 @@ CONTROL_TITLES = {
     "5.32": "Intellectual property rights",
     "8.24": "Use of cryptography",
 }
+
+LANGUAGE_NAMES = {"rust": "Rust", "typescript": "TypeScript", "javascript": "JavaScript"}
 
 PASSING = {"passed", "written", "signed"}
 
@@ -123,7 +114,29 @@ def git(repo: pathlib.Path, *args: str) -> str:
         return ""
 
 
-def lock_crates(path: pathlib.Path) -> int:
+def lines(value) -> list[str]:
+    """A workflow input that lists one entry per line."""
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [line.strip() for line in str(value or "").splitlines() if line.strip()]
+
+
+def lock_for(repo: pathlib.Path, manifest: str) -> pathlib.Path | None:
+    """The Cargo.lock that belongs to a manifest: next to it, or in the
+    nearest folder above it inside the repository (a workspace root)."""
+    root = repo.resolve()
+    folder = (root / manifest).parent.resolve()
+    while True:
+        if (folder / "Cargo.lock").is_file():
+            return folder / "Cargo.lock"
+        if folder == root or root not in folder.parents:
+            return None
+        folder = folder.parent
+
+
+def lock_crates(path: pathlib.Path | None) -> int:
+    if not path:
+        return 0
     try:
         return len(tomllib.loads(path.read_text()).get("package", []))
     except FileNotFoundError:
@@ -136,6 +149,18 @@ def npm_packages(path: pathlib.Path, shipped_only: bool) -> int:
     if shipped_only:
         packages = [p for p in packages if not p.get("dev")]
     return len(packages)
+
+
+def npm_entries(repo: pathlib.Path, inputs: dict) -> list[dict]:
+    """The npm folders the workflow audits: "<dir>" checks every package,
+    build tools included; "<dir> --omit=dev" only what ships."""
+    entries = []
+    for line in lines(inputs.get("npm-audit")):
+        folder, _, args = line.partition(" ")
+        shipped = "--omit=dev" in args
+        entries.append({"dir": folder, "shipped_only": shipped,
+                        "packages": npm_packages(repo / folder / "package-lock.json", shipped)})
+    return entries
 
 
 def recorded(repo: pathlib.Path, needle: str) -> dict:
@@ -165,10 +190,10 @@ def exceptions(repo: pathlib.Path) -> dict:
     return {"advisories": advisories, "licences": {"count": len(licences)}}
 
 
-def scan_meta_from_env() -> dict:
+def scan_meta_from_env(default_repository: str = "") -> dict:
     env = os.environ
     server = env.get("GITHUB_SERVER_URL", "https://github.com")
-    repo = env.get("GITHUB_REPOSITORY", PRODUCT["default_repository"])
+    repo = env.get("GITHUB_REPOSITORY", default_repository)
     run_id = env.get("GITHUB_RUN_ID")
     return {
         "scanned_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -256,16 +281,14 @@ def job_status(needs: dict, *jobs: str) -> str:
     return combined([needs.get(job, {}).get("result", "missing") for job in jobs])
 
 
-def step_status(needs: dict, parts: list) -> str:
-    """Status from step outcomes a job reports as outputs, e.g.
-    [("rust-dependencies", "licences")]. Falls back to the job's own
-    result when a job does not report that step."""
-    return combined([outputs(needs, job).get(key) or needs.get(job, {}).get("result", "missing")
-                     for job, key in parts])
-
-
 def outputs(needs: dict, job: str) -> dict:
     return needs.get(job, {}).get("outputs", {}) or {}
+
+
+def step_status(needs: dict, job: str, key: str) -> str:
+    """Status from a step outcome a job reports as an output. Falls back
+    to the job's own result when the job does not report that step."""
+    return combined([outputs(needs, job).get(key) or needs.get(job, {}).get("result", "missing")])
 
 
 def as_int(value, default=0) -> int:
@@ -275,57 +298,57 @@ def as_int(value, default=0) -> int:
         return default
 
 
-def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep: dict) -> list:
-    daw_crates = lock_crates(repo / "Cargo.lock")
-    launcher_crates = lock_crates(repo / "installer" / "src-tauri" / "Cargo.lock")
-    launcher_npm = npm_packages(repo / "installer" / "package-lock.json", shipped_only=True)
-    ui_npm = npm_packages(repo / "packages" / "daw-ui" / "package-lock.json", shipped_only=False)
-    advisory_count = len(exc["advisories"])
-    licence_count = exc["licences"]["count"]
+def truthy(value) -> bool:
+    return str(value).strip().lower() in ("true", "1", "yes")
 
-    fuzz = outputs(needs, "fuzz-targets") or outputs(needs, "fuzz")
-    raw = fuzz.get("targets", "")
-    try:
-        targets = json.loads(raw) if raw.startswith("[") else raw.split()
-    except json.JSONDecodeError:
-        targets = []
-    seconds = as_int(fuzz.get("seconds"), 60)
+
+def joined(words: list[str]) -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def scan_checks(repo: pathlib.Path, needs: dict, inputs: dict, exc: dict, sbom: list,
+                semgrep: dict) -> list:
+    locks = []
+    for manifest in lines(inputs.get("cargo-manifests")) or ["Cargo.toml"]:
+        lock = lock_for(repo, manifest)
+        if lock and lock not in locks:
+            locks.append(lock)
+    crates = sum(lock_crates(lock) for lock in locks)
+    lock_names = joined([str(lock.relative_to(repo.resolve())) for lock in locks] or ["Cargo.lock"])
     secrets = outputs(needs, "secrets")
     sa = outputs(needs, "static-analysis")
+    languages = [LANGUAGE_NAMES.get(l, l) for l in (inputs.get("semgrep-languages") or "rust").split()]
 
     checks = [
         {
             "id": "rust-dependencies", "name": "Rust dependencies", "tool": TOOLS["cargo_deny"],
-            "what": f"{daw_crates} crates in the DAW's Cargo.lock against the RustSec advisory database: "
-                    "known vulnerabilities, yanked crates, download sources",
-            "status": step_status(needs, [("rust-dependencies", "advisories")]),
-            "exceptions": advisory_count,
-            "controls": ["8.8", "5.21"],
-        },
-        {
-            "id": "launcher-dependencies", "name": "Launcher dependencies",
-            "tool": f"{TOOLS['cargo_deny']}, {TOOLS['npm_audit']}",
-            "what": f"{launcher_crates} crates of the launcher and uninstaller, and the {launcher_npm} "
-                    "npm packages it ships",
-            "status": step_status(needs, [("launcher-dependencies", "advisories"),
-                                          ("launcher-dependencies", "npm")]),
-            "controls": ["8.8", "5.21"],
-        },
-        {
-            "id": "ui-dependencies", "name": "Interface dependencies", "tool": TOOLS["npm_audit"],
-            "what": f"{ui_npm} npm packages of the interface, build tools included; "
-                    "moderate severity and up fails",
-            "status": job_status(needs, "ui-dependencies"),
+            "what": f"{crates} crates in {lock_names} against the RustSec advisory database: known "
+                    "vulnerabilities, yanked crates, unmaintained crates we depend on ourselves, "
+                    "download sources",
+            "status": step_status(needs, "rust-dependencies", "advisories"),
+            "exceptions": len(exc["advisories"]),
             "controls": ["8.8", "5.21"],
         },
         {
             "id": "licences", "name": "Licences", "tool": TOOLS["cargo_deny"],
             "what": "Every crate's licence against our allow list",
-            "status": step_status(needs, [("rust-dependencies", "licences"),
-                                          ("launcher-dependencies", "licences")]),
-            "exceptions": licence_count,
+            "status": step_status(needs, "rust-dependencies", "licences"),
+            "exceptions": exc["licences"]["count"],
             "controls": ["5.32"],
         },
+    ]
+    npm = npm_entries(repo, inputs)
+    if npm:
+        parts = [f"{e['packages']} in {e['dir']} ({'what ships' if e['shipped_only'] else 'build tools included'})"
+                 for e in npm]
+        checks.append({
+            "id": "npm-dependencies", "name": "npm dependencies", "tool": TOOLS["npm_audit"],
+            "what": "npm packages against the GitHub advisory database; moderate severity and up "
+                    "fails. " + "; ".join(parts),
+            "status": job_status(needs, "npm-dependencies"),
+            "controls": ["8.8", "5.21"],
+        })
+    checks += [
         {
             "id": "secrets", "name": "Secrets", "tool": TOOLS["gitleaks"],
             "what": (f"All {secrets['commits']} commits in the repository's history"
@@ -336,7 +359,7 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
         },
         {
             "id": "static-analysis", "name": "Static analysis", "tool": TOOLS["semgrep"],
-            "what": (f"{as_int(sa.get('files'))} Rust, TypeScript and JavaScript files against "
+            "what": (f"{as_int(sa.get('files'))} {joined(languages)} files against "
                      f"{as_int(sa.get('rules'))} security rules from semgrep-rules "
                      f"{TOOLS['semgrep_rules'][:7]} (all but unsafe-usage, which flags every unsafe "
                      "block); a high finding fails"),
@@ -345,59 +368,64 @@ def scan_checks(repo: pathlib.Path, needs: dict, exc: dict, sbom: list, semgrep:
             "lower": as_int(sa.get("medium")) + as_int(sa.get("low")),
             "controls": ["8.28"],
         },
-        {
+    ]
+    if truthy(inputs.get("fuzz")):
+        fuzz = outputs(needs, "fuzz-targets") or outputs(needs, "fuzz")
+        raw = fuzz.get("targets", "")
+        try:
+            targets = json.loads(raw) if raw.startswith("[") else raw.split()
+        except json.JSONDecodeError:
+            targets = []
+        seconds = as_int(fuzz.get("seconds"), 60)
+        checks.append({
             "id": "fuzzing", "name": "Fuzzing", "tool": TOOLS["cargo_fuzz"],
             "what": (f"{len(targets)} readers of outside input, {seconds} s each: {', '.join(targets)}"
                      if targets else "Every reader of outside input"),
-            "status": job_status(needs, "fuzz-targets", "fuzz") if "fuzz-targets" in needs
-                      else job_status(needs, "fuzz"),
+            "status": job_status(needs, "fuzz-targets", "fuzz"),
             "controls": ["8.29"],
-        },
-        {
+        })
+    if (inputs.get("content-policy-dir") or "").strip():
+        checks.append({
             "id": "content-policy", "name": "Window content policy", "tool": TOOLS["playwright"],
             "what": "The built interface loaded under the app's content policy; anything blocked fails",
-            "status": job_status(needs, "ui-content-policy"),
+            "status": job_status(needs, "content-policy"),
             "controls": ["8.29"],
-        },
-        {
-            "id": "sbom", "name": "SBOM", "tool": f"{TOOLS['cargo_cyclonedx']}, {TOOLS['cyclonedx_npm']}",
-            "what": (f"CycloneDX 1.5 JSON of what ships: {sum(s['components'] for s in sbom)} components "
-                     f"in {len(sbom)} files"),
-            "status": "written" if job_status(needs, "sbom") == "passed" and sbom else job_status(needs, "sbom"),
-            "controls": ["5.21"],
-        },
-    ]
+        })
+    tools = TOOLS["cargo_cyclonedx"]
+    if any(s["source"].endswith("npm.cdx.json") for s in sbom):
+        tools += f", {TOOLS['cyclonedx_npm']}"
+    checks.append({
+        "id": "sbom", "name": "SBOM", "tool": tools,
+        "what": (f"CycloneDX 1.5 JSON of what ships: {sum(s['components'] for s in sbom)} components "
+                 f"in {len(sbom)} files"),
+        "status": "written" if job_status(needs, "sbom") == "passed" and sbom else job_status(needs, "sbom"),
+        "controls": ["5.21"],
+    })
     for check in checks:
         check["status_text"] = status_text(check)
-    for check in checks:
         if check["id"] == "static-analysis" and semgrep.get("findings"):
             check["findings"] = semgrep["findings"]
     return checks
 
 
-def release_checks(needs: dict, files: list) -> list:
-    exes = [f for f in files if f["name"].lower().endswith(".exe")]
-    signed = [f for f in exes if (f.get("windows_signature") or {}).get("status") == "Valid"]
-    if exes and len(signed) == len(exes):
-        signing = "signed"
-    else:
-        signing = "not_verified"
-    checks = [
-        {
-            "id": "tests", "name": "Lint and tests", "tool": "cargo fmt, Clippy, cargo test, Playwright",
-            "what": "Formatting; Clippy with warnings as errors; the whole workspace's tests including the "
-                    "long engine tests; the interface suite in a browser",
-            "status": job_status(needs, "lint-and-test", "ui-tests"),
-            "controls": ["8.28", "8.29"],
-        },
-        {
-            "id": "code-signing", "name": "Code signing", "tool": "Azure Trusted Signing",
-            "what": (f"Windows signature on {len(exes)} installer files, checked on the build machine "
+def release_checks(cfg: dict, needs: dict, files: list) -> list:
+    release = cfg["release"]
+    checks = [{
+        "id": "tests", "name": "Lint and tests", "tool": release["tests_tool"],
+        "what": release["tests_what"],
+        "status": job_status(needs, *release["test_jobs"]),
+        "controls": ["8.28", "8.29"],
+    }]
+    if release["windows_signing"]:
+        exes = [f for f in files if f["name"].lower().endswith(".exe")]
+        signed = [f for f in exes if (f.get("windows_signature") or {}).get("status") == "Valid"]
+        checks.append({
+            "id": "code-signing", "name": "Code signing", "tool": release["windows_signing"],
+            "what": (f"Windows signature on {len(exes)} executable files, checked on the build machine "
                      f"right after signing ({len(signed)} of {len(exes)} valid)"),
-            "status": signing,
+            "status": "signed" if exes and len(signed) == len(exes) else "not_verified",
             "controls": ["8.24"],
-        },
-    ]
+        })
     for check in checks:
         check["status_text"] = status_text(check)
     return checks
@@ -427,7 +455,7 @@ def status_text(check: dict) -> str:
 def iso_controls(checks: list, exc: dict, release: bool, files: list) -> list:
     ok = {c["id"] for c in checks if c["status"] in PASSING}
     evidence: dict[str, list[str]] = {k: [] for k in CONTROL_TITLES}
-    if ok & {"rust-dependencies", "launcher-dependencies", "ui-dependencies"}:
+    if ok & {"rust-dependencies", "npm-dependencies"}:
         evidence["8.8"].append("dependency checks against the advisory databases on this commit")
         if exc["advisories"]:
             evidence["8.8"].append("recorded exceptions with their reasons")
@@ -444,7 +472,7 @@ def iso_controls(checks: list, exc: dict, release: bool, files: list) -> list:
     if "content-policy" in ok:
         evidence["8.29"].append("window content policy check")
     if "tests" in ok:
-        evidence["8.29"].append("full test suite and interface suite")
+        evidence["8.29"].append("the test suite")
     if release:
         evidence["8.32"].append("this signed report ties each release file's SHA-256 to one commit "
                                 "and one workflow run")
@@ -452,8 +480,9 @@ def iso_controls(checks: list, exc: dict, release: bool, files: list) -> list:
         evidence["8.32"].append("every change runs these checks before it can be released")
     if "sbom" in ok:
         evidence["5.21"].append("SBOM of what ships")
-    if ok & {"rust-dependencies", "launcher-dependencies"}:
-        evidence["5.21"].append("dependency source checks (crates.io only, unless listed)")
+    if "rust-dependencies" in ok:
+        evidence["5.21"].append("dependency source checks (crates.io, and only the git "
+                                "repositories deny.toml lists)")
     if "secrets" in ok:
         evidence["5.17"].append("secret scan over the full history")
     if "licences" in ok:
@@ -475,18 +504,17 @@ def iso_controls(checks: list, exc: dict, release: bool, files: list) -> list:
 
 # ---------------------------------------------------------------- build
 
-def sbom_entries(sbom_dir: pathlib.Path) -> list:
+def sbom_entries(cfg: dict, sbom_dir: pathlib.Path) -> list:
+    def count(components):
+        return sum(1 + count(c.get("components")) for c in components or [])
+
     entries = []
-    for name, part in SBOM_PARTS.items():
-        path = sbom_dir / name
+    for part in cfg["sbom"]:
+        path = sbom_dir / part["file"]
         if not path.exists():
             continue
         bom = read_json(path, {})
-
-        def count(components):
-            return sum(1 + count(c.get("components")) for c in components or [])
-
-        entries.append({"source": name, "part": part, "components": count(bom.get("components")),
+        entries.append({"source": part["file"], "part": part["part"], "components": count(bom.get("components")),
                         "spec": bom.get("specVersion", ""), "path": path})
     return entries
 
@@ -526,19 +554,22 @@ def release_files(assets_dir: pathlib.Path | None, own_prefix: str, authenticode
 
 def build(args) -> dict:
     repo = pathlib.Path(args.repo).resolve()
+    cfg = product_config.load(repo / args.config)
+    product = cfg["product"]
     scan_dir = pathlib.Path(args.scan_dir)
     needs = read_json(scan_dir / "scan-needs.json", {})
-    meta = read_json(scan_dir / "scan-meta.json", {}) or scan_meta_from_env()
+    inputs = read_json(scan_dir / "scan-inputs.json", {})
+    meta = read_json(scan_dir / "scan-meta.json", {}) or scan_meta_from_env(product["repository"])
     release = bool(args.tag)
     version = args.tag[1:] if release and args.tag.startswith("v") else args.tag
     commit = meta.get("commit") or git(repo, "rev-parse", "HEAD")
     label = version if release else commit[:8]
-    prefix = f"{PRODUCT['id']}-{label}"
+    prefix = f"{product['id']}-{label}"
 
     exc = exceptions(repo)
-    sbom = sbom_entries(scan_dir / "sbom")
+    sbom = sbom_entries(cfg, scan_dir / "sbom")
     semgrep = semgrep_findings(scan_dir / "semgrep.json")
-    checks = scan_checks(repo, needs, exc, sbom, semgrep)
+    checks = scan_checks(repo, needs, inputs, exc, sbom, semgrep)
 
     files: list = []
     if release:
@@ -548,7 +579,7 @@ def build(args) -> dict:
             authenticode = authenticode.get("files", [authenticode])
         files = release_files(pathlib.Path(args.assets_dir) if args.assets_dir else None,
                               prefix, authenticode)
-        checks += release_checks(release_needs, files)
+        checks += release_checks(cfg, release_needs, files)
 
     out_dir = pathlib.Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -561,12 +592,14 @@ def build(args) -> dict:
                          "size": (out_dir / name).stat().st_size})
 
     failed = [c for c in checks if c["status"] not in PASSING]
-    repository = meta.get("repository") or PRODUCT["default_repository"]
+    repository = meta.get("repository") or product["repository"]
+    locks = {lock_for(repo, m) for m in lines(inputs.get("cargo-manifests")) or ["Cargo.toml"]}
+    crates = sum(lock_crates(lock) for lock in locks)
     report = {
         "schema": "https://hardwavestudios.com/schemas/secure-code-check/v1",
         "kind": "release" if release else "preview",
-        "product": {"id": PRODUCT["id"], "name": PRODUCT["name"], "repository": repository,
-                    "platforms": PRODUCT["platforms"]},
+        "product": {"id": product["id"], "name": product["name"], "repository": repository,
+                    "platforms": product["platforms"]},
         "release": {"version": version, "tag": args.tag, "prerelease": "-" in (args.tag or ""),
                     "released_at": args.released_at} if release else None,
         "source": {"commit": commit, "ref": meta.get("ref", ""), "run_url": meta.get("run_url", ""),
@@ -581,16 +614,19 @@ def build(args) -> dict:
             "not_passed": [c["id"] for c in failed],
             "advisory_exceptions": len(exc["advisories"]),
             "licence_exceptions": exc["licences"]["count"],
-            "crates": lock_crates(repo / "Cargo.lock"),
+            "crates": crates,
         },
         "checks": checks,
+        "not_checked": cfg["not_checked"],
         "exceptions": {
             "advisories": exc["advisories"],
             "licences": {"count": exc["licences"]["count"],
                          "source": f"https://github.com/{repository}/blob/{commit}/deny.toml"},
         },
         "sbom": sbom_out,
+        "sbom_note": cfg["sbom_note"],
         "release_files": files,
+        "release_files_note": cfg["release"]["files_note"],
         "iso_controls": iso_controls(checks, exc, release, files),
         "vulnerability_history": history(repo, dt.datetime.now(dt.timezone.utc).date()),
         "signing": {**SIGNING, **public_key(repo)},
@@ -609,6 +645,8 @@ def build(args) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default=".")
+    parser.add_argument("--config", default=product_config.DEFAULT_PATH,
+                        help="the product's config, relative to --repo")
     parser.add_argument("--scan-dir", required=True)
     parser.add_argument("--record-scan", action="store_true")
     parser.add_argument("--out-dir")
@@ -621,9 +659,10 @@ def main(argv=None) -> int:
     if args.tag and not re.fullmatch(r"v\d+\.\d+\.\d+(-[a-z0-9.]+)?", args.tag):
         parser.error(f"{args.tag!r} is not a release tag")
     if args.record_scan:
+        cfg = product_config.load(pathlib.Path(args.repo) / args.config)
         path = pathlib.Path(args.scan_dir) / "scan-meta.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(scan_meta_from_env(), indent=2) + "\n")
+        path.write_text(json.dumps(scan_meta_from_env(cfg["product"]["repository"]), indent=2) + "\n")
         return 0
     if not args.out_dir:
         parser.error("--out-dir is needed to write the report")

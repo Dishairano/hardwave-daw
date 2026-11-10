@@ -5,12 +5,15 @@ run-name: Security · ${{ github.ref_name }}
 # new advisory against something already shipped shows up without
 # waiting for a commit.
 #
-# The checks themselves live in secure-code-check.yml, so the release
-# runs exactly the same ones on its tag:
+# The checks themselves live in secure-code-check.yml, shared with the
+# Suite and the plug-ins, so the release runs exactly the same ones on
+# its tag:
 #
-# - Rust dependencies: known vulnerabilities, yanked crates, licences
-#   and sources, per deny.toml. A vulnerability fails; there is no warn.
-# - UI dependencies: npm audit on the lockfile, including build tools.
+# - Rust dependencies of the DAW and of the launcher: known
+#   vulnerabilities, yanked crates, licences and sources, per deny.toml.
+#   A vulnerability fails; there is no warn.
+# - npm dependencies: the interface with its build tools, and what the
+#   launcher ships.
 # - Secrets: gitleaks over the whole history.
 # - Static analysis: Semgrep's free security rules; a high finding fails.
 # - Fuzzing: every reader of outside input (songs, FL files, audio
@@ -46,6 +49,21 @@ jobs:
     name: Secure Code Check
     uses: ./.github/workflows/secure-code-check.yml
     with:
+      tools-ref: ${{ github.sha }}
+      cargo-manifests: |
+        Cargo.toml
+        installer/src-tauri/Cargo.toml
+      # The interface with its build tools; the launcher's shipped packages
+      # only (its vite 5 and tailwind 3 need major upgrades to clear their
+      # advisories and are audited once those are done).
+      npm-audit: |
+        packages/daw-ui
+        installer --omit=dev
+      semgrep-languages: rust typescript javascript
+      fuzz: true
+      # The audio crates link ALSA through alsa-sys.
+      fuzz-apt-packages: libasound2-dev pkg-config
+      content-policy-dir: packages/daw-ui
       fuzz-seconds: ${{ github.event_name == 'schedule' && 600 || 60 }}
     secrets:
       SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}

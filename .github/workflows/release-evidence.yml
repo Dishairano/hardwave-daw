@@ -1,0 +1,150 @@
+name: Secure Code Check evidence
+
+# The evidence for one release: the report (HTML and JSON) built from the
+# release run's own Secure Code Check results, signed with our key, the
+# SBOMs, and the public page as files ready to publish
+# (<product>-<version>-security-page.tar.gz). All attached to the GitHub
+# release. Called by a product's release workflow after the release is
+# published, because the report lists the SHA-256 of every file the
+# release carries:
+#
+#   evidence:
+#     needs: [secure-code-check, lint-and-test, release]
+#     permissions:
+#       contents: write
+#     uses: Dishairano/hardwave-daw/.github/workflows/release-evidence.yml@<sha>
+#     with:
+#       tools-ref: <sha>
+#       tag: ${{ needs.release.outputs.tag }}
+#       needs-json: ${{ toJSON(needs) }}
+#     secrets:
+#       SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+#
+# The secure-code-check-results artifact comes from the same run: the
+# release calls secure-code-check.yml on its tag first.
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: Commit of Dishairano/hardwave-daw to take the scripts (scripts/secure-code-check) from; the same one as in `uses:`
+        type: string
+        required: true
+      config:
+        description: The product's config file
+        type: string
+        default: security/secure-code-check/config.toml
+      tag:
+        description: The release tag, vX.Y.Z or vX.Y.Z-rcN
+        type: string
+        required: true
+      needs-json:
+        description: toJSON(needs) of the calling job; the release's own tests are read from it
+        type: string
+        required: true
+      authenticode-artifact:
+        description: Name of the artifact with authenticode.json (Windows signatures checked on the build machine), if any
+        type: string
+        default: ''
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY:
+        description: Signs the report
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    name: Secure Code Check evidence
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The date each exception was recorded comes from deny.toml's history.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Dishairano/hardwave-daw
+          ref: ${{ inputs.tools-ref }}
+          path: .scc-tools
+          sparse-checkout: scripts/secure-code-check
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: secure-code-check-results
+          path: ${{ runner.temp }}/scc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: inputs.authenticode-artifact != ''
+        continue-on-error: true
+        with:
+          name: ${{ inputs.authenticode-artifact }}
+          path: ${{ runner.temp }}/authenticode
+      - name: The release files, as people download them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag }}
+          WORK: ${{ runner.temp }}
+        run: |
+          set -e
+          if ! [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ]]; then
+            echo "::error::'$TAG_NAME' is not a release tag"; exit 1
+          fi
+          mkdir -p "$WORK/assets"
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --dir "$WORK/assets"
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq .publishedAt > "$WORK/released-at.txt"
+          # Earlier releases that carry a report, for the page's history.
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq \
+            '[.[] | select(.draft | not) | select(any(.assets[]; .name | endswith("-secure-code-check.json")))
+              | {version: (.tag_name | ltrimstr("v")), released_at: .published_at}]' > "$WORK/history.json"
+          ls -l "$WORK/assets"
+      - name: Write the report
+        env:
+          NEEDS_JSON: ${{ inputs.needs-json }}
+          TAG_NAME: ${{ inputs.tag }}
+          CONFIG: ${{ inputs.config }}
+          WORK: ${{ runner.temp }}
+        run: |
+          set -e
+          printf '%s' "$NEEDS_JSON" > "$WORK/release-needs.json"
+          # Without the build's signature record, Windows executables show
+          # as "not verified" rather than signed.
+          extra=()
+          if [ -f "$WORK/authenticode/authenticode.json" ]; then
+            extra=(--authenticode "$WORK/authenticode/authenticode.json")
+          fi
+          python3 .scc-tools/scripts/secure-code-check/report.py --repo . --config "$CONFIG" --scan-dir "$WORK/scc" \
+            --out-dir "$WORK/evidence" --tag "$TAG_NAME" --released-at "$(cat "$WORK/released-at.txt")" \
+            --release-needs "$WORK/release-needs.json" --assets-dir "$WORK/assets" "${extra[@]}"
+      - name: Sign the report
+        env:
+          SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+          WORK: ${{ runner.temp }}
+        run: .scc-tools/scripts/secure-code-check/sign.sh sign "$WORK"/evidence/*-secure-code-check.json "$WORK"/evidence/*-secure-code-check.html
+      - name: Build the public page
+        env:
+          TAG_NAME: ${{ inputs.tag }}
+          CONFIG: ${{ inputs.config }}
+          WORK: ${{ runner.temp }}
+        run: |
+          set -e
+          version="${TAG_NAME#v}"
+          product="$(python3 -c 'import sys; sys.path.insert(0, ".scc-tools/scripts/secure-code-check"); import config; print(config.load(sys.argv[1])["product"]["id"])' "$CONFIG")"
+          python3 .scc-tools/scripts/secure-code-check/page.py \
+            --report "$WORK/evidence/$product-$version-secure-code-check.json" \
+            --files "$WORK/evidence" --repo . --site-dir "$WORK/site" --history "$WORK/history.json"
+          tar -C "$WORK/site" -czf "$WORK/evidence/$product-$version-security-page.tar.gz" security
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag }}
+          WORK: ${{ runner.temp }}
+        run: gh release upload "$TAG_NAME" "$WORK"/evidence/* --repo "$GITHUB_REPOSITORY" --clobber
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-page
+          path: ${{ runner.temp }}/site
+          retention-days: 90

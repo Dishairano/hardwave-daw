@@ -126,6 +126,17 @@ footer .wrap { display: flex; gap: 18px; flex-wrap: wrap; }
 }
 """
 
+# Names for [not_checked] keys in a product's config.
+CHECK_NAMES = {
+    "rust_dependencies": "Rust dependencies",
+    "npm_dependencies": "npm dependencies",
+    "secrets": "Secrets",
+    "static_analysis": "Static analysis",
+    "fuzzing": "Fuzzing",
+    "content_policy": "Window content policy",
+    "sbom": "SBOM",
+}
+
 STATUS_CLASS = {"passed": "pass", "written": "pass", "signed": "pass", "failed": "fail"}
 
 
@@ -242,7 +253,7 @@ def hero(report: dict, eyebrow: str, badge: bool) -> str:
         <div class="stat"><b>{summary['checks']}</b><span>checks run</span></div>
         <div class="stat"><b>{summary['checks'] - summary['passed']}</b><span>checks not passed</span></div>
         <div class="stat"><b>{summary['advisory_exceptions']}</b><span>recorded exceptions, reasons below</span></div>
-        <div class="stat"><b>{summary['crates']}</b><span>Rust crates checked in the DAW</span></div>
+        <div class="stat"><b>{summary['crates']}</b><span>Rust crates checked</span></div>
       </div>
       {badge_html}
     </aside>
@@ -270,6 +281,11 @@ def results(report: dict, public: bool) -> str:
     licence_line = (f'<p class="lead">Licence exceptions: {licences["count"]}, each with its reason in '
                     f'<a href="{escape(licences["source"])}"><span class="mono">deny.toml</span></a>.</p>'
                     if licences["count"] else "")
+    not_checked = "".join(f"<li><b>{escape(CHECK_NAMES.get(n['check'], n['check'].replace('_', ' ')))}</b>: "
+                          f"{escape(n['why'])}</li>"
+                          for n in report.get("not_checked", []))
+    not_checked_html = (f"<h3>Not part of this product's checks</h3><ul class=\"findings\">{not_checked}</ul>"
+                        if not_checked else "")
     findings = ""
     if not public:
         sa = next((c for c in report["checks"] if c["id"] == "static-analysis"), {})
@@ -295,6 +311,7 @@ def results(report: dict, public: bool) -> str:
       <tbody>{exc_rows or '<tr><td colspan="3">None</td></tr>'}</tbody>
     </table></div>
     {licence_line}
+    {not_checked_html}
     {findings}
   </section>"""
 
@@ -310,7 +327,7 @@ HISTORY_STATUS = {
 def history_section(report: dict) -> str:
     hist = report.get("vulnerability_history") or {}
     entries = hist.get("entries") or []
-    if not entries:
+    if not entries and not hist.get("about"):
         return ""
     s = hist["summary"]
     median = s["median_days_to_fix"]
@@ -346,10 +363,10 @@ def history_section(report: dict) -> str:
       <div class="stat"><b>{median_text}</b><span>median days to fix ({s['fixed']} fixed)</span></div>
       <div class="stat"><b>{s['days_since_last'] if s['days_since_last'] is not None else '-'}</b><span>days since the last one was published</span></div>
     </div>
-    <p class="lead">Days open count from the later of the day the advisory was published and the first release that carried it, to the day it was fixed, accepted or stopped shipping (today, {plain_date(s['as_of'])}, while open). {s['accepted']} accepted with a reason, {s['no_longer_shipped']} ended when the Linux and macOS builds were paused.</p>
+    <p class="lead">Days open count from the later of the day the advisory was published and the first release that carried it, to the day it was fixed, accepted or stopped shipping (today, {plain_date(s['as_of'])}, while open). {s['accepted']} accepted with a reason, {s['no_longer_shipped']} no longer shipped.</p>
     <div class="tbl"><table>
       <thead><tr><th>Advisory</th><th>What it was</th><th>Published</th><th>Resolved</th><th>Days open</th><th>Release</th><th>Status</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
+      <tbody>{''.join(rows) or '<tr><td colspan="7">No advisory has affected a shipped build.</td></tr>'}</tbody>
     </table></div>
     {not_counted_html}
     <h3>How this list is made</h3>
@@ -370,7 +387,7 @@ def sbom_table(report: dict, link: bool) -> str:
     return f"""
   <section>
     <h2>What went into it (SBOM)</h2>
-    <p class="lead">Every component in what ships, with version and licence, in CycloneDX {escape(report['sbom'][0]['spec_version'])} JSON. Rust crates for the Windows build with every feature on; npm packages that the interface carries at run time.</p>
+    <p class="lead">Every component in what ships, with version and licence, in CycloneDX {escape(report['sbom'][0]['spec_version'])} JSON. {escape(report.get('sbom_note', ''))}</p>
     <div class="tbl"><table>
       <thead><tr><th>Part</th><th>Components</th><th>SHA-256</th></tr></thead>
       <tbody>{rows}</tbody>
@@ -378,30 +395,41 @@ def sbom_table(report: dict, link: bool) -> str:
   </section>"""
 
 
+def has_exe(report: dict) -> bool:
+    return any(f["name"].lower().endswith(".exe") for f in report["release_files"])
+
+
 def files_table(report: dict) -> str:
     if not report.get("release"):
         return ""
+    windows = has_exe(report)
     rows = []
     for f in report["release_files"]:
-        sig = f.get("windows_signature")
-        if sig:
-            cls = "pass" if sig.get("status") == "Valid" else "fail"
-            sig_html = f'<span class="st {cls}">{escape(sig.get("status") or "")}</span>'
-            if sig.get("signer"):
-                sig_html += f"<small>{escape(sig['signer'])}</small>"
-        else:
-            sig_html = '<span class="st na">Not an executable</span>' if not f["name"].lower().endswith(".exe") \
-                else '<span class="st na">Not verified</span>'
+        sig_html = ""
+        if windows:
+            sig = f.get("windows_signature")
+            if sig:
+                cls = "pass" if sig.get("status") == "Valid" else "fail"
+                sig_html = f'<span class="st {cls}">{escape(sig.get("status") or "")}</span>'
+                if sig.get("signer"):
+                    sig_html += f"<small>{escape(sig['signer'])}</small>"
+            else:
+                sig_html = '<span class="st na">Not an executable</span>' if not f["name"].lower().endswith(".exe") \
+                    else '<span class="st na">Not verified</span>'
+            sig_html = f"<td>{sig_html}</td>"
         rows.append(f"<tr><td class=\"mono\">{escape(f['name'])}<small>{f['size']:,} bytes</small></td>"
-                    f"<td class=\"mono\">{escape(f['sha256'])}</td><td>{sig_html}</td></tr>")
+                    f"<td class=\"mono\">{escape(f['sha256'])}</td>{sig_html}</tr>")
     tag = report["release"]["tag"]
+    columns = 3 if windows else 2
+    head = "<th>File</th><th>SHA-256</th>" + ("<th>Windows signature</th>" if windows else "")
+    note = report.get("release_files_note", "")
     return f"""
   <section>
     <h2>Release files</h2>
-    <p class="lead">Every file on the GitHub release for {escape(tag)}, built by <span class="mono">.github/workflows/release.yml</span> from commit <span class="mono">{escape(report['source']['commit'][:8])}</span> on GitHub-hosted runners. The hashes are part of the signed report, so a file that matches is the one our build published. GitHub build attestations (SLSA provenance) are not part of this release yet; this page will say so when they are.</p>
+    <p class="lead">Every file on the GitHub release for {escape(tag)}, built by <span class="mono">.github/workflows/release.yml</span> from commit <span class="mono">{escape(report['source']['commit'][:8])}</span>. {escape(note)} The hashes are part of the signed report, so a file that matches is the one our build published. GitHub build attestations (SLSA provenance) are not part of this release yet; this page will say so when they are.</p>
     <div class="tbl"><table>
-      <thead><tr><th>File</th><th>SHA-256</th><th>Windows signature</th></tr></thead>
-      <tbody>{''.join(rows) or '<tr><td colspan="3">No files recorded</td></tr>'}</tbody>
+      <thead><tr>{head}</tr></thead>
+      <tbody>{''.join(rows) or f'<tr><td colspan="{columns}">No files recorded</td></tr>'}</tbody>
     </table></div>
   </section>"""
 
@@ -424,7 +452,12 @@ def verify_commands(report: dict) -> str:
     base = base_name(report)
     signing = report["signing"]
     first_exe = next((f["name"] for f in report["release_files"] if f["name"].lower().endswith(".exe")),
-                     "HardwaveDAW-Setup.exe")
+                     None)
+    first_file = first_exe or next((f["name"] for f in report["release_files"]), "the-file-you-downloaded")
+    windows_step = f"""
+      <li><b>Check the Windows signature</b>
+<pre>Get-AuthenticodeSignature .\\{escape(first_exe)}</pre>
+      </li>""" if first_exe else ""
     ident, ns = escape(signing["identity"]), escape(signing["namespace"])
     return f"""
     <ol class="steps">
@@ -444,14 +477,11 @@ cmd /c "ssh-keygen -Y verify -f allowed_signers -I {ident} -n {ns} -s {escape(ba
       <li><b>Compare a file's hash with the report</b>
         <p>The hash must match the one in the release files table; the SBOM files work the same way.</p>
 <pre><span class="c"># macOS or Linux</span>
-shasum -a 256 {escape(first_exe)}
+shasum -a 256 {escape(first_file)}
 
 <span class="c"># Windows PowerShell</span>
-Get-FileHash .\\{escape(first_exe)} -Algorithm SHA256</pre>
-      </li>
-      <li><b>Check the Windows signature</b>
-<pre>Get-AuthenticodeSignature .\\{escape(first_exe)}</pre>
-      </li>
+Get-FileHash .\\{escape(first_file)} -Algorithm SHA256</pre>
+      </li>{windows_step}
     </ol>"""
 
 
