@@ -4,6 +4,7 @@
 //! reads immutably — no locks in the hot path. A byte-size cap with FIFO eviction
 //! keeps memory bounded across long sessions with many samples loaded.
 
+use hardwave_dsp::note_tune::TakeAnalysis;
 use hardwave_dsp::waveform_colour::WaveformColours;
 use parking_lot::RwLock;
 use std::collections::{HashMap, VecDeque};
@@ -105,6 +106,9 @@ struct PoolInner {
     trims: HashMap<(String, u32), (usize, u64)>,
     /// Each buffer's waveform colours, with its address, as `levels`.
     colours: HashMap<String, (usize, Arc<WaveformColours>)>,
+    /// Each take's notes and periods, for tuning notes by hand, with the
+    /// buffer's address, as `levels`.
+    takes: HashMap<String, (usize, Arc<TakeAnalysis>)>,
 }
 
 impl PoolInner {
@@ -116,6 +120,7 @@ impl PoolInner {
             levels: HashMap::new(),
             trims: HashMap::new(),
             colours: HashMap::new(),
+            takes: HashMap::new(),
         }
     }
 }
@@ -171,6 +176,7 @@ impl AudioPool {
                     inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
                 }
                 inner.colours.remove(&oldest_id);
+                inner.takes.remove(&oldest_id);
             } else {
                 break;
             }
@@ -244,11 +250,77 @@ impl AudioPool {
         Some(colours)
     }
 
+    /// What a take holds, for tuning its notes by hand: its pitch, its
+    /// notes and its periods (`hardwave_dsp::note_tune::analyse`, on the
+    /// mix of its channels), worked out the first time it is asked for.
+    /// `progress` hears how far along that is. Not for the audio thread:
+    /// the first ask follows the pitch of the whole buffer.
+    pub fn take_analysis(
+        &self,
+        id: &str,
+        progress: &mut dyn FnMut(f32),
+    ) -> Option<Arc<TakeAnalysis>> {
+        let buffer = self.get(id)?;
+        let address = Arc::as_ptr(&buffer) as usize;
+        if let Some((at, take)) = self.inner.read().takes.get(id) {
+            if *at == address {
+                return Some(take.clone());
+            }
+        }
+        let channels = buffer.channels.len().max(1);
+        let mono: Vec<f32> = (0..buffer.num_frames)
+            .map(|i| {
+                buffer
+                    .channels
+                    .iter()
+                    .map(|c| c.get(i).copied().unwrap_or(0.0))
+                    .sum::<f32>()
+                    / channels as f32
+            })
+            .collect();
+        let take = Arc::new(hardwave_dsp::note_tune::analyse(
+            &mono,
+            buffer.sample_rate as f64,
+            progress,
+        ));
+        self.inner
+            .write()
+            .takes
+            .insert(id.to_string(), (address, take.clone()));
+        Some(take)
+    }
+
+    /// Take every buffer whose id `drop` picks out of the pool, and hand
+    /// them back: the caller decides where the memory is let go.
+    pub fn remove_where(&self, drop: impl Fn(&str) -> bool) -> Vec<Arc<AudioBuffer>> {
+        // Picked outside the lock: `drop` may ask the pool itself, and a
+        // second read lock on this thread waits behind any writer queued.
+        let all: Vec<String> = self.inner.read().buffers.keys().cloned().collect();
+        let ids: Vec<String> = all.into_iter().filter(|id| drop(id)).collect();
+        let mut inner = self.inner.write();
+        let mut taken = Vec::with_capacity(ids.len());
+        for id in ids {
+            inner.levels.remove(&id);
+            inner.colours.remove(&id);
+            inner.takes.remove(&id);
+            inner.trims.retain(|(k, _), _| *k != id);
+            if let Some(old) = inner.buffers.remove(&id) {
+                inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
+                taken.push(old);
+            }
+            if let Some(pos) = inner.order.iter().position(|x| *x == id) {
+                inner.order.remove(pos);
+            }
+        }
+        taken
+    }
+
     /// Remove a buffer by ID.
     pub fn remove(&self, id: &str) {
         let mut inner = self.inner.write();
         inner.levels.remove(id);
         inner.colours.remove(id);
+        inner.takes.remove(id);
         inner.trims.retain(|(k, _), _| k != id);
         if let Some(old) = inner.buffers.remove(id) {
             inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
@@ -329,6 +401,7 @@ impl AudioPool {
                     inner.bytes_used = inner.bytes_used.saturating_sub(old.bytes());
                 }
                 inner.colours.remove(&oldest_id);
+                inner.takes.remove(&oldest_id);
             } else {
                 break;
             }
@@ -548,5 +621,49 @@ mod tests {
             "the second ask is the cached one"
         );
         assert_eq!(pool.trim_end("nope", 0.5), None);
+    }
+
+    #[test]
+    fn buffers_taken_out_are_handed_back_and_counted_off() {
+        let pool = AudioPool::new();
+        pool.insert("vocal".into(), buf(1));
+        pool.insert("vocal#hw-tune:1".into(), buf(1));
+        pool.insert("vocal#hw-tune:1#hw-stretch:2".into(), buf(2));
+        let before = pool.stats().bytes_used;
+        // The picker may ask the pool itself.
+        let taken = pool.remove_where(|id| id.contains("#hw-tune:") && pool.contains("vocal"));
+        assert_eq!(taken.len(), 2);
+        assert!(pool.contains("vocal"));
+        assert!(!pool.contains("vocal#hw-tune:1"));
+        assert_eq!(pool.stats().entry_count, 1);
+        assert_eq!(
+            before - pool.stats().bytes_used,
+            buf(1).bytes() + buf(2).bytes()
+        );
+    }
+
+    #[test]
+    fn a_take_is_worked_out_once_per_buffer() {
+        let pool = AudioPool::new();
+        let tone: Vec<f32> = (0..24_000)
+            .map(|i| (std::f32::consts::TAU * 220.0 * i as f32 / 48_000.0).sin() * 0.5)
+            .collect();
+        pool.insert(
+            "t".into(),
+            AudioBuffer {
+                channels: vec![tone.clone(), tone],
+                sample_rate: 48_000,
+                num_frames: 24_000,
+            },
+        );
+        let mut asked = 0;
+        let first = pool.take_analysis("t", &mut |_| asked += 1).unwrap();
+        assert!(asked > 0, "the first ask reports how far along it is");
+        assert_eq!(first.notes.len(), 1);
+        let again = pool
+            .take_analysis("t", &mut |_| panic!("worked out twice"))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        assert!(pool.take_analysis("nope", &mut |_| {}).is_none());
     }
 }

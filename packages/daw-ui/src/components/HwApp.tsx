@@ -29,10 +29,12 @@ import { AutomationClipLane } from './AutomationClipLane'
 import { KickSynthEditor } from './KickSynthEditor'
 import type { AutomationTargetInfo } from '../stores/trackStore'
 import { SNAP_VALUES, useTransportStore } from '../stores/transportStore'
-import { useTempoMapStore } from '../stores/tempoMapStore'
+import { tempoChanged, tickOfSample, useTempoMapStore } from '../stores/tempoMapStore'
+import { TEMPO_COLOR, TEMPO_LANE_HEIGHT, tempoSummary } from './arrangement/tempoLaneDraw'
 import { barBeatAtTick, PPQ as PPQ_TICKS } from '../utils/meter'
 import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
-import { useTrackStore } from '../stores/trackStore'
+import { useTrackStore, type TrackInfo } from '../stores/trackStore'
+import { usePluginCatalogStore } from '../stores/pluginCatalogStore'
 import { usePatternStore } from '../stores/patternStore'
 import { usePickerStore } from '../stores/pickerStore'
 import { usePlaylistToolStore, type PlaylistTool } from '../stores/playlistToolStore'
@@ -101,9 +103,13 @@ function useTransportClock() {
   const sampleRate = useTransportStore(s => s.sampleRate)
   const positionSamples = useTransportStore(s => s.positionSamples)
   const segments = useTempoMapStore(s => s.segments)
+  // Read so the clock follows a new map; the position goes through it.
+  useTempoMapStore(s => s.entries)
 
   const seconds = sampleRate > 0 ? positionSamples / sampleRate : 0
-  const beats = bpm > 0 ? (seconds * bpm / 60) : 0
+  // Bars and beats through the tempo map, as the playlist counts them: at
+  // one tempo the read-out named another bar than the playhead was in.
+  const beats = bpm > 0 ? tickOfSample(positionSamples, sampleRate) / PPQ_TICKS : 0
   const { bar, beat: beatInBar } = barBeatAtTick(segments, beats * PPQ_TICKS)
   const beat = Math.floor(beatInBar)
   const tick = Math.floor((beats % 1) * 96)
@@ -822,6 +828,7 @@ async function tempoChangeAtPlayhead(bpm: number, setBpm: (v: number) => void) {
     const tick = await invoke<number>('get_playhead_tick')
     if (!tick) { setBpm(v); return }
     await invoke('add_tempo_entry', { tick, bpm: v, ramp: 'step' })
+    tempoChanged()
     useNotificationStore.getState().push('info', `Tempo ${v.toFixed(1)} BPM from the playhead`, {
       detail: 'Edit or remove it under Edit events.',
     })
@@ -1031,7 +1038,7 @@ function SaveAsButton({ onClick }: { onClick: () => void }) {
  *  On a beat is within 5 % of a beat either side of it. */
 function syncLedState(s: { playing: boolean; positionSamples: number; sampleRate: number; bpm: number; timeSigNumerator: number }): '' | ' on-beat' | ' on-bar' {
   if (!s.playing || s.sampleRate <= 0 || s.bpm <= 0) return ''
-  const beats = (s.positionSamples / s.sampleRate) * s.bpm / 60
+  const beats = tickOfSample(s.positionSamples, s.sampleRate) / PPQ_TICKS
   const frac = beats - Math.floor(beats)
   if (frac >= 0.05 && frac <= 0.95) return ''
   const beat = Math.round(beats)
@@ -1270,7 +1277,24 @@ function HwPicker() {
 
 // ─── Playlist tools row ──────────────────────────────────────────────────────
 
-function HwPlaylistTools() {
+/** Shows and hides the tempo lane under the ruler. */
+function TempoLaneChip() {
+  const on = useGeneralPrefsStore(s => s.tempoLaneShown)
+  const setOn = useGeneralPrefsStore(s => s.setTempoLaneShown)
+  return (
+    <button
+      type="button"
+      className="fl-tool-pill"
+      onClick={() => setOn(!on)}
+      title={on ? 'Tempo lane shown: click to hide it' : 'Tempo lane hidden: click to show the song\'s tempo under the ruler'}
+      style={on ? { background: 'rgba(245,176,65,0.16)', borderColor: 'rgba(245,176,65,0.45)', color: TEMPO_COLOR } : undefined}
+    >
+      <small style={on ? { color: TEMPO_COLOR } : undefined}>TEMPO</small>{on ? '✓' : ''}
+    </button>
+  )
+}
+
+export function HwPlaylistTools() {
   const snapValue = useTransportStore(s => s.snapValue)
   const snapEnabled = useTransportStore(s => s.snapEnabled)
   const toggleSnap = useTransportStore(s => s.toggleSnap)
@@ -1337,6 +1361,7 @@ function HwPlaylistTools() {
         </button>
       ))}
       <div className="fl-tool-sep" />
+      <TempoLaneChip />
       <button
         type="button"
         className={`fl-tool-pill${snapEnabled ? ' on' : ''}`}
@@ -1391,12 +1416,44 @@ function HwPlaylistTools() {
 // rows so the totals line up.
 const PLAYLIST_TOTAL_SLOTS = 500
 
-/** The small line under a track name: what kind of track it is. */
-function trackSubtitle(t: { kind?: string; automationLanes: unknown[] }): string {
+/** The small line under a track name: what kind of track it is, and for
+ *  audio whether its clips follow the tempo or keep their speed. */
+function trackSubtitle(t: {
+  kind?: string
+  automationLanes: unknown[]
+  clips?: { kind: string; treatment?: { followBpm?: number | null }; warpMarkers?: unknown[] }[]
+}): string {
   const kind = (t.kind || '').toLowerCase()
   const base = kind === 'audio' ? 'Audio' : kind === 'bus' ? 'Bus' : kind === 'return' ? 'Return' : kind ? kind[0].toUpperCase() + kind.slice(1) : 'Track'
+  const parts = [base]
+  const audio = (t.clips ?? []).filter((c) => c.kind === 'audio')
+  if (audio.length > 0) {
+    const follows = audio.filter((c) => (c.treatment?.followBpm ?? 0) > 0 || (c.warpMarkers?.length ?? 0) > 0).length
+    parts.push(follows === audio.length ? 'follows tempo' : follows === 0 ? 'keeps its speed' : 'some follow tempo')
+  }
   const lanes = t.automationLanes.length
-  return lanes > 0 ? `${base} · ${lanes} lane${lanes === 1 ? '' : 's'}` : base
+  if (lanes > 0) parts.push(`${lanes} lane${lanes === 1 ? '' : 's'}`)
+  return parts.join(' · ')
+}
+
+/** The tempo lane's name, beside the lane: the song's tempos in order. */
+function HwTempoLaneHead() {
+  const entries = useTempoMapStore(s => s.entries)
+  return (
+    <div
+      style={{
+        height: TEMPO_LANE_HEIGHT, flexShrink: 0, position: 'relative', zIndex: 4,
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4, padding: '8px 10px',
+        background: '#0e0e10', borderBottom: '1px solid rgba(255,255,255,0.07)',
+        backgroundImage: 'linear-gradient(180deg, rgba(245,176,65,.05), rgba(245,176,65,.01))',
+      }}
+      title="The song's tempo. Right-click the lane to add a tempo change; drag a point to change it."
+    >
+      <b style={{ color: TEMPO_COLOR, fontSize: 12, letterSpacing: '.06em', fontFamily: 'var(--sans)' }}>TEMPO</b>
+      <span style={{ font: '500 11px "JetBrains Mono", ui-monospace, monospace', color: 'var(--text-dim)' }}>{tempoSummary(entries)}</span>
+      <span style={{ font: '500 11px "JetBrains Mono", ui-monospace, monospace', color: '#52525b' }}>right-click to add</span>
+    </div>
+  )
 }
 
 export function HwPlaylistTracks() {
@@ -1418,11 +1475,18 @@ export function HwPlaylistTracks() {
   const toggleArm = useTrackStore(s => s.toggleArm)
   const toggleMute = useTrackStore(s => s.toggleMute)
   const toggleSolo = useTrackStore(s => s.toggleSolo)
+  const tempoLaneShown = useGeneralPrefsStore(s => s.tempoLaneShown)
   const addAutomationLane = useTrackStore(s => s.addAutomationLane)
   const createAutomationClip = useTrackStore(s => s.createAutomationClip)
   const setTrackInstrument = useTrackStore(s => s.setTrackInstrument)
   const selectedTrackId = useTrackStore(s => s.selectedTrackId)
   const selectTrack = useTrackStore(s => s.selectTrack)
+  // A channel with an instrument plug-in plays that, and the built-in
+  // voice under it is silent: its badge said SIN on a sampler channel.
+  const catalog = usePluginCatalogStore(s => s.plugins)
+  useEffect(() => { void usePluginCatalogStore.getState().ensureLoaded() }, [])
+  const pluginInstrument = (t: TrackInfo) =>
+    t.inserts?.find(s => catalog.find(p => p.id === s.pluginId)?.category === 'Instrument')?.pluginName.replace(/^Hardwave /, '')
   const [trackMenu, setTrackMenu] = useState<{ trackId: string; x: number; y: number } | null>(null)
   const placeholderCount = Math.max(0, PLAYLIST_TOTAL_SLOTS - tracks.length)
   // Only the rows in view are drawn. All 500 were, each with its buttons,
@@ -1450,6 +1514,7 @@ export function HwPlaylistTracks() {
   return (
     <div className="fl-pl-tracks" onWheel={onWheel} ref={columnRef}>
       <div className="fl-pl-tracks-head">TRACKS</div>
+      {tempoLaneShown && <HwTempoLaneHead />}
       <div className="fl-pl-tracks-list" style={{ transform: `translateY(${-scrollY}px)` }}>
         <div style={{ height: first * rowHeight, flexShrink: 0 }} aria-hidden="true" />
         {rows.slice(first, last).map((r) => {
@@ -1489,7 +1554,9 @@ export function HwPlaylistTracks() {
               <span className="strip" />
               <span className="nm">
                 <b>{t.name}</b>
-                {isMidi ? (
+                {isMidi && pluginInstrument(t) ? (
+                  <small>{pluginInstrument(t)}</small>
+                ) : isMidi ? (
                   <HwInstrumentPicker
                     trackId={t.id}
                     current={(t.instrument as any) || 'builtin_sine'}

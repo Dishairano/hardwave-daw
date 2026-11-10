@@ -98,7 +98,13 @@ pub struct Collab {
     song: Mutex<std::collections::HashMap<&'static str, SectionClock>>,
     /// Who this side is when two versions of a part tie: random per room.
     author: AtomicU64,
+    /// The project format the other side said it has, once it has said.
+    peer_format: Mutex<Option<u32>>,
 }
+
+/// Why a room with a build that would lose this side's work ends.
+const ANOTHER_VERSION: &str =
+    "The other person has a different version of Hardwave DAW. Update both to work together.";
 
 /// One part of the song as last sent or taken.
 ///
@@ -464,6 +470,7 @@ impl Collab {
         *self.outbox.lock() = Some(outbox);
         self.song_consent.store(false, Ordering::SeqCst);
         self.awaiting_song.store(false, Ordering::SeqCst);
+        *self.peer_format.lock() = None;
         self.running.store(true, Ordering::Relaxed);
         self.received.store(0, Ordering::Relaxed);
         self.sent.store(0, Ordering::Relaxed);
@@ -488,6 +495,56 @@ impl Collab {
     /// Keep the connection's tasks, so `stop` can end them.
     pub fn hold(&self, task: tokio::task::JoinHandle<()>) {
         self.tasks.lock().push(task);
+    }
+
+    /// This side's project format, sent on joining and whenever someone
+    /// arrives, as a part of the song (`Project::FORMAT_SECTION`) so the
+    /// room service passes it on unchanged. A build from before it ignores
+    /// a part it does not know.
+    pub fn format_message(&self) -> SyncKind {
+        SyncKind::SongState {
+            section: hardwave_project::Project::FORMAT_SECTION.to_string(),
+            version: 0,
+            author: self.author.load(Ordering::Relaxed),
+            blob: hardwave_project::Project::format_section(),
+        }
+    }
+
+    /// Check what the other side sent against this build's project format,
+    /// before it is applied.
+    ///
+    /// Two builds that keep different fields would each drop the other's
+    /// from every track they send back: an older build has no playlist
+    /// rows, so taking its tracks would put every clip of this side's song
+    /// back on no row. Such a room ends with a message saying why. The
+    /// other side's format part is answered here (`Ok(true)`: nothing more
+    /// to do with it). A build too old to send one is known by its tracks
+    /// and arrangements, which lack the fields; a track that has them is
+    /// taken, even before that side's format arrives.
+    pub fn check_peer(&self, kind: &SyncKind) -> Result<bool, String> {
+        use hardwave_project::Project;
+        match kind {
+            SyncKind::SongState { section, blob, .. } if section == Project::FORMAT_SECTION => {
+                match Project::read_format_section(blob) {
+                    Some(v) if v == hardwave_project::project::FORMAT_VERSION => {
+                        *self.peer_format.lock() = Some(v);
+                        Ok(true)
+                    }
+                    _ => Err(ANOTHER_VERSION.into()),
+                }
+            }
+            _ if self.peer_format.lock().is_some() => Ok(false),
+            SyncKind::TrackState { blob, .. } if !Project::track_blob_knows_layout(blob) => {
+                Err(ANOTHER_VERSION.into())
+            }
+            SyncKind::SongState { section, blob, .. }
+                if section == "arrangements"
+                    && !Project::arrangements_section_knows_layout(blob) =>
+            {
+                Err(ANOTHER_VERSION.into())
+            }
+            _ => Ok(false),
+        }
     }
 
     /// Send something that is not an edit (an answer, a heartbeat): it
@@ -1135,12 +1192,14 @@ mod tests {
                 fade_out_curve: Default::default(),
                 source_file: file.into(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: id.clone(),
             position_ticks: 0,
             length_ticks: 1,
             lane: 0,
             color: None,
+            row: None,
         };
         let t = project.track_mut(&id).unwrap();
         t.clips.push(clip("/home/dishaion/Secret Project/vox.wav"));
@@ -1203,6 +1262,86 @@ mod tests {
         ));
         collab.stop("left");
         assert!(!collab.may_send_song(), "leaving takes the consent back");
+    }
+
+    fn part(section: &str, blob: Vec<u8>) -> SyncKind {
+        SyncKind::SongState {
+            section: section.into(),
+            version: 1,
+            author: 1,
+            blob,
+        }
+    }
+
+    /// Both sides say their project format on joining; a side on another
+    /// one ends the room instead of dropping this side's playlist rows.
+    #[test]
+    fn a_room_partner_on_another_project_format_ends_the_room() {
+        let ours = Collab::default();
+        let SyncKind::SongState { section, blob, .. } = ours.format_message() else {
+            panic!("the format goes as a part of the song");
+        };
+        assert_eq!(section, "format");
+        assert!(
+            !hardwave_project::Project::SONG_SECTIONS.contains(&"format"),
+            "not a part this build or an older one takes into the song"
+        );
+        let theirs = Collab::default();
+        assert_eq!(theirs.check_peer(&part("format", blob)), Ok(true));
+        assert_eq!(
+            Collab::default().check_peer(&part("format", vec![2])),
+            Err(ANOTHER_VERSION.to_string()),
+            "a song in format 2 on the other side"
+        );
+        // Once the other side said the same format, its tracks are taken.
+        let track = hardwave_project::Track::new_audio("a".into(), "A".into());
+        let state = |blob| SyncKind::TrackState {
+            track_id: "a".into(),
+            index: 1,
+            blob,
+        };
+        assert_eq!(
+            theirs.check_peer(&state(hardwave_project::Project::track_blob(&track))),
+            Ok(false)
+        );
+    }
+
+    /// A build from before FL's three lists sends no format at all: its
+    /// first track ends the room, before it is taken. A current build's
+    /// track is taken even when it arrives before that side's format.
+    #[test]
+    fn a_track_from_a_build_before_the_three_lists_ends_the_room() {
+        let track = hardwave_project::Track::new_audio("a".into(), "A".into());
+        let state = |blob| SyncKind::TrackState {
+            track_id: "a".into(),
+            index: 1,
+            blob,
+        };
+        let collab = Collab::default();
+        assert_eq!(
+            collab.check_peer(&state(hardwave_project::Project::track_blob(&track))),
+            Ok(false)
+        );
+        assert_eq!(
+            collab.check_peer(&state(hardwave_project::Project::older_track_blob(&track))),
+            Err(ANOTHER_VERSION.to_string())
+        );
+        // Edits that carry no fields of the song are fine either way.
+        assert_eq!(collab.check_peer(&fader()), Ok(false));
+        let song = song();
+        assert_eq!(
+            collab.check_peer(&part(
+                "arrangements",
+                song.song_section("arrangements").unwrap()
+            )),
+            Ok(false)
+        );
+        // A new room forgets what the last one said.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let blob = hardwave_project::Project::format_section();
+        assert_eq!(collab.check_peer(&part("format", blob)), Ok(true));
+        collab.begin("r", "CODE", true, tx);
+        assert!(collab.peer_format.lock().is_none());
     }
 
     #[test]

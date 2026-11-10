@@ -17,6 +17,14 @@ pub struct AutomationClip {
     pub length_ticks: u64,
     pub color_argb: u32,
     pub lane: AutomationLane,
+    /// The playlist row it is drawn on (see `ClipPlacement::row`).
+    #[serde(default)]
+    pub row: Option<u32>,
+    /// The track whose parameter it moves, when that is not the track it
+    /// sits on: FL's automation clip is a channel of its own, placed on
+    /// any row, moving a knob somewhere else. None is the track it sits on.
+    #[serde(default)]
+    pub target_track: Option<crate::track::TrackId>,
 }
 
 /// Options returned by a right-click on an automation point — the UI
@@ -51,7 +59,10 @@ impl AutomationClip {
                 target: target_clone,
                 points: Vec::new(),
                 visible: true,
+                row: None,
             },
+            row: None,
+            target_track: None,
         }
     }
 

@@ -16,6 +16,8 @@ pub fn undo(state: State<AppState>) -> bool {
     let ok = engine.undo();
     if ok {
         engine.rebuild_graph();
+        // The step may bring back another tempo.
+        crate::commands::project::transport_follows_map(&engine);
         // An arm can come back or go away with the step.
         let _ = engine.follow_armed_inputs();
     }
@@ -37,6 +39,7 @@ pub fn redo(state: State<AppState>) -> bool {
     let ok = engine.redo();
     if ok {
         engine.rebuild_graph();
+        crate::commands::project::transport_follows_map(&engine);
         // An arm can come back or go away with the step.
         let _ = engine.follow_armed_inputs();
     }

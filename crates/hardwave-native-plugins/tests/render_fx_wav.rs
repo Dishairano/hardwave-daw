@@ -64,12 +64,14 @@ fn build_sine_engine() -> (DawEngine, String) {
                 // to reading source_path as the file location.
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: track_id.clone(),
             position_ticks: 0,
             length_ticks: 1_000_000,
             lane: 0,
             color: None,
+            row: None,
         });
     }
     drop(project);

@@ -135,3 +135,105 @@
 .sw-targets button.is-on { background: var(--hwf-knob); color: var(--hwf-txt); }
 .sw-targets button:disabled { cursor: default; opacity: 0.5; }
 .sw-cols.is-two { padding-top: 0; }
+
+/* the switch over the bottom view: the waveform or the notes */
+.sw-viewbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 6px;
+  min-height: 30px;
+}
+.sw-viewbar > .hwf-lab { margin-right: 2px; }
+.sw-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--hwf-page);
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+}
+.sw-seg button {
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--hwf-dim);
+  font: 600 11px Inter, sans-serif;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.sw-seg button:hover { color: var(--hwf-txt); }
+.sw-seg button.is-on { background: var(--hwf-knob); color: var(--hwf-txt); }
+.sw-viewbar .hwf-select { height: 26px; font-size: 12px; }
+.sw-viewbar .hwf-select::after { top: 9px; }
+.sw-tuneall {
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--hwf-red);
+  color: #fff;
+  font: 600 12px Inter, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sw-tuneall:hover:not(:disabled) { background: var(--hwf-red2); }
+.sw-tuneall:disabled { opacity: 0.4; cursor: default; }
+
+/* the notes view: a piano grid with the take's notes on it */
+.sw-notes-scroll {
+  margin: 0 8px;
+  height: 236px;
+  overflow: auto;
+  border-radius: 6px 6px 0 0;
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+  background: #0b0b0e;
+  position: relative;
+}
+.sw-notes-keys {
+  display: block;
+  flex: none;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid var(--hwf-line);
+  font-family: Inter, sans-serif;
+}
+.sw-notes-wait {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--hwf-sub);
+  font-size: 12px;
+}
+.sw-progress {
+  width: 240px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hwf-field);
+  overflow: hidden;
+}
+.sw-progress i { display: block; height: 100%; background: var(--hwf-red); transition: width 0.15s; }
+.sw-notes-side {
+  margin: 0 8px 8px;
+  min-height: 34px;
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  border-radius: 0 0 6px 6px;
+  box-shadow: inset 0 0 0 1px var(--hwf-line);
+  background: var(--hwf-panel);
+  color: var(--hwf-sub);
+  font-size: 12px;
+}
+.sw-notes-side b { color: var(--hwf-txt); font-weight: 600; }
+.sw-notes-side .hwf-check { font-size: 12px; }
+.sw-drift { display: inline-flex; align-items: center; gap: 6px; }
+.sw-drift input { width: 90px; accent-color: var(--hwf-red); }

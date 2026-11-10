@@ -9,6 +9,9 @@
 //! them apart is a different problem; here a chord comes out as
 //! whichever note is loudest, which is honest rather than wrong.
 
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
+use std::sync::Arc;
+
 /// A note heard in a recording.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetectedNote {
@@ -59,91 +62,156 @@ impl Default for Settings {
 /// highest: the highest is as often an octave down, which is what
 /// makes a transcription sound wrong in a way that is hard to find.
 pub fn window_pitch(window: &[f32], settings: &Settings) -> Option<f64> {
-    let n = window.len();
-    if n < 128 {
-        return None;
-    }
-    let energy: f32 = window.iter().map(|s| s * s).sum::<f32>() / n as f32;
-    if energy.sqrt() < settings.silence_floor {
-        return None;
-    }
+    PitchTracker::new(window.len()).pitch(window, settings)
+}
 
-    let min_lag = (settings.sample_rate / settings.highest_hz)
-        .floor()
-        .max(2.0) as usize;
-    let max_lag = (settings.sample_rate / settings.lowest_hz).ceil() as usize;
-    let max_lag = max_lag.min(n / 2);
-    if min_lag >= max_lag {
-        return None;
-    }
+/// What `window_pitch` works with, kept between windows: a long take is
+/// thousands of windows, and planning an FFT and allocating its buffers
+/// for each was most of the cost.
+pub struct PitchTracker {
+    forward: Arc<dyn Fft<f64>>,
+    inverse: Arc<dyn Fft<f64>>,
+    spectrum: Vec<Complex<f64>>,
+    scratch: Vec<Complex<f64>>,
+    /// Running sums of the squared samples: `energy[k]` is the first k.
+    energy: Vec<f64>,
+    difference: Vec<f64>,
+    normalised: Vec<f64>,
+}
 
-    // Normalised difference, the heart of YIN: small where the wave
-    // repeats itself.
-    let mut difference = vec![0.0f64; max_lag + 1];
-    for (lag, slot) in difference
-        .iter_mut()
-        .enumerate()
-        .take(max_lag + 1)
-        .skip(min_lag)
-    {
-        let mut sum = 0.0f64;
-        for i in 0..(n - lag) {
-            let d = window[i] as f64 - window[i + lag] as f64;
-            sum += d * d;
-        }
-        *slot = sum / (n - lag) as f64;
-    }
-
-    // Cumulative mean normalisation, so the measure is comparable
-    // across lags and a threshold means the same thing everywhere.
-    let mut running = 0.0f64;
-    let mut normalised = vec![1.0f64; max_lag + 1];
-    for lag in min_lag..=max_lag {
-        running += difference[lag];
-        if running > 0.0 {
-            normalised[lag] = difference[lag] * (lag - min_lag + 1) as f64 / running;
+impl PitchTracker {
+    /// For windows of up to `window_len` samples.
+    pub fn new(window_len: usize) -> Self {
+        // Twice the window, so the circular correlation an FFT gives is
+        // the plain one for every lag a window can have.
+        let len = (window_len.max(1) * 2).next_power_of_two();
+        let mut planner = FftPlanner::<f64>::new();
+        let forward = planner.plan_fft_forward(len);
+        let inverse = planner.plan_fft_inverse(len);
+        let scratch_len = forward
+            .get_inplace_scratch_len()
+            .max(inverse.get_inplace_scratch_len());
+        Self {
+            forward,
+            inverse,
+            spectrum: vec![Complex::new(0.0, 0.0); len],
+            scratch: vec![Complex::new(0.0, 0.0); scratch_len],
+            energy: Vec::with_capacity(window_len + 1),
+            difference: Vec::with_capacity(window_len),
+            normalised: Vec::with_capacity(window_len),
         }
     }
 
-    // The first lag that dips under the threshold wins, not the
-    // deepest: the deepest is often twice the period, an octave down.
-    const THRESHOLD: f64 = 0.15;
-    let mut best_lag = None;
-    for lag in min_lag..=max_lag {
-        if normalised[lag] < THRESHOLD {
-            let mut local = lag;
-            while local < max_lag && normalised[local + 1] < normalised[local] {
-                local += 1;
+    /// The pitch of one window, as `window_pitch`.
+    pub fn pitch(&mut self, window: &[f32], settings: &Settings) -> Option<f64> {
+        let n = window.len();
+        if n < 128 {
+            return None;
+        }
+        let energy: f32 = window.iter().map(|s| s * s).sum::<f32>() / n as f32;
+        if energy.sqrt() < settings.silence_floor {
+            return None;
+        }
+
+        let min_lag = (settings.sample_rate / settings.highest_hz)
+            .floor()
+            .max(2.0) as usize;
+        let max_lag = (settings.sample_rate / settings.lowest_hz).ceil() as usize;
+        let max_lag = max_lag.min(n / 2);
+        if min_lag >= max_lag {
+            return None;
+        }
+        if self.spectrum.len() < n * 2 {
+            *self = Self::new(n);
+        }
+
+        // Normalised difference, the heart of YIN: small where the wave
+        // repeats itself. The sum of (x[i] - x[i + lag])^2 is the energy
+        // of the two overlapping parts less twice their correlation, and
+        // the correlation for every lag at once is one FFT there and
+        // back: the same numbers as summing each lag, at a fraction of
+        // the work.
+        let len = self.spectrum.len();
+        for (i, slot) in self.spectrum.iter_mut().enumerate() {
+            *slot = Complex::new(if i < n { window[i] as f64 } else { 0.0 }, 0.0);
+        }
+        self.forward
+            .process_with_scratch(&mut self.spectrum, &mut self.scratch);
+        for slot in self.spectrum.iter_mut() {
+            *slot = Complex::new(slot.norm_sqr(), 0.0);
+        }
+        self.inverse
+            .process_with_scratch(&mut self.spectrum, &mut self.scratch);
+        self.energy.clear();
+        self.energy.push(0.0);
+        let mut running = 0.0f64;
+        for s in window {
+            running += *s as f64 * *s as f64;
+            self.energy.push(running);
+        }
+        self.difference.clear();
+        self.difference.resize(max_lag + 1, 0.0);
+        for lag in min_lag..=max_lag {
+            let correlation = self.spectrum[lag].re / len as f64;
+            let head = self.energy[n - lag];
+            let tail = self.energy[n] - self.energy[lag];
+            self.difference[lag] = (head + tail - 2.0 * correlation).max(0.0) / (n - lag) as f64;
+        }
+        let difference = &self.difference;
+
+        // Cumulative mean normalisation, so the measure is comparable
+        // across lags and a threshold means the same thing everywhere.
+        let mut running = 0.0f64;
+        self.normalised.clear();
+        self.normalised.resize(max_lag + 1, 1.0);
+        let normalised = &mut self.normalised;
+        for lag in min_lag..=max_lag {
+            running += difference[lag];
+            if running > 0.0 {
+                normalised[lag] = difference[lag] * (lag - min_lag + 1) as f64 / running;
             }
-            best_lag = Some(local);
-            break;
         }
-    }
-    let lag = best_lag.or_else(|| {
-        // Nothing clear: take the best there is, but only if it is at
-        // least somewhat periodic.
-        let (lag, value) = (min_lag..=max_lag)
-            .map(|l| (l, normalised[l]))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
-        (value < 0.4).then_some(lag)
-    })?;
 
-    // Parabolic interpolation around the dip, so the pitch is not
-    // quantised to whole samples. At 1 kHz a whole sample is a third
-    // of a semitone, which would read as out of tune.
-    let refined = if lag > min_lag && lag < max_lag {
-        let (a, b, c) = (normalised[lag - 1], normalised[lag], normalised[lag + 1]);
-        let denominator = 2.0 * (2.0 * b - a - c);
-        if denominator.abs() > f64::EPSILON {
-            lag as f64 + (c - a) / denominator
+        // The first lag that dips under the threshold wins, not the
+        // deepest: the deepest is often twice the period, an octave down.
+        const THRESHOLD: f64 = 0.15;
+        let mut best_lag = None;
+        for lag in min_lag..=max_lag {
+            if normalised[lag] < THRESHOLD {
+                let mut local = lag;
+                while local < max_lag && normalised[local + 1] < normalised[local] {
+                    local += 1;
+                }
+                best_lag = Some(local);
+                break;
+            }
+        }
+        let lag = best_lag.or_else(|| {
+            // Nothing clear: take the best there is, but only if it is at
+            // least somewhat periodic.
+            let (lag, value) = (min_lag..=max_lag)
+                .map(|l| (l, normalised[l]))
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+            (value < 0.4).then_some(lag)
+        })?;
+
+        // Parabolic interpolation around the dip, so the pitch is not
+        // quantised to whole samples. At 1 kHz a whole sample is a third
+        // of a semitone, which would read as out of tune.
+        let refined = if lag > min_lag && lag < max_lag {
+            let (a, b, c) = (normalised[lag - 1], normalised[lag], normalised[lag + 1]);
+            let denominator = 2.0 * (2.0 * b - a - c);
+            if denominator.abs() > f64::EPSILON {
+                lag as f64 + (c - a) / denominator
+            } else {
+                lag as f64
+            }
         } else {
             lag as f64
-        }
-    } else {
-        lag as f64
-    };
+        };
 
-    Some(settings.sample_rate / refined)
+        Some(settings.sample_rate / refined)
+    }
 }
 
 /// The MIDI note a frequency is nearest, and how far off it sat.
@@ -154,29 +222,79 @@ pub fn hz_to_note(hz: f64) -> (u8, f32) {
     (nearest.clamp(0.0, 127.0) as u8, cents)
 }
 
-/// Listen to a recording and write down the notes.
-pub fn transcribe(samples: &[f32], settings: &Settings) -> Vec<DetectedNote> {
+/// The pitch of a recording window by window: what `transcribe` hears
+/// before it decides where the notes are. The NOTES view draws it as the
+/// line through each note.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PitchTrack {
+    /// How long each window is and how far apart they start, in samples.
+    /// Window i starts at sample `i * hop`.
+    pub window: usize,
+    pub hop: usize,
+    /// The pitch heard in each window, in Hz, or 0 where there was none.
+    pub hz: Vec<f64>,
+    /// The loudest sample in each window.
+    pub peak: Vec<f32>,
+}
+
+/// Follow the pitch of a recording, window by window. `progress` hears
+/// how far along it is, 0 to 1, now and then: a long take takes a moment.
+pub fn pitch_track(
+    samples: &[f32],
+    settings: &Settings,
+    progress: &mut dyn FnMut(f32),
+) -> PitchTrack {
     // A window long enough to hold two cycles of the lowest note we
     // look for, stepped by a quarter of itself.
     let window_len = ((settings.sample_rate / settings.lowest_hz) * 2.0).ceil() as usize;
     let window_len = window_len.max(1024);
     let hop = (window_len / 4).max(128);
+    let mut track = PitchTrack {
+        window: window_len,
+        hop,
+        hz: Vec::new(),
+        peak: Vec::new(),
+    };
     if samples.len() < window_len {
-        return Vec::new();
+        return track;
     }
+    let count = (samples.len() - window_len) / hop + 1;
+    track.hz.reserve(count);
+    track.peak.reserve(count);
+    let mut tracker = PitchTracker::new(window_len);
+    for i in 0..count {
+        let window = &samples[i * hop..i * hop + window_len];
+        track
+            .peak
+            .push(window.iter().fold(0.0f32, |m, s| m.max(s.abs())));
+        track
+            .hz
+            .push(tracker.pitch(window, settings).unwrap_or(0.0));
+        if i % 64 == 0 {
+            progress(i as f32 / count as f32);
+        }
+    }
+    progress(1.0);
+    track
+}
 
+/// Listen to a recording and write down the notes.
+pub fn transcribe(samples: &[f32], settings: &Settings) -> Vec<DetectedNote> {
+    notes_in_track(&pitch_track(samples, settings, &mut |_| {}), settings)
+}
+
+/// The notes in a followed pitch, as `transcribe` writes them down.
+pub fn notes_in_track(track: &PitchTrack, settings: &Settings) -> Vec<DetectedNote> {
+    let (window_len, hop) = (track.window, track.hop);
     let mut notes: Vec<DetectedNote> = Vec::new();
     // pitch, start, windows, peak, summed Hz: the average is what says
     // how far the singer actually sat from the note.
     let mut current: Option<(u8, u64, usize, f32, f64)> = None;
     let mut pending: Option<(u8, usize)> = None; // a pitch waiting to be believed
 
-    let mut position = 0usize;
-    while position + window_len <= samples.len() {
-        let window = &samples[position..position + window_len];
-        let peak = window.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        let hz = window_pitch(window, settings);
-        let heard = hz.map(|f| (hz_to_note(f).0, f));
+    for (i, (&hz, &peak)) in track.hz.iter().zip(&track.peak).enumerate() {
+        let position = i * hop;
+        let heard = (hz > 0.0).then(|| (hz_to_note(hz).0, hz));
 
         match heard {
             Some((pitch, frequency)) => {
@@ -217,7 +335,6 @@ pub fn transcribe(samples: &[f32], settings: &Settings) -> Vec<DetectedNote> {
                 pending = None;
             }
         }
-        position += hop;
     }
     if let Some((p, start, windows, loudest, summed)) = current.take() {
         push_note(
@@ -348,6 +465,37 @@ mod tests {
             "noise should not read as a melody: {} notes",
             notes.len()
         );
+    }
+
+    /// The difference function by FFT is the same numbers as summing
+    /// each lag, which is what the tracker did before.
+    #[test]
+    fn the_fast_difference_is_the_plain_sum() {
+        let settings = Settings::default();
+        let mut seed = 3u32;
+        let audio: Vec<f32> = tone(173.0, 0.1, settings.sample_rate)
+            .into_iter()
+            .map(|s| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                s + ((seed >> 16) % 1000) as f32 / 10_000.0 - 0.05
+            })
+            .collect();
+        let window = &audio[..1477];
+        let mut tracker = PitchTracker::new(window.len());
+        assert!(tracker.pitch(window, &settings).is_some());
+        let n = window.len();
+        let min_lag = (settings.sample_rate / settings.highest_hz).floor() as usize;
+        for lag in min_lag..n / 2 {
+            let plain: f64 = (0..n - lag)
+                .map(|i| (window[i] as f64 - window[i + lag] as f64).powi(2))
+                .sum::<f64>()
+                / (n - lag) as f64;
+            let fast = tracker.difference[lag];
+            assert!(
+                (plain - fast).abs() < 1e-9 * plain.max(1.0),
+                "lag {lag}: {plain} against {fast}"
+            );
+        }
     }
 
     #[test]

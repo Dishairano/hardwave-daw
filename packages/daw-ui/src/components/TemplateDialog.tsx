@@ -7,7 +7,7 @@ import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
 import { DialogFrame } from './ui/DialogFrame'
 import { t, tf, useLanguage } from '../i18n'
 
-export type BuiltInTemplateId = 'blank' | 'beat4' | 'vocal' | 'mixing'
+export type BuiltInTemplateId = 'drums' | 'blank' | 'vocal' | 'mixing'
 export type StarterId = 'hardstyle' | 'rawstyle' | 'frenchcore' | 'uptempo'
 export type TemplateId = BuiltInTemplateId | `user:${string}` | `starter:${StarterId}` | `song:${string}`
 
@@ -19,8 +19,11 @@ interface TemplateDef {
 }
 
 export const TEMPLATES: TemplateDef[] = [
+  // What every new song opens with: the kick synth and three one-shots,
+  // the way FL opens. It replaced the 4-Track Beat, whose four channels
+  // had no sound in them.
+  { id: 'drums', title: 'New project', subtitle: 'Kick, Clap, Hat and Snare', detail: 'The kick synth and three drum sounds, loaded. Click a step and it plays.' },
   { id: 'blank', title: 'Blank', subtitle: 'Empty project', detail: 'Start from scratch with no tracks.' },
-  { id: 'beat4', title: '4-Track Beat', subtitle: 'Drums + bass', detail: 'Kick, Snare, Hi-Hat and Bass, ready for beat-making.' },
   { id: 'vocal', title: 'Vocal Session', subtitle: 'Lead + backing + FX', detail: 'Vocal, Backing Vocals and an FX Return, ready for tracking.' },
   { id: 'mixing', title: 'Mixing', subtitle: '8 tracks, pre-routed', detail: 'Eight audio tracks, Bus A/B return sends, Master.' },
 ]
@@ -100,13 +103,12 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
           {t('Start from a song')}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
-          {STARTERS.map((s, i) => {
+          {STARTERS.map((s) => {
             const id = `starter:${s.id}` as const
             const active = hover === id
             return (
               <button
                 key={id}
-                ref={i === 0 ? firstBtn : undefined}
                 onMouseEnter={() => setHover(id)}
                 onMouseLeave={() => setHover(null)}
                 onClick={() => onPick(id)}
@@ -138,11 +140,13 @@ export function TemplateDialog({ onPick, onCancel }: Props) {
           {t('Or an empty layout')}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-          {TEMPLATES.map((tpl) => {
+          {TEMPLATES.map((tpl, i) => {
             const active = hover === tpl.id
             return (
               <button
                 key={tpl.id}
+                // Enter starts a new project the way every other path does.
+                ref={i === 0 ? firstBtn : undefined}
                 onMouseEnter={() => setHover(tpl.id)}
                 onMouseLeave={() => setHover(null)}
                 onClick={() => onPick(tpl.id)}

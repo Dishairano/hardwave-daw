@@ -795,6 +795,7 @@ impl Importer {
                 length_ticks: beats_to_ticks(length).max(1),
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -900,6 +901,7 @@ impl Importer {
                 resample: audio.attr("algorithm") == Some("repitch"),
                 ..Default::default()
             },
+            tuned_notes: Vec::new(),
         };
         if let Some(t) = self.project.track_mut(track_id) {
             t.clips.push(ClipPlacement {
@@ -909,6 +911,7 @@ impl Importer {
                 length_ticks: beats_to_ticks(end - start).max(1),
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
         self.audio.push(ImportedAudio {
@@ -1019,6 +1022,7 @@ impl Importer {
                 target,
                 points: out,
                 visible: true,
+                row: None,
             });
         }
     }
@@ -1266,6 +1270,7 @@ mod tests {
             length_ticks: 960 * 4,
             lane: 0,
             color: None,
+            row: None,
         });
         lead.automation_lanes.push(AutomationLane {
             id: "a".into(),
@@ -1285,6 +1290,7 @@ mod tests {
                 },
             ],
             visible: true,
+            row: None,
         });
         let mut drums = Track::new_audio("drums".into(), "Drums".into());
         drums.sends.push(Send {
@@ -1322,12 +1328,14 @@ mod tests {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: "/s/loop.wav".into(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "drums".into(),
             position_ticks: 960 * 2,
             length_ticks: 960 * 2,
             lane: 0,
             color: None,
+            row: None,
         });
         p.tracks.insert(1, drums);
         p.tracks.insert(1, lead);

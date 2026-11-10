@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { hw } from '../theme'
 import { useTransportStore } from '../stores/transportStore'
+import { useTempoMapStore } from '../stores/tempoMapStore'
+import { secsAtTick } from '../utils/tempoTime'
 import { useNotificationStore } from '../stores/notificationStore'
 import { t, tf, useLanguage } from '../i18n'
 
@@ -34,7 +36,7 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
   const playing = useTransportStore(s => s.playing)
   const positionSamples = useTransportStore(s => s.positionSamples)
   const sampleRate = useTransportStore(s => s.sampleRate)
-  const bpm = useTransportStore(s => s.bpm)
+  const tempoEntries = useTempoMapStore(s => s.entries)
 
   const load = useCallback(async (next: VideoStatus | null) => {
     setStatus(next)
@@ -53,11 +55,11 @@ export function VideoWindow({ onClose }: { onClose: () => void }) {
       .catch(() => { /* no engine in the browser preview */ })
   }, [load])
 
-  // Where the film should be, in its own seconds.
+  // Where the film should be, in its own seconds. Its first frame sits on
+  // a tick, so its time comes through the tempo map: at the tempo under the
+  // playhead the picture slid against the music whenever the tempo moved.
   const wantedSeconds = (() => {
-    const offsetSeconds = status
-      ? (status.offsetTicks / PPQ) * 60 / Math.max(1, bpm)
-      : 0
+    const offsetSeconds = status ? secsAtTick(tempoEntries, status.offsetTicks) : 0
     return positionSamples / (sampleRate || 48000) - offsetSeconds
   })()
 

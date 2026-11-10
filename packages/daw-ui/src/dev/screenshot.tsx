@@ -8,7 +8,7 @@
  * pianoroll | firstrun | newcontroller | browser. Served only via screenshot.html on the vite dev server; the
  * production bundle (index.html → main.tsx) never imports this.
  */
-import './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
+import { MOCK_DRUM_FOLDER } from './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
 import '../fonts'
 import '../mockup.css' // the real top bar uses the fl-* classes from here
 import '../rework.css'
@@ -16,7 +16,7 @@ import '../rework.css'
 import React from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import ReactDOM from 'react-dom/client'
-import { HwApp, HwTopbar, HwSecondRow, HwPlaylistTracks } from '../components/HwApp'
+import { HwApp, HwTopbar, HwSecondRow, HwPlaylistTracks, HwPlaylistTools } from '../components/HwApp'
 import { HistoryPanel } from '../components/HistoryPanel'
 import { LoudnessMeter } from '../components/LoudnessMeter'
 import { Oscilloscope } from '../components/Oscilloscope'
@@ -61,6 +61,8 @@ import { AudioSettings, focusSettingsTab, type SettingsTab } from '../components
 import { HwPluginWindow } from '../components/plugins/HwPluginWindow'
 import { SampleWindow } from '../components/sample-window/SampleWindow'
 import { useSampleWindowStore } from '../stores/sampleWindowStore'
+import { sampleAtTick } from '../utils/tempoTime'
+import { bpmToY, laneScale } from '../components/arrangement/tempoLaneDraw'
 
 /** Browser panel with a sample library added to Places and two folders open. */
 function BrowserShot() {
@@ -95,6 +97,82 @@ function RackShot() {
     return () => clearTimeout(t)
   }, [])
   return <ChannelRack />
+}
+
+/** A new song as it opens: Kick (the kick synth), Clap, Hat and Snare on the
+ *  first rows, the samplers naming the drums installed with the app, and
+ *  nothing open in the piano roll. */
+function seedNewSong() {
+  const sampler = (id: string, file: string) => [{
+    id: `slot-${id}`, pluginId: 'hardwave.native.sampler', pluginName: 'Hardwave Sampler',
+    enabled: true, wet: 1, sidechainSource: null, samplePath: `${MOCK_DRUM_FOLDER}/${file}`,
+  }]
+  const song: TrackWithClips[] = [
+    track('master', 'Master', '#a1a1aa', [], 'Master'),
+    { ...track('insert-001', 'Kick', '#DC2626', [], 'Midi'), instrument: 'kick_synth', volume_db: 0 },
+    { ...track('insert-002', 'Clap', '#10B981', [], 'Midi'), inserts: sampler('clap', 'Clap 1.wav'), insert_count: 1, volume_db: -3 },
+    { ...track('insert-003', 'Hat', '#A855F7', [], 'Midi'), inserts: sampler('hat', 'Hat 1.wav'), insert_count: 1, volume_db: -8 },
+    { ...track('insert-004', 'Snare', '#F59E0B', [], 'Midi'), inserts: sampler('snare', 'Snare 1.wav'), insert_count: 1, volume_db: -3 },
+    ...Array.from({ length: 6 }, (_, i) => track(`insert-${String(i + 5).padStart(3, '0')}`, `Insert ${i + 5}`, '#52525b', [])),
+  ]
+  useTrackStore.setState({
+    tracks: song,
+    tracksById: Object.fromEntries(song.map((t) => [t.id, t])),
+    selectedTrackId: null, selectedClipId: null, selectedClipIds: new Set(),
+    activeMidiTrackId: null, activeMidiClipId: null,
+  } as never)
+  ;(window as unknown as { __hwMockTracks?: unknown[] }).__hwMockTracks = JSON.parse(JSON.stringify(song))
+  // What the plug-in scan found: the built-ins and a few free synths.
+  const plugin = (id: string, name: string, vendor: string, format = 'Vst3') =>
+    ({ id, name, vendor, version: '1', format, path: id.startsWith('hardwave.native.') ? '<native>' : `/plugins/${name}.vst3`, category: 'Instrument', has_midi_input: true, has_editor: true })
+  ;(window as unknown as { __hwMockPlugins?: unknown[] }).__hwMockPlugins = [
+    plugin('hardwave.native.tripleosc', 'Hardwave 3xOSC', 'Hardwave'),
+    plugin('hardwave.native.wavetable', 'Hardwave Wavetable', 'Hardwave'),
+    plugin('hardwave.native.fm', 'Hardwave FM', 'Hardwave'),
+    plugin('hardwave.native.noise', 'Hardwave Noise', 'Hardwave'),
+    plugin('hardwave.native.sampler', 'Hardwave Sampler', 'Hardwave'),
+    plugin('vital', 'Vital', 'Vital Audio'),
+    plugin('surge-xt', 'Surge XT', 'Surge Synth Team', 'Clap'),
+    plugin('dexed', 'Dexed', 'Digital Suburban'),
+    plugin('obxd', 'OB-Xd', 'discoDSP'),
+  ]
+}
+
+/** The new song: the browser on the drums folder, the channel rack over the
+ *  playlist, and the mouse resting on Clap's name (its tooltip). */
+function NewSongShot() {
+  React.useEffect(() => {
+    const tip = setTimeout(() => {
+      const clap = document.querySelectorAll('[data-testid="channel-name"]')[1] as HTMLElement | undefined
+      const r = clap?.getBoundingClientRect()
+      if (!clap || !r) return
+      clap.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: r.left + 60, clientY: r.top + 12 }))
+    }, 900)
+    return () => clearTimeout(tip)
+  }, [])
+  return (
+    <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+      <HwTopbar showPlaylist showChannelRack showPianoRoll={false} showMixer={false} projectName="Untitled">
+        <HwSecondRow />
+      </HwTopbar>
+      <div className="fl-body">
+        <div className="fl-browser"><Browser /></div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <div style={{ height: 230, flex: 'none', borderBottom: '1px solid rgba(255,255,255,0.07)' }}><ChannelRack /></div>
+          <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div className="fl-pl-body" style={{ ['--row-h' as never]: '52px' }}>
+              <HwPlaylistTracks />
+              <div className="fl-pl-grid">
+                <div className="fl-pl-canvas">
+                  <Arrangement onSetHint={noop} />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /** The first run, opened on a step (?step=start | sound | controller |
@@ -289,6 +367,17 @@ if (changeParam) {
     })
   }
 }
+// panel=tempolane: the song the tempo lane mockup draws, 150 BPM ramping to
+// 160 through the build (bars 9 to 17) and back to 150 for the drop.
+if (params.get('panel') === 'tempolane') {
+  const bar = 960 * 4
+  entries.splice(0, entries.length,
+    { tick: 0, bpm: 150, timeSigNum: 4, timeSigDen: 4, ramp: 'instant' },
+    { tick: bar * 8, bpm: 150, timeSigNum: 4, timeSigDen: 4, ramp: 'linear' },
+    { tick: bar * 16 - 1, bpm: 160, timeSigNum: 4, timeSigDen: 4, ramp: 'instant' },
+    { tick: bar * 16, bpm: 150, timeSigNum: 4, timeSigDen: 4, ramp: 'instant' },
+  )
+}
 // The playlist re-reads the map at mount, so the mocked backend has to give
 // the same answer as this seed.
 ;(window as unknown as { __HW_TEMPO_ENTRIES__?: unknown[] }).__HW_TEMPO_ENTRIES__ = entries
@@ -328,6 +417,13 @@ function Harness() {
       return <Full><MixerPanel /></Full>
     case 'channelrack':
       return <Full><RackShot /></Full>
+    case 'newsong':
+      seedNewSong()
+      return <NewSongShot />
+    case 'emptyroll':
+      // The piano roll with nothing open in it, in a new song.
+      seedNewSong()
+      return <Full><PianoRoll /></Full>
     case 'pianoroll': {
       // SHOT_CC=cc1 opens a controller lane under the notes.
       const lane = new URLSearchParams(location.search).get('cc')
@@ -636,6 +732,75 @@ function Harness() {
         </div>
       )
     }
+    case 'tempolane': {
+      // The playlist with the tempo lane, as the mockup has it: a kick and a
+      // screech in beats, a drum loop that follows the tempo and a vocal
+      // that keeps its speed, the playhead at the drop. &lane=menu opens
+      // the lane's menu at bar 4; &lane=drag drags the ramp's end.
+      const bar = 960 * 4
+      const audio = (name: string, src: string, at: number, bars: number, followBpm: number | null, secs: number): ClipInfo => ({
+        ...clip(name, src, at, bars, 'audio'),
+        sourceFrames: Math.round(secs * 48000), sourceRate: 48000, sourceStart: 0, timeFactor: 1,
+        treatment: { pan: 0, polarityInverted: false, swapStereo: false, normalize: false, removeDc: false, resample: false, followBpm },
+      })
+      const laneTracks: TrackWithClips[] = [
+        track('t-kick', 'Kick', '#e5243b', [clip('Kick', 'src-kick', 0, 24, 'midi')], 'Midi'),
+        track('t-screech', 'Screech', '#f59e0b', [clip('Screech', 'src-lead', 8, 16, 'midi')], 'Midi'),
+        track('t-loop', 'Drum loop', '#22c55e', [
+          audio('Loop 150 BPM', 'src-loop', 0, 16, 150, 16 * 1.6),
+          audio('Loop 150 BPM', 'src-loop', 16, 8, 150, 8 * 1.6),
+        ]),
+        // Eight bars at 150 as recorded: across the build it covers a
+        // little more than eight bars, as the engine makes it.
+        track('t-vox', 'Vocal', '#3b82f6', [{
+          ...audio('Vocal - Rise up', 'src-vox-1', 12, 8, null, 12.8),
+          length_ticks: Math.round(bar * 8.13),
+        }]),
+      ]
+      if (!(window as unknown as { __hwLaneSeeded?: boolean }).__hwLaneSeeded) {
+        ;(window as unknown as { __hwLaneSeeded?: boolean }).__hwLaneSeeded = true
+        useTrackStore.setState({ tracks: laneTracks, tracksById: Object.fromEntries(laneTracks.map((t) => [t.id, t])), selectedClipId: null, selectedClipIds: new Set() } as never)
+        ;(window as unknown as { __hwMockTracks?: unknown }).__hwMockTracks = laneTracks
+        useTransportStore.setState({ horizontalZoom: 0.31, bpm: 150, positionSamples: sampleAtTick(entries, bar * 16, 48000) })
+        const shot = params.get('lane')
+        setTimeout(() => {
+          const lane = document.querySelector('[data-testid="tempo-lane"]') as HTMLElement | null
+          if (!lane) return
+          const r = lane.getBoundingClientRect()
+          const pxPerTick = (100 * useTransportStore.getState().horizontalZoom) / (150 / 60) / 960
+          const scale = laneScale(entries)
+          const at = (tick: number, bpm: number) => ({ clientX: r.left + tick * pxPerTick, clientY: r.top + bpmToY(bpm, scale) })
+          if (shot === 'menu') {
+            lane.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, ...at(bar * 3, 150) }))
+          } else if (shot === 'drag') {
+            const from = at(bar * 16 - 1, 160)
+            lane.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ...from }))
+            setTimeout(() => {
+              window.dispatchEvent(new MouseEvent('mousemove', { ...from, clientY: from.clientY - 4 }))
+              window.dispatchEvent(new MouseEvent('mousemove', { ...from, clientY: from.clientY - 9 }))
+            }, 100)
+          }
+        }, 1600)
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Rawstyle anthem.hwp">
+            <HwSecondRow />
+          </HwTopbar>
+          <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <HwPlaylistTools />
+            <div className="fl-pl-body" style={{ ['--row-h' as never]: '56px' }}>
+              <HwPlaylistTracks />
+              <div className="fl-pl-grid">
+                <div className="fl-pl-canvas">
+                  <Arrangement onSetHint={noop} />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
     case 'playlistnames': {
       // The playlist as the app lays it out: names beside the grid, so
       // their rows can be checked against each other. &scrolly=N scrolls.
@@ -671,6 +836,40 @@ function Harness() {
           tracks: st.tracks.map((t) => t.id !== track.id ? t : { ...t, name: 'Industrial Kick', color: '#d4a72c', inserts: [slot, ...(t.inserts ?? [])] }),
         })
         useSampleWindowStore.getState().openSampler(track.id, slot.id)
+        ;(window as unknown as { __hwMockTracks?: unknown }).__hwMockTracks = useTrackStore.getState().tracks
+      }
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="Untitled">
+            <HwSecondRow />
+          </HwTopbar>
+          <Arrangement onSetHint={noop} />
+          <SampleWindow />
+        </div>
+      )
+    }
+    case 'tunenotes': {
+      // The sample window's NOTES view on a vocal take, as the mockup draws
+      // it; scripts/screenshot.mjs opens the view and drags a note.
+      const st = useTrackStore.getState()
+      const track = st.tracks.find((t) => t.clips.some((c) => c.kind.toLowerCase() === 'audio'))
+      const clip = track?.clips.find((c) => c.kind.toLowerCase() === 'audio')
+      if (track && clip && !useSampleWindowStore.getState().target) {
+        useTransportStore.setState({ bpm: 150 })
+        useTrackStore.setState({
+          tracks: st.tracks.map((t) => t.id !== track.id ? t : {
+            ...t,
+            name: 'Vocal',
+            clips: t.clips.map((c) => c.id !== clip.id ? c : {
+              ...c,
+              name: 'Vocal chop 150',
+              sourceFrames: Math.round(4.8 * 48000),
+              sourceRate: 48000,
+              sourceFile: 'C:\\Vocals\\Vocal chop 150.wav',
+            }),
+          }),
+        })
+        useSampleWindowStore.getState().open(track.id, clip.id)
         ;(window as unknown as { __hwMockTracks?: unknown }).__hwMockTracks = useTrackStore.getState().tracks
       }
       return (

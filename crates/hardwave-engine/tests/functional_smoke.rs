@@ -266,6 +266,7 @@ fn kicksynth_instrument_produces_kick_audio() {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -391,6 +392,7 @@ fn midi_clip_produces_sound() {
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -441,6 +443,7 @@ fn a_muted_pattern_clip_is_silent() {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -967,12 +970,14 @@ fn a_send_level_lane_moves_the_send() {
                         fade_out_curve: FadeCurve::Linear,
                         source_file: String::new(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: track_id.clone(),
                     position_ticks: 0,
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
                 // Silent on its own fader, audible only through the send.
                 track.volume_db = -100.0;
@@ -1020,6 +1025,7 @@ fn a_send_level_lane_moves_the_send() {
             tension: 0.0,
         }],
         visible: true,
+        row: None,
     };
     let with = render_with_lane(Some(open));
     assert!(
@@ -1083,6 +1089,7 @@ fn automation_follows_a_tempo_change_instead_of_one_tempo() {
                     },
                 ],
                 visible: true,
+                row: None,
             });
         }
     }
@@ -1170,6 +1177,7 @@ fn automation_lane_silences_track_via_volume() {
                     tension: 0.0,
                 }],
                 visible: true,
+                row: None,
             });
         }
     }
@@ -1238,6 +1246,7 @@ fn killer_automation_clips_and_lfo() {
                 target: AutomationTarget::TrackVolume,
                 points,
                 visible: true,
+                row: None,
             });
         }
     }
@@ -1388,6 +1397,7 @@ fn automation_recording_round_trip_is_audible() {
                 target: AutomationTarget::TrackVolume,
                 points,
                 visible: true,
+                row: None,
             });
         }
     }
@@ -2076,6 +2086,7 @@ fn a_routed_track_plays_the_notes_of_the_track_that_feeds_it() {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
                 if routed {
                     track.midi_route_to = vec![target.clone()];
@@ -2137,6 +2148,7 @@ fn a_note_panned_left_is_louder_on_the_left() {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -2196,6 +2208,7 @@ fn a_vca_group_rides_the_faders_of_its_members() {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             if let Some((gain_db, muted)) = group {
@@ -2272,6 +2285,7 @@ fn an_arpeggiator_on_the_track_changes_what_the_instrument_plays() {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
                 track.midi_fx = chain;
             }
@@ -2340,12 +2354,14 @@ fn a_frozen_track_plays_its_render_and_unfreezing_puts_the_part_back() {
             fade_out_curve: FadeCurve::Linear,
             source_file: String::new(),
             treatment: Default::default(),
+            tuned_notes: Vec::new(),
         }),
         track_id: track_id.to_string(),
         position_ticks: 0,
         length_ticks: 1_000_000,
         lane,
         color: None,
+        row: None,
     };
 
     // One bin of a Fourier transform: how much of one frequency is there.
@@ -2438,6 +2454,7 @@ fn a_track_in_another_tuning_plays_other_pitches() {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
                 track.tuning = tuning;
             }
@@ -2530,6 +2547,7 @@ fn a_render_is_the_same_whether_it_uses_one_core_or_several() {
                         length_ticks: 1920,
                         lane: 0,
                         color: None,
+                        row: None,
                     });
                     track.sends.push(MixerSend {
                         target: bus.clone(),
@@ -2611,12 +2629,14 @@ fn a_track_routed_to_an_empty_bus_is_heard() {
                     fade_out_curve: FadeCurve::Linear,
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
             track.output_bus = Some(bus_id.clone());
         }
@@ -2678,12 +2698,14 @@ fn a_prepared_render_runs_without_the_engine() {
                     fade_out_curve: FadeCurve::Linear,
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -2930,6 +2952,7 @@ fn a_midi_kick_ducks_a_midi_bass() {
                     length_ticks: 960 * 8,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             if duck {

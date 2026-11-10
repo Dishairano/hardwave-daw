@@ -121,6 +121,7 @@ pub fn expression_to_automation(track: &mut Track, clip_id: &str) -> Result<Conv
                     target: AutomationTarget::TrackPan,
                     points: Vec::new(),
                     visible: true,
+                    row: None,
                 });
                 track.automation_lanes.len() - 1
             }
@@ -176,6 +177,7 @@ mod tests {
             length_ticks: 3840,
             lane: 0,
             color: None,
+            row: None,
         });
         track
     }

@@ -221,12 +221,14 @@ mod comp_tests {
                 fade_out_curve: Default::default(),
                 source_file: format!("/takes/{source}"),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "t1".to_string(),
             position_ticks: position,
             length_ticks: length,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

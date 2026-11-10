@@ -102,10 +102,43 @@ function synthNotes() {
 
 // Browser Places tree: a small fake sample library for the screenshot
 // harness and Playwright. Shape matches the Rust `BrowserEntry`.
+let mockIds = 0
+type MockTrack = { id: string; name: string; kind: string; color: string; clips: Record<string, unknown>[]; inserts: Record<string, unknown>[]; instrument?: string }
+function mockSongEdit(cmd: string, args: Record<string, unknown> | undefined): string | null {
+  const song = (window as unknown as { __hwMockTracks?: MockTrack[] }).__hwMockTracks
+  const id = `mock-${cmd}-${++mockIds}`
+  const track = song?.find(t => t.id === args?.trackId)
+  switch (cmd) {
+    case 'add_midi_track': {
+      const base = song?.find(t => t.kind === 'Midi')
+      song?.push({ ...(base ?? {}), id, name: String(args?.name ?? 'Channel'), kind: 'Midi', color: '#3B82F6', clips: [], inserts: [], instrument: 'builtin_sine' } as MockTrack)
+      return id
+    }
+    case 'add_plugin_to_track':
+      track?.inserts.push({ id, pluginId: args?.pluginId, pluginName: String(args?.pluginId), enabled: true, wet: 1, sidechainSource: null })
+      return id
+    case 'create_midi_clip':
+      track?.clips.push({ id, name: 'MIDI Clip', kind: 'midi', source_id: '', position_ticks: 0, length_ticks: 3840, muted: false })
+      return id
+    case 'set_track_instrument':
+      if (track) track.instrument = String(args?.kind)
+      return null
+  }
+  return null
+}
+
+/** Where the mocked app installed its drums. */
+export const MOCK_DRUM_FOLDER = '/Applications/Hardwave DAW.app/Contents/Resources/drums'
+
 function mockDirectory(path: string) {
   const entry = (name: string, isDir: boolean, sizeBytes = 0) =>
     ({ name, path: `${path}/${name}`, isDir, sizeBytes })
   const leaf = path.split('/').pop() ?? ''
+  // The drums installed with the DAW (see get_drum_folder).
+  if (leaf === 'drums') {
+    return ['Clap 1.wav', 'Clap 2.wav', 'Hat 1.wav', 'Hat 2.wav', 'Open hat 1.wav', 'Rim 1.wav', 'Snare 1.wav', 'Snare 2.wav']
+      .map(n => entry(n, false, 40_000))
+  }
   if (leaf === 'Kicks') {
     return ['Kick Hard 01.wav', 'Kick Hard 02.wav', 'Kick Rawstyle 03.wav', 'Kick Tail 04.wav']
       .map(n => entry(n, false, 412_000))
@@ -183,6 +216,36 @@ const mockInputKind = (port: string) =>
     : /\b(x-?touch|mcu|mackie|icon|platform|fader ?port|uf8|hui)\b/i.test(port) ? 'desk'
       : 'keyboard'
 
+
+/** A sung take as `find_clip_notes` returns it: the mockup's six notes, a
+ *  pitch line with vibrato and a slide into each note. */
+function mockClipNotes() {
+  const beat = 60 / 150
+  const sung = [
+    { b: 0.0, l: 1.4, p: 65.08 },
+    { b: 1.6, l: 1.2, p: 67.31 },
+    { b: 4.0, l: 1.8, p: 63.38 },
+    { b: 6.1, l: 0.8, p: 68.05 },
+    { b: 7.0, l: 1.0, p: 67.9 },
+    { b: 8.2, l: 2.6, p: 70.27 },
+  ]
+  const step = 0.01
+  const seconds = 12 * beat
+  const curve: (number | null)[] = Array.from({ length: Math.round(seconds / step) }, (_, i) => {
+    const s = i * step
+    const n = sung.find((m) => s >= m.b * beat && s <= (m.b + m.l) * beat)
+    if (!n) return null
+    const t = (s - n.b * beat) / (n.l * beat)
+    const slide = t < 0.12 ? (0.12 - t) * -2.2 : 0
+    return n.p + Math.sin(t * 18 + n.b) * 0.12 * Math.min(1, t * 3) + slide
+  })
+  const notes = sung.map((n, i) => ({
+    start: n.b * beat, end: (n.b + n.l) * beat, sung: n.p, pitch: n.p,
+    drift: i === 2 ? 0.4 : 1, newStart: n.b * beat, newEnd: (n.b + n.l) * beat, formants: true,
+  }))
+  return { seconds, notes, curveStart: 0, curveStep: step, curve, keyRoot: 5, keyMinor: true, tuneKey: '' }
+}
+
 const mock: TauriInternals = {
   transformCallback: (cb) => cb,
   unregisterCallback: () => {},
@@ -201,6 +264,12 @@ const mock: TauriInternals = {
         return synthPeaks(n, (args?.first as number) ?? 0, (args?.count as number) ?? n)
       }
       // A sampler channel's sample: a short kick, named after its file.
+      // The NOTES view on the mockup's vocal take (daw-tune-notes-mockup):
+      // six sung notes at 150 BPM, "go" sung D#4 +38 and moved to F4.
+      case 'find_clip_notes':
+        return mockClipNotes()
+      case 'set_clip_notes':
+        return 1
       case 'get_sampler_sample':
         return {
           path: 'D:\\Kicks\\Induskick4.wav', frames: Math.round(0.62 * 48000), sampleRate: 48000, channels: 1, root: 60,
@@ -231,6 +300,13 @@ const mock: TauriInternals = {
         return null
       case 'get_midi_notes':
         return synthNotes()
+      // A seeded song (window.__hwMockTracks) takes new channels, plug-ins
+      // and clips, so a spec can follow what a click made.
+      case 'add_midi_track':
+      case 'add_plugin_to_track':
+      case 'create_midi_clip':
+      case 'set_track_instrument':
+        return mockSongEdit(cmd, args as Record<string, unknown> | undefined)
       case 'search_library': {
         const q = String((args as { query?: string })?.query ?? '').toLowerCase()
         const pool = ['Kick Hard 01.wav', 'Kick Rawstyle 03.wav', 'Screech 150 F.wav']
@@ -459,6 +535,10 @@ const mock: TauriInternals = {
       case 'set_channel_offsets':
         mockAudio.outputPair = Number(args?.output ?? 0)
         return null
+      case 'get_drum_folder':
+        return MOCK_DRUM_FOLDER
+      case 'get_keyboard_track':
+        return null
       case 'get_library_folder':
       case 'set_library_folder':
         return 'C:/Users/you/Documents/Hardwave/Library'
@@ -628,10 +708,12 @@ const mock: TauriInternals = {
         return (window as unknown as { __hwMockTracks?: unknown[] }).__hwMockTracks ?? []
       case 'set_sample_settings':
         return 1
-      case 'get_tracks':
-      case 'find_missing_plugins':
       case 'scan_plugins':
       case 'get_plugins':
+        // A harness shot can seed the scan (window.__hwMockPlugins).
+        return (window as unknown as { __hwMockPlugins?: unknown[] }).__hwMockPlugins ?? []
+      case 'get_tracks':
+      case 'find_missing_plugins':
         return []
       case 'get_transport_state':
         return {

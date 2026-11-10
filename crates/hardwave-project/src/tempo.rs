@@ -48,7 +48,17 @@ impl Default for TempoMap {
 impl TempoMap {
     /// Convert a tick position to an absolute sample position.
     pub fn tick_to_samples(&self, tick: u64, sample_rate: f64) -> u64 {
-        let mut samples = 0.0_f64;
+        (self.secs_at_tick(tick) * sample_rate).round() as u64
+    }
+
+    /// Seconds from the start of the song to `tick`, ramps included.
+    ///
+    /// The unrounded form of `tick_to_samples`, for working out how long a
+    /// stretch of the song lasts without a sample's rounding in it: a clip
+    /// that keeps its speed is moved by it on every tempo change, and
+    /// rounding each time would walk it off by a sample at a time.
+    pub fn secs_at_tick(&self, tick: u64) -> f64 {
+        let mut secs = 0.0_f64;
         let mut prev_tick = 0_u64;
         let mut prev_bpm = self.entries[0].bpm;
 
@@ -60,12 +70,11 @@ impl TempoMap {
             }
             let dt = entry.tick - prev_tick;
             // A ramped segment is integrated; a stepped one is a constant.
-            let secs = if prev_ramp == TempoRamp::Linear {
+            secs += if prev_ramp == TempoRamp::Linear {
                 ramp_secs(dt, prev_bpm, entry.bpm)
             } else {
                 ticks_to_secs(dt, prev_bpm)
             };
-            samples += secs * sample_rate;
             prev_tick = entry.tick;
             prev_bpm = entry.bpm;
             prev_ramp = entry.ramp;
@@ -74,14 +83,12 @@ impl TempoMap {
         let remaining = tick - prev_tick;
         // Part-way into a ramp: integrate only as far as the target, using
         // the tempo the interpolation says is there.
-        let secs = if prev_ramp == TempoRamp::Linear {
+        secs += if prev_ramp == TempoRamp::Linear {
             ramp_secs(remaining, prev_bpm, self.bpm_at(tick))
         } else {
             ticks_to_secs(remaining, prev_bpm)
         };
-        samples += secs * sample_rate;
-
-        samples.round() as u64
+        secs
     }
 
     /// Convert an absolute sample position to ticks.
@@ -91,7 +98,16 @@ impl TempoMap {
     /// the playhead was drawn and the tempo was followed at a tick the audio
     /// was not at, and the error grew with the length of the ramp.
     pub fn samples_to_tick(&self, target_samples: u64, sample_rate: f64) -> u64 {
-        let mut samples_accum = 0.0_f64;
+        self.tick_at_secs(target_samples as f64 / sample_rate)
+            .round()
+            .max(0.0) as u64
+    }
+
+    /// The tick (with its fraction) the song reaches `secs` seconds in: the
+    /// inverse of `secs_at_tick`.
+    pub fn tick_at_secs(&self, target_secs: f64) -> f64 {
+        let target_secs = target_secs.max(0.0);
+        let mut secs_accum = 0.0_f64;
         let mut prev_tick = 0_u64;
         let mut prev_bpm = self.entries[0].bpm;
         let mut prev_ramp = self.entries[0].ramp;
@@ -100,21 +116,20 @@ impl TempoMap {
 
         for entry in &self.entries[1..] {
             let dt = entry.tick - prev_tick;
-            let secs = if prev_ramp == TempoRamp::Linear {
+            let seg_secs = if prev_ramp == TempoRamp::Linear {
                 ramp_secs(dt, prev_bpm, entry.bpm)
             } else {
                 ticks_to_secs(dt, prev_bpm)
             };
-            let seg_samples = secs * sample_rate;
 
-            if samples_accum + seg_samples > target_samples as f64 {
+            if secs_accum + seg_secs > target_secs {
                 // The target is inside this segment, so remember where the
                 // ramp is heading and how long it has to get there.
                 next_bpm = entry.bpm;
                 span_ticks = dt;
                 break;
             }
-            samples_accum += seg_samples;
+            secs_accum += seg_secs;
             prev_tick = entry.tick;
             prev_bpm = entry.bpm;
             prev_ramp = entry.ramp;
@@ -123,15 +138,59 @@ impl TempoMap {
             span_ticks = 0;
         }
 
-        let remaining_samples = target_samples as f64 - samples_accum;
-        let remaining_secs = remaining_samples / sample_rate;
+        let remaining_secs = target_secs - secs_accum;
         let remaining_ticks = if prev_ramp == TempoRamp::Linear && span_ticks > 0 {
             ramp_ticks(remaining_secs, prev_bpm, next_bpm, span_ticks)
         } else {
             secs_to_ticks(remaining_secs, prev_bpm)
         };
 
-        prev_tick + remaining_ticks
+        prev_tick as f64 + remaining_ticks
+    }
+
+    /// The tempo over `from..to` when it holds still there: no change inside
+    /// the span and no ramp sliding through it. `None` when it moves.
+    ///
+    /// A clip that follows the tempo plays as one even stretch when this
+    /// gives a tempo, and has to be cut into pieces when it does not.
+    pub fn constant_bpm_between(&self, from: u64, to: u64) -> Option<f64> {
+        let start = self.bpm_at(from);
+        if to <= from {
+            return Some(start);
+        }
+        for (i, entry) in self.entries.iter().enumerate() {
+            let end = self.entries.get(i + 1).map(|e| e.tick);
+            // Only the segments the span overlaps count.
+            let overlaps = entry.tick < to && end.is_none_or(|end| end > from);
+            if !overlaps {
+                continue;
+            }
+            if (entry.bpm - start).abs() > 1e-9 {
+                return None;
+            }
+            if entry.ramp == TempoRamp::Linear {
+                if let Some(next) = self.entries.get(i + 1) {
+                    if (next.bpm - entry.bpm).abs() > 1e-9 {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(start)
+    }
+
+    /// The tempo that would cover `from..to` in the same time at one steady
+    /// speed: the beats over the minutes they take.
+    pub fn average_bpm_between(&self, from: u64, to: u64) -> f64 {
+        if to <= from {
+            return self.bpm_at(from);
+        }
+        let secs = self.secs_at_tick(to) - self.secs_at_tick(from);
+        if secs <= 0.0 {
+            return self.bpm_at(from);
+        }
+        let beats = (to - from) as f64 / PPQ as f64;
+        beats * 60.0 / secs
     }
 
     /// Get the BPM at a given tick.
@@ -372,9 +431,9 @@ fn ramp_secs(ticks: u64, from_bpm: f64, to_bpm: f64) -> f64 {
 ///
 /// Equal tempos, or a span of nothing, fall back to the plain division, since
 /// the formula divides by the tempo difference.
-fn ramp_ticks(secs: f64, from_bpm: f64, to_bpm: f64, span_ticks: u64) -> u64 {
+fn ramp_ticks(secs: f64, from_bpm: f64, to_bpm: f64, span_ticks: u64) -> f64 {
     if secs <= 0.0 {
-        return 0;
+        return 0.0;
     }
     let span_beats = span_ticks as f64 / PPQ as f64;
     if span_beats <= 0.0 || from_bpm <= 0.0 || to_bpm <= 0.0 {
@@ -388,12 +447,12 @@ fn ramp_ticks(secs: f64, from_bpm: f64, to_bpm: f64, span_ticks: u64) -> u64 {
     // Clamped to the segment: a caller past the end of the ramp belongs to the
     // next segment, not to an extrapolation of this one.
     let beats = beats.clamp(0.0, span_beats);
-    (beats * PPQ as f64).round() as u64
+    beats * PPQ as f64
 }
 
-fn secs_to_ticks(secs: f64, bpm: f64) -> u64 {
+fn secs_to_ticks(secs: f64, bpm: f64) -> f64 {
     let beats = secs * bpm / 60.0;
-    (beats * PPQ as f64).round() as u64
+    beats * PPQ as f64
 }
 
 #[cfg(test)]
@@ -642,6 +701,138 @@ mod tests {
             meter(PPQ * 24, 5, 4),
         ]);
         assert_eq!(m.meter_segments(), vec![(0, PPQ * 4), (PPQ * 16, PPQ * 5)]);
+    }
+
+    /// The song the tempo lane was drawn for: 150 for eight bars, a ramp up
+    /// to 160 through the build (bars 9 to 17), and straight back to 150 for
+    /// the drop. The end of the ramp and the drop are two points at one bar
+    /// line, so the ramp's end sits one tick before it.
+    fn build_and_drop() -> TempoMap {
+        let bar = PPQ * 4;
+        map(vec![
+            entry(0, 150.0, TempoRamp::Instant),
+            entry(bar * 8, 150.0, TempoRamp::Linear),
+            entry(bar * 16 - 1, 160.0, TempoRamp::Instant),
+            entry(bar * 16, 150.0, TempoRamp::Instant),
+        ])
+    }
+
+    #[test]
+    fn seconds_and_ticks_convert_both_ways_across_a_ramp_and_a_jump() {
+        let m = build_and_drop();
+        let bar = PPQ * 4;
+        // Every sixteenth through the intro, the build and the drop comes
+        // back to the tick it started from.
+        for tick in (0..bar * 24).step_by((PPQ / 4) as usize) {
+            let secs = m.secs_at_tick(tick);
+            let back = m.tick_at_secs(secs);
+            assert!(
+                (back - tick as f64).abs() < 1e-6,
+                "tick {tick}: {secs}s came back as {back}"
+            );
+        }
+        // And the sample-rounded forms agree with them within a tick.
+        for tick in (0..bar * 24).step_by(PPQ as usize + 37) {
+            let samples = m.tick_to_samples(tick, 48_000.0);
+            assert!(m.samples_to_tick(samples, 48_000.0).abs_diff(tick) <= 1);
+        }
+    }
+
+    #[test]
+    fn the_build_lasts_what_the_ramp_formula_says() {
+        let m = build_and_drop();
+        let bar = PPQ * 4;
+        let intro = 32.0 * 60.0 / 150.0;
+        assert!((m.secs_at_tick(bar * 8) - intro).abs() < 1e-9);
+        // 32 beats sliding from 150 to 160: 32 * 60 * ln(160/150) / 10.
+        let build = 32.0 * 60.0 * (160.0f64 / 150.0).ln() / 10.0;
+        let at_drop = m.secs_at_tick(bar * 16);
+        assert!(
+            (at_drop - intro - build).abs() < 0.001,
+            "the drop starts at {at_drop}s, expected {}",
+            intro + build
+        );
+        // Faster than holding 150, slower than jumping to 160 at once.
+        assert!(build < 32.0 * 60.0 / 150.0 && build > 32.0 * 60.0 / 160.0);
+        // The drop is back at 150: a bar of it is 1.6 s.
+        let drop_bar = m.secs_at_tick(bar * 17) - m.secs_at_tick(bar * 16);
+        assert!(
+            (drop_bar - 1.6).abs() < 1e-9,
+            "a bar of the drop is {drop_bar}s"
+        );
+        assert!((m.bpm_at(bar * 12) - 155.0).abs() < 0.01, "half way up");
+        assert_eq!(m.bpm_at(bar * 16), 150.0, "the drop is at 150");
+    }
+
+    #[test]
+    fn time_only_ever_moves_forward_through_the_map() {
+        let m = build_and_drop();
+        let mut last = -1.0;
+        for tick in (0..PPQ * 4 * 24).step_by(97) {
+            let secs = m.secs_at_tick(tick);
+            assert!(secs > last, "time went backwards at tick {tick}");
+            last = secs;
+        }
+    }
+
+    #[test]
+    fn a_signature_change_does_not_change_the_time() {
+        // Tempo and signature on the same map: bars of 7/8 are shorter, but
+        // a beat is still a quarter note's worth of ticks at the tempo.
+        let mut m = build_and_drop();
+        m.entries.insert(1, meter(PPQ * 8, 7, 8));
+        m.entries[1].bpm = 150.0;
+        let plain = build_and_drop();
+        for tick in [PPQ * 4, PPQ * 12, PPQ * 40, PPQ * 70] {
+            assert!((m.secs_at_tick(tick) - plain.secs_at_tick(tick)).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_steady_stretch_is_found_and_a_moving_one_is_not() {
+        let m = build_and_drop();
+        let bar = PPQ * 4;
+        assert_eq!(m.constant_bpm_between(0, bar * 8), Some(150.0));
+        assert_eq!(m.constant_bpm_between(bar * 2, bar * 4), Some(150.0));
+        assert_eq!(
+            m.constant_bpm_between(bar * 7, bar * 9),
+            None,
+            "into the ramp"
+        );
+        assert_eq!(
+            m.constant_bpm_between(bar * 10, bar * 11),
+            None,
+            "on the ramp"
+        );
+        assert_eq!(
+            m.constant_bpm_between(bar * 16, bar * 20),
+            Some(150.0),
+            "the drop"
+        );
+        assert_eq!(
+            m.constant_bpm_between(bar * 15, bar * 17),
+            None,
+            "across the jump"
+        );
+        // A change to the same tempo is no change.
+        let same = map(vec![
+            entry(0, 140.0, TempoRamp::Instant),
+            entry(PPQ * 8, 140.0, TempoRamp::Linear),
+            entry(PPQ * 16, 140.0, TempoRamp::Instant),
+        ]);
+        assert_eq!(same.constant_bpm_between(0, PPQ * 32), Some(140.0));
+    }
+
+    #[test]
+    fn the_average_tempo_covers_the_span_in_the_same_time() {
+        let m = build_and_drop();
+        let bar = PPQ * 4;
+        assert!((m.average_bpm_between(0, bar * 8) - 150.0).abs() < 1e-9);
+        let avg = m.average_bpm_between(bar * 8, bar * 16);
+        assert!(avg > 150.0 && avg < 160.0, "{avg}");
+        let secs = (bar * 8) as f64 / PPQ as f64 * 60.0 / avg;
+        let real = m.secs_at_tick(bar * 16) - m.secs_at_tick(bar * 8);
+        assert!((secs - real).abs() < 1e-9);
     }
 
     #[test]

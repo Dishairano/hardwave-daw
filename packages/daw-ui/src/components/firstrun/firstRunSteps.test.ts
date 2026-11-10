@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { useLanguageStore } from '../../i18n'
 import {
-  DEFAULT_SONG, finishLabel, nextStep, noteName, previousStep, stepCounter, stepStates,
+  DEFAULT_SONG, finishLabel, nextStep, noteName, previousStep, stepCounter, stepStates, templateForChoice,
 } from './firstRunSteps'
 
 describe('the first run', () => {
@@ -56,6 +56,11 @@ describe('the first run', () => {
     expect(finishLabel('starter:frenchcore')).toBe('Open the Frenchcore starter')
     expect(finishLabel('empty')).toBe('Open the empty project')
     expect(finishLabel('open')).toBe('Open project…')
+  })
+
+  it('opens the empty project with its drums, as the card and Skip promise', () => {
+    expect(templateForChoice('empty')).toBe('drums')
+    expect(templateForChoice('starter:rawstyle')).toBe('starter:rawstyle')
   })
 
   it('names a key the way the piano roll does', () => {

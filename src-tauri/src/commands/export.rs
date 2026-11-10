@@ -110,6 +110,34 @@ fn leave_the_fader_out(proj: &mut Project, target: &str) {
     });
 }
 
+/// Whether a clip lies wholly inside a consolidated range: the clips the
+/// glued clip is made of and replaces.
+fn inside_range(
+    clip: &hardwave_project::clip::ClipPlacement,
+    start_ticks: u64,
+    end_ticks: u64,
+) -> bool {
+    clip.position_ticks >= start_ticks && clip.position_ticks + clip.length_ticks <= end_ticks
+}
+
+/// Narrow a consolidate render to what the glued clip replaces: the track's
+/// clips inside the range, before its effects and fader. A clip across an
+/// edge of the range stays where it is, and it was rendered into the glued
+/// clip as well, so the part of it inside the range played twice.
+fn prepare_consolidate_render(
+    proj: &mut Project,
+    target: &str,
+    start_ticks: u64,
+    end_ticks: u64,
+    is_instrument: &dyn Fn(&str) -> bool,
+) {
+    isolate_track_for_render(proj, target, false, is_instrument);
+    leave_the_fader_out(proj, target);
+    if let Some(t) = proj.track_mut(target) {
+        t.clips.retain(|c| inside_range(c, start_ticks, end_ticks));
+    }
+}
+
 /// The ids of the plug-ins that make sound from notes, as the scanner knows
 /// them: what a consolidated pattern clip keeps.
 fn instrument_ids(engine: &DawEngine) -> std::collections::HashSet<String> {
@@ -128,12 +156,23 @@ fn instrument_ids(engine: &DawEngine) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// What a render plays.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RenderAs {
+    /// The mix, as the transport plays it.
+    Mix,
+    /// The channel rack's pattern, once: see
+    /// [`hardwave_engine::OfflineRender::the_pattern_once`].
+    Pattern,
+    /// Audio that goes back onto a track (a bounce, a freeze, a
+    /// consolidate): see [`hardwave_engine::OfflineRender::for_a_track`].
+    ATrack,
+}
+
 /// Prepare a render under the engine's lock, let go of the lock, then
 /// render and write. The render has its own copy of everything; holding
 /// the lock through it froze every window command until the file was done.
 ///
-/// `onto_a_track` is for audio that goes back onto a track (a bounce, a
-/// freeze, a consolidate): see [`hardwave_engine::OfflineRender::for_a_track`].
 #[allow(clippy::too_many_arguments)]
 fn render_unlocked<F>(
     engine: parking_lot::MutexGuard<'_, DawEngine>,
@@ -143,7 +182,7 @@ fn render_unlocked<F>(
     start_samples: u64,
     cancel: &Arc<AtomicBool>,
     on_progress: F,
-    onto_a_track: bool,
+    render_as: RenderAs,
     prepare: impl FnOnce(&mut Project),
 ) -> Result<bool, String>
 where
@@ -157,7 +196,7 @@ where
         start_samples,
         cancel,
         on_progress,
-        onto_a_track,
+        render_as,
         prepare,
     )
     .map(|loudness| loudness.is_some())
@@ -174,7 +213,7 @@ fn render_unlocked_measured<F>(
     start_samples: u64,
     cancel: &Arc<AtomicBool>,
     on_progress: F,
-    onto_a_track: bool,
+    render_as: RenderAs,
     prepare: impl FnOnce(&mut Project),
 ) -> Result<Option<FileLoudness>, String>
 where
@@ -184,10 +223,10 @@ where
     let render =
         engine.prepare_offline_render(fmt.sample_rate, start_samples, Some(&factory), prepare);
     drop(engine);
-    let render = if onto_a_track {
-        render.for_a_track()
-    } else {
-        render
+    let render = match render_as {
+        RenderAs::Mix => render,
+        RenderAs::Pattern => render.the_pattern_once(),
+        RenderAs::ATrack => render.for_a_track(),
     };
     let mut meter = LoudnessTap::new(fmt.sample_rate);
     let completed = write_render(
@@ -1181,7 +1220,9 @@ pub async fn export_project_wav(
     mp3_bitrate_kbps: Option<u32>,
     mp3_vbr_quality: Option<u32>,
     ogg_quality: Option<f32>,
+    pattern: Option<bool>,
 ) -> Result<ExportResult, String> {
+    let pattern = pattern.unwrap_or(false);
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
         (state.engine.clone(), state.export_cancel.clone())
@@ -1204,16 +1245,18 @@ pub async fn export_project_wav(
         let engine_guard = engine.lock();
 
         let body_samples = engine_guard.project_end_samples(sample_rate);
-        if body_samples == 0 {
+        if body_samples == 0 && !pattern {
             return Err("Project is empty — nothing to export.".into());
         }
         let tail_samples = ((tail_secs.max(0.0) as f64) * sample_rate as f64) as u64;
-        let (render_start, body_len) = match (start_samples, end_samples) {
-            (Some(s), Some(e)) if e > s => (s, e - s),
-            _ => (0, body_samples),
-        };
+        let (render_start, body_len, range_end) = export_span(
+            &engine_guard.project.lock(),
+            sample_rate,
+            (start_samples, end_samples),
+            pattern,
+            body_samples,
+        )?;
         let total_samples = body_len + tail_samples;
-        let range_end = (render_start + body_len < body_samples).then_some(render_start + body_len);
 
         let mut last_pct: i32 = -1;
         let app_for_progress = app.clone();
@@ -1237,7 +1280,11 @@ pub async fn export_project_wav(
                     );
                 }
             },
-            false,
+            if pattern {
+                RenderAs::Pattern
+            } else {
+                RenderAs::Mix
+            },
             |proj: &mut Project| {
                 if let Some(end) = range_end {
                     end_the_song_at(proj, end, sample_rate);
@@ -1348,6 +1395,51 @@ fn has_a_stem(project: &Project, track: &hardwave_project::track::Track) -> bool
             .any(|s| s.id != track.id && s.midi_route_to.contains(&track.id) && plays(s))
 }
 
+/// Whether a track plays notes in the channel rack's pattern: it gets a stem
+/// in an export of the pattern.
+fn plays_the_pattern(project: &Project, track: &hardwave_project::track::Track) -> bool {
+    matches!(track.kind, TrackKind::Midi)
+        && project
+            .step_rack
+            .as_ref()
+            .is_some_and(|rack| !rack.notes_for(&track.id).is_empty())
+}
+
+/// Where an export starts and how long its body is, in frames, and where
+/// the song is cut so the tail is only what still sounds: `None` when the
+/// body runs to the song's end.
+///
+/// The Pattern range is the channel rack's pattern from its start, as long
+/// as the pattern lasts under the tempo map. The window worked it out from
+/// the first tempo alone and asked for the song's first bars, which were
+/// the song unless the transport was in pattern mode. The song is cut at
+/// the pattern's end: audio clips on the playlist still play in pattern
+/// mode.
+fn export_span(
+    project: &Project,
+    sample_rate: u32,
+    (start, end): (Option<u64>, Option<u64>),
+    pattern: bool,
+    song_samples: u64,
+) -> Result<(u64, u64, Option<u64>), String> {
+    if pattern {
+        let rack = project
+            .step_rack
+            .as_ref()
+            .ok_or("There is no pattern in the channel rack to export")?;
+        let body = project
+            .tempo_map
+            .tick_to_samples(rack.length_ticks(), sample_rate as f64);
+        return Ok((0, body, Some(body)));
+    }
+    let (render_start, body_len) = match (start, end) {
+        (Some(s), Some(e)) if e > s => (s, e - s),
+        _ => (0, song_samples),
+    };
+    let range_end = (render_start + body_len < song_samples).then_some(render_start + body_len);
+    Ok((render_start, body_len, range_end))
+}
+
 /// Narrow a stem's copy of the song to one track's own sound, on its whole
 /// way out: through the buses it plays into and the returns it sends to, on
 /// to the master. The buses and returns on the way carry only this track,
@@ -1381,16 +1473,65 @@ fn isolate_for_stem(proj: &mut Project, target: &str) {
     }
 }
 
-/// Where the song's last clip ends, in ticks: how far a bounce or a freeze
-/// renders.
+/// Where the song's last clip ends, in ticks: where a bounce or a freeze
+/// renders up to, before its tail. The render an unfrozen track keeps on
+/// its freeze lane does not play and does not count: with its tail in it,
+/// freezing, unfreezing and freezing again would add a tail each time.
 fn song_end_ticks(project: &Project) -> u64 {
+    use hardwave_project::clip::FREEZE_LANE;
     project
         .tracks
         .iter()
-        .flat_map(|t| t.clips.iter())
+        .flat_map(|t| {
+            t.clips
+                .iter()
+                .filter(move |c| t.frozen || c.lane != FREEZE_LANE)
+        })
         .map(|c| c.position_ticks + c.length_ticks)
         .max()
         .unwrap_or(0)
+}
+
+/// How far past the end of the song a bounce or a freeze renders, at most,
+/// for what is still sounding there: a reverb, a delay, a release.
+const TAIL_CAP_SECS: f64 = 10.0;
+/// Where the tail has died away: -90 dBFS.
+const TAIL_FLOOR: f32 = 3.2e-5;
+
+/// What a bounce or a freeze renders: up to the song's end, in ticks, and
+/// how many frames with the tail. Both stopped at the last clip's end, so a
+/// reverb on a frozen track was cut off there.
+fn render_with_tail(project: &Project, sample_rate: u32) -> (u64, u64) {
+    let end_ticks = song_end_ticks(project);
+    let body = project
+        .tempo_map
+        .tick_to_samples(end_ticks, sample_rate as f64);
+    if body == 0 {
+        return (end_ticks, 0);
+    }
+    let tail = (TAIL_CAP_SECS * sample_rate as f64) as u64;
+    (end_ticks, body + tail)
+}
+
+/// Where a bounce's or a freeze's sound ends, in ticks: the song's end, or
+/// later where its tail falls below the floor. The clip that plays it ends
+/// there, rather than ten seconds of silence on.
+fn sound_end_ticks(engine: &DawEngine, source_id: &str, song_end_ticks: u64) -> u64 {
+    let Some(buffer) = engine.audio_pool.get(source_id) else {
+        return song_end_ticks;
+    };
+    let last = buffer
+        .channels
+        .iter()
+        .filter_map(|ch| ch.iter().rposition(|s| s.abs() > TAIL_FLOOR))
+        .max();
+    let Some(last) = last else {
+        return song_end_ticks;
+    };
+    let sr = engine.current_sample_rate() as f64;
+    let at = ((last + 1) as f64 / buffer.sample_rate.max(1) as f64 * sr).ceil() as u64;
+    let project = engine.project.lock();
+    (project.tempo_map.samples_to_tick(at, sr) + 1).max(song_end_ticks)
 }
 
 /// Give a rendered clip the length, in ticks, of the stretch of song it was
@@ -1497,13 +1638,14 @@ pub async fn consolidate_track_range(
                 start_samples,
                 &cancel,
                 |_, _| {},
-                true,
+                RenderAs::ATrack,
                 // The glued clip stays on this track, through its effects
                 // and fader and on to the master: the render has none of
                 // them, only the instrument that plays its notes.
                 move |proj: &mut Project| {
-                    isolate_track_for_render(proj, &target, false, &|id| instruments.contains(id));
-                    leave_the_fader_out(proj, &target);
+                    prepare_consolidate_render(proj, &target, start_ticks, end_ticks, &|id| {
+                        instruments.contains(id)
+                    });
                 },
             )?;
             if !completed {
@@ -1521,44 +1663,80 @@ pub async fn consolidate_track_range(
 
     let (path, _, _) = rendered;
 
-    // Replacing the pieces with the render is one step, so one undo puts
-    // the original clips back.
     let state: State<AppState> = app.state();
-    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    place_consolidated(&engine, &source_track_id, &path, start_ticks, end_ticks)?;
+    Ok(path)
+}
+
+/// Replace a track's clips inside a range with the consolidated render, as
+/// one undo step: one undo puts the original clips back.
+fn place_consolidated(
+    engine: &DawEngine,
+    track_id: &str,
+    path: &str,
+    start_ticks: u64,
+    end_ticks: u64,
+) -> Result<(), String> {
+    engine.snapshot_before_mutation();
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
-        if let Some(track) = project.track_mut(&source_track_id) {
+        if let Some(track) = project.track_mut(track_id) {
             // Only what lies inside the range goes: a clip that merely
-            // overlaps the edge is left alone rather than silently cut.
-            track.clips.retain(|c| {
-                let clip_end = c.position_ticks + c.length_ticks;
-                !(c.position_ticks >= start_ticks && clip_end <= end_ticks)
-            });
+            // overlaps the edge is left alone rather than silently cut, and
+            // left out of the render.
+            track
+                .clips
+                .retain(|c| !inside_range(c, start_ticks, end_ticks));
         }
     }
-    let clip = crate::commands::audio::import_audio_file_blocking(
-        state.clone(),
-        source_track_id.clone(),
-        path.clone(),
+    let clip = crate::commands::audio::place_audio_file(
+        engine,
+        track_id.to_string(),
+        path.to_string(),
         Some(start_ticks),
     )?;
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
         fit_render_clip(
             &mut project,
-            &source_track_id,
+            track_id,
             &clip.clip_id,
             start_ticks,
             end_ticks,
         );
+        cancel_the_track_pitch(&mut project, track_id, &clip.clip_id);
     }
-    state.engine.lock().rebuild_graph();
-    Ok(path)
+    engine.rebuild_graph();
+    Ok(())
 }
 
-/// Render one track through its plug-ins to audio, put the result on a new/// Render one track through its plug-ins to audio, put the result on a new
+/// Play a glued clip at the speed it was rendered at on a track with a
+/// pitch offset. The render has the track's pitch in it, as it was heard,
+/// and the glued clip played through it again: a track at +5 came back at
+/// +10, and faster. The track's pitch resamples each clip, so the clip is
+/// resampled back by the same amount; changing the track's pitch later
+/// moves it as it moves the track's other clips.
+fn cancel_the_track_pitch(project: &mut Project, track_id: &str, clip_id: &str) {
+    use hardwave_project::clip::ClipContent;
+    let Some(track) = project.track_mut(track_id) else {
+        return;
+    };
+    let semitones = track.pitch_semitones as f64 + track.fine_tune_cents as f64 / 100.0;
+    if semitones.abs() < 1e-9 {
+        return;
+    }
+    for placement in track.clips.iter_mut() {
+        if let ClipContent::Audio(ac) = &mut placement.content {
+            if ac.id == clip_id {
+                ac.pitch_semitones = -semitones;
+                ac.treatment.resample = true;
+            }
+        }
+    }
+}
+
+/// Render one track through its plug-ins to audio, put the result on a new
 /// track, and mute the original.
 ///
 /// A track with three plug-ins on it costs that CPU on every block, for the
@@ -1578,14 +1756,13 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
-    // How far the render goes, in ticks, for the clip that plays it.
-    let end_ticks = song_end_ticks(&engine.lock().project.lock());
 
     let rendered =
-        tauri::async_runtime::spawn_blocking(move || -> Result<(String, String), String> {
+        tauri::async_runtime::spawn_blocking(move || -> Result<(String, String, u64), String> {
             let engine_guard = engine.lock();
             let sample_rate = engine_guard.current_sample_rate();
-            let total_samples = engine_guard.project_end_samples(sample_rate);
+            let (end_ticks, total_samples) =
+                render_with_tail(&engine_guard.project.lock(), sample_rate);
             if total_samples == 0 {
                 return Err("there is nothing on the timeline to bounce".into());
             }
@@ -1632,7 +1809,7 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
                 0,
                 &cancel,
                 |_, _| {},
-                true,
+                RenderAs::ATrack,
                 // Through its own effects and fader, which the new track
                 // does without, and not through its bus or the master,
                 // which the new track plays into again.
@@ -1642,46 +1819,65 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
                 let _ = fs::remove_file(&out_path);
                 return Err("the bounce was cancelled".into());
             }
-            Ok((out_path.to_string_lossy().into_owned(), track_name))
+            Ok((
+                out_path.to_string_lossy().into_owned(),
+                track_name,
+                end_ticks,
+            ))
         })
         .await
         .map_err(|e| e.to_string())??;
 
-    let (path, track_name) = rendered;
+    let (path, track_name, end_ticks) = rendered;
 
-    // Placing it is one undo step together with muting the original.
     let state: State<AppState> = app.state();
-    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    place_bounce(&engine, &source_track_id, &track_name, &path, end_ticks)?;
+    Ok(path)
+}
+
+/// Put a bounce on a new track and mute the original, as one undo step:
+/// one undo takes the new track away and unmutes the original.
+fn place_bounce(
+    engine: &DawEngine,
+    source_track_id: &str,
+    track_name: &str,
+    path: &str,
+    end_ticks: u64,
+) -> Result<String, String> {
+    engine.snapshot_before_mutation();
     let new_track_id = {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
         // Into the same bus as the original, so the bus's effects still
         // shape it; the render left them out.
         let bus = project
-            .track(&source_track_id)
+            .track(source_track_id)
             .and_then(|t| t.output_bus.clone());
+        let (sends, send_lanes) = sends_for_the_bounce(&project, source_track_id);
         let id = project.add_audio_track(format!("{track_name} (bounced)"));
         if let Some(t) = project.track_mut(&id) {
             t.output_bus = bus;
+            t.sends = sends;
+            t.automation_lanes.extend(send_lanes);
         }
         id
     };
-    let clip = crate::commands::audio::import_audio_file_blocking(
-        state.clone(),
+    let clip = crate::commands::audio::place_audio_file(
+        engine,
         new_track_id.clone(),
-        path.clone(),
+        path.to_string(),
         Some(0),
     )?;
+    let end_ticks = sound_end_ticks(engine, &clip.source_id, end_ticks);
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
         fit_render_clip(&mut project, &new_track_id, &clip.clip_id, 0, end_ticks);
-        if let Some(t) = project.track_mut(&source_track_id) {
+        if let Some(t) = project.track_mut(source_track_id) {
             t.muted = true;
         }
     }
-    state.engine.lock().rebuild_graph();
-    Ok(path)
+    engine.rebuild_graph();
+    Ok(new_track_id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1704,7 +1900,14 @@ pub async fn export_project_stems(
     mp3_bitrate_kbps: Option<u32>,
     mp3_vbr_quality: Option<u32>,
     ogg_quality: Option<f32>,
+    pattern: Option<bool>,
 ) -> Result<StemsExportResult, String> {
+    let pattern = pattern.unwrap_or(false);
+    let render_as = if pattern {
+        RenderAs::Pattern
+    } else {
+        RenderAs::Mix
+    };
     let (engine, cancel) = {
         let state: State<AppState> = app.state();
         (state.engine.clone(), state.export_cancel.clone())
@@ -1734,17 +1937,18 @@ pub async fn export_project_stems(
             let engine_guard = engine.lock();
 
             let body_samples = engine_guard.project_end_samples(sample_rate);
-            if body_samples == 0 {
+            if body_samples == 0 && !pattern {
                 return Err("Project is empty — nothing to export.".into());
             }
             let tail_samples = ((tail_secs.max(0.0) as f64) * sample_rate as f64) as u64;
-            let (render_start, body_len) = match (start_samples, end_samples) {
-                (Some(s), Some(e)) if e > s => (s, e - s),
-                _ => (0, body_samples),
-            };
+            let (render_start, body_len, range_end) = export_span(
+                &engine_guard.project.lock(),
+                sample_rate,
+                (start_samples, end_samples),
+                pattern,
+                body_samples,
+            )?;
             let total_samples = body_len + tail_samples;
-            let range_end =
-                (render_start + body_len < body_samples).then_some(render_start + body_len);
 
             let folder = PathBuf::from(&folder_path);
             fs::create_dir_all(&folder).map_err(|e| format!("create folder: {e}"))?;
@@ -1754,7 +1958,9 @@ pub async fn export_project_stems(
                 project
                     .tracks
                     .iter()
-                    .filter(|t| has_a_stem(&project, t))
+                    .filter(|t| {
+                        has_a_stem(&project, t) || (pattern && plays_the_pattern(&project, t))
+                    })
                     .map(|t| (t.id.clone(), t.name.clone()))
                     .collect()
             };
@@ -1810,7 +2016,7 @@ pub async fn export_project_stems(
                             );
                         }
                     },
-                    false,
+                    render_as,
                     |proj: &mut Project| {
                         isolate_for_stem(proj, &target_id);
                         if !respect_mute_solo {
@@ -1865,7 +2071,7 @@ pub async fn export_project_stems(
                             );
                         }
                     },
-                    false,
+                    render_as,
                     |proj: &mut Project| {
                         if let Some(end) = range_end {
                             end_the_song_at(proj, end, sample_rate);
@@ -1926,96 +2132,187 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
         (state.engine.clone(), state.export_cancel.clone())
     };
     cancel.store(false, Ordering::Relaxed);
-    // How far the render goes, in ticks, for the clip that plays it.
-    let end_ticks = song_end_ticks(&engine.lock().project.lock());
 
-    let rendered = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let engine_guard = engine.lock();
-        let sample_rate = engine_guard.current_sample_rate();
-        let total_samples = engine_guard.project_end_samples(sample_rate);
-        if total_samples == 0 {
-            return Err("there is nothing on the timeline to freeze".into());
-        }
-        let track_name = {
-            let project = engine_guard.project.lock();
-            let track = project
-                .track(&track_id)
-                .ok_or_else(|| format!("Track not found: {track_id}"))?;
-            if track.frozen {
-                return Err("that track is already frozen".into());
+    let rendered =
+        tauri::async_runtime::spawn_blocking(move || -> Result<(String, u64), String> {
+            let engine_guard = engine.lock();
+            let sample_rate = engine_guard.current_sample_rate();
+            let (end_ticks, total_samples) =
+                render_with_tail(&engine_guard.project.lock(), sample_rate);
+            if total_samples == 0 {
+                return Err("there is nothing on the timeline to freeze".into());
             }
-            track.name.clone()
-        };
-
-        let dir = match engine_guard.project_dir() {
-            Some(d) => d.join("Freeze"),
-            None => dirs::data_dir()
-                .ok_or_else(|| "No writable folder for freezes on this system".to_string())?
-                .join("Hardwave")
-                .join("Freeze"),
-        };
-        fs::create_dir_all(&dir).map_err(|e| format!("create folder: {e}"))?;
-        let safe: String = track_name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == ' ' || c == '-' {
-                    c
-                } else {
-                    '_'
+            let track_name = {
+                let project = engine_guard.project.lock();
+                let track = project
+                    .track(&track_id)
+                    .ok_or_else(|| format!("Track not found: {track_id}"))?;
+                if track.frozen {
+                    return Err("that track is already frozen".into());
                 }
-            })
-            .collect();
-        let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
-        let out_path = dir.join(format!("{safe} frozen {stamp}.wav"));
+                track.name.clone()
+            };
 
-        let fmt = format_for_a_track(sample_rate);
+            let dir = match engine_guard.project_dir() {
+                Some(d) => d.join("Freeze"),
+                None => dirs::data_dir()
+                    .ok_or_else(|| "No writable folder for freezes on this system".to_string())?
+                    .join("Hardwave")
+                    .join("Freeze"),
+            };
+            fs::create_dir_all(&dir).map_err(|e| format!("create folder: {e}"))?;
+            let safe: String = track_name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == ' ' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+            let out_path = dir.join(format!("{safe} frozen {stamp}.wav"));
 
-        let target = track_id.clone();
-        let completed = render_unlocked(
-            engine_guard,
-            &out_path,
-            fmt,
-            total_samples,
-            0,
-            &cancel,
-            |_, _| {},
-            true,
-            // Through its own effects, which rest while it is frozen, and
-            // not through its fader, its bus or the master, which it still
-            // plays through.
-            move |proj: &mut Project| {
-                isolate_track_for_render(proj, &target, true, &|_| true);
-                leave_the_fader_out(proj, &target);
-            },
-        )?;
-        if !completed {
-            let _ = fs::remove_file(&out_path);
-            return Err("the freeze was cancelled".into());
-        }
-        Ok(out_path.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+            let fmt = format_for_a_track(sample_rate);
 
-    // Placing the render and flipping the switch are one undo step.
+            let target = track_id.clone();
+            let completed = render_unlocked(
+                engine_guard,
+                &out_path,
+                fmt,
+                total_samples,
+                0,
+                &cancel,
+                |_, _| {},
+                RenderAs::ATrack,
+                // Through its own effects, which rest while it is frozen, and
+                // not through its fader, its bus or the master, which it still
+                // plays through.
+                move |proj: &mut Project| {
+                    isolate_track_for_render(proj, &target, true, &|_| true);
+                    leave_the_fader_out(proj, &target);
+                },
+            )?;
+            if !completed {
+                let _ = fs::remove_file(&out_path);
+                return Err("the freeze was cancelled".into());
+            }
+            Ok((out_path.to_string_lossy().into_owned(), end_ticks))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    let (rendered, end_ticks) = rendered;
+
     let state: State<AppState> = app.state();
-    state.engine.lock().snapshot_before_mutation();
-    let clip = crate::commands::audio::import_audio_file_blocking(
-        state.clone(),
-        source_track_id.clone(),
-        rendered.clone(),
+    let engine = state.engine.lock();
+    place_freeze(&engine, &source_track_id, &rendered, end_ticks)?;
+    Ok(rendered)
+}
+
+/// Put a freeze render on its track's freeze lane and freeze the track, as
+/// one undo step: one undo unfreezes it.
+fn place_freeze(
+    engine: &DawEngine,
+    track_id: &str,
+    path: &str,
+    end_ticks: u64,
+) -> Result<(), String> {
+    engine.snapshot_before_mutation();
+    let clip = crate::commands::audio::place_audio_file(
+        engine,
+        track_id.to_string(),
+        path.to_string(),
         Some(0),
     )?;
+    let end_ticks = sound_end_ticks(engine, &clip.source_id, end_ticks);
     {
-        let engine = state.engine.lock();
         let mut project = engine.project.lock();
-        fit_render_clip(&mut project, &source_track_id, &clip.clip_id, 0, end_ticks);
-        if let Some(track) = project.track_mut(&source_track_id) {
+        fit_render_clip(&mut project, track_id, &clip.clip_id, 0, end_ticks);
+        if let Some(track) = project.track_mut(track_id) {
             place_freeze_render(track, &clip.clip_id);
         }
     }
-    state.engine.lock().rebuild_graph();
-    Ok(rendered)
+    engine.rebuild_graph();
+    Ok(())
+}
+
+/// The original track's sends, for the new track its bounce plays on, and
+/// the automation lanes that move their levels. The bounce leaves the sends'
+/// returns out, and the new track had no sends, so a bounced lead lost its
+/// reverb and delay.
+///
+/// The bounce already went through the fader, so a send after the fader is
+/// copied as it is. A send before the fader reads the part ahead of the
+/// fader, which the bounce has only as the fader left it: it is copied, at
+/// its level less the fader's, only when the fader stands still, the pan is
+/// in the middle, and the level that takes fits the send. Otherwise it is
+/// left out.
+fn sends_for_the_bounce(
+    project: &Project,
+    source_track_id: &str,
+) -> (
+    Vec<hardwave_project::mixer::Send>,
+    Vec<hardwave_project::automation::AutomationLane>,
+) {
+    use hardwave_project::automation::AutomationTarget;
+    use hardwave_project::modulation::ModTarget;
+    let Some(track) = project.track(source_track_id) else {
+        return (Vec::new(), Vec::new());
+    };
+    let (vca_db, vca_muted) = hardwave_project::vca::offset_for(&project.vcas, source_track_id);
+    let level_db = track.volume_db + vca_db;
+    let moves = |t: &AutomationTarget| {
+        matches!(
+            t,
+            AutomationTarget::TrackVolume
+                | AutomationTarget::TrackPan
+                | AutomationTarget::TrackMute
+        )
+    };
+    let fader_still = !vca_muted
+        && level_db > -100.0
+        && track.pan.abs() < 1e-9
+        && !track.automation_lanes.iter().any(|l| moves(&l.target))
+        && !track.automation_clips.iter().any(|c| moves(&c.target))
+        && !project.modulations.iter().any(|r| {
+            r.track_id == source_track_id
+                && matches!(r.target, ModTarget::TrackVolume | ModTarget::TrackPan)
+        });
+    let mut sends = Vec::new();
+    let mut lanes = Vec::new();
+    for (index, send) in track.sends.iter().enumerate() {
+        let send_lanes: Vec<_> = track
+            .automation_lanes
+            .iter()
+            .filter(|l| matches!(l.target, AutomationTarget::SendLevel { send_index } if send_index == index))
+            .collect();
+        let copy = if !send.pre_fader {
+            Some(send.clone())
+        } else {
+            let gain_db = send.gain_db - level_db;
+            // A lane draws the send's level outright, so it cannot be moved
+            // by the fader's level.
+            let lanes_fit = send_lanes.is_empty() || level_db.abs() < 1e-9;
+            (fader_still && gain_db <= 6.0 && lanes_fit).then(|| hardwave_project::mixer::Send {
+                gain_db: gain_db.max(-100.0),
+                ..send.clone()
+            })
+        };
+        let Some(copy) = copy else {
+            continue;
+        };
+        for lane in send_lanes {
+            let mut lane = lane.clone();
+            lane.id = uuid::Uuid::new_v4().to_string();
+            lane.target = AutomationTarget::SendLevel {
+                send_index: sends.len(),
+            };
+            lanes.push(lane);
+        }
+        sends.push(copy);
+    }
+    (sends, lanes)
 }
 
 /// Move a freeze render onto the track's freeze lane and freeze the track.
@@ -2177,6 +2474,7 @@ mod isolate_tests {
             target,
             points: Vec::new(),
             visible: true,
+            row: None,
         };
         let t = p.track_mut(&id).expect("the kick");
         t.automation_lanes = vec![
@@ -2268,12 +2566,14 @@ mod stem_and_freeze_tests {
                 fade_out_curve: Default::default(),
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: track.into(),
             position_ticks: 0,
             length_ticks: LEN_TICKS,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 
@@ -2288,6 +2588,7 @@ mod stem_and_freeze_tests {
             length_ticks: LEN_TICKS,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 
@@ -2656,7 +2957,7 @@ mod stem_and_freeze_tests {
             0,
             &Arc::new(AtomicBool::new(false)),
             |_, _| {},
-            true,
+            super::RenderAs::ATrack,
             move |p: &mut Project| super::isolate_track_for_render(p, &target, true, &|_| true),
         )
         .expect("it bounces");
@@ -2690,6 +2991,40 @@ mod stem_and_freeze_tests {
         );
     }
 
+    /// The Pattern range is the pattern, from its start, as long as it
+    /// lasts under the tempo map: here two beats at 140 and two at 70.
+    #[test]
+    fn a_pattern_export_lasts_the_pattern_under_the_tempo_map() {
+        let mut p = Project::default();
+        let mut slower = p.tempo_map.entries[0].clone();
+        slower.tick = 2 * hardwave_midi::PPQ;
+        slower.bpm = 70.0;
+        p.tempo_map.entries.push(slower);
+        p.channel_rack_state = Some(r#"{"patterns":[{"id":"p"}],"activeId":"p"}"#.into());
+        p.refresh_step_rack();
+        let bar = 4 * hardwave_midi::PPQ;
+        let expected = p.tempo_map.tick_to_samples(bar, SR as f64);
+        let at_first_tempo = (4.0 * 60.0 / 140.0 * SR as f64) as u64;
+        assert_ne!(expected, at_first_tempo);
+
+        let span = super::export_span(
+            &p,
+            SR,
+            (Some(0), Some(at_first_tempo)),
+            true,
+            10 * SR as u64,
+        );
+        assert_eq!(
+            span,
+            Ok((0, expected, Some(expected))),
+            "a bar under the tempo map, the song cut there"
+        );
+
+        p.channel_rack_state = None;
+        p.refresh_step_rack();
+        assert!(super::export_span(&p, SR, (None, None), true, 0).is_err());
+    }
+
     /// A muted track, or one silenced by a solo elsewhere, renders as it
     /// sounds unmuted: freezing or bouncing it rendered silence.
     #[test]
@@ -2709,6 +3044,411 @@ mod stem_and_freeze_tests {
             p.track(&drums).unwrap().muted,
             "another track's own mute stays, as it keys sidechains as heard"
         );
+    }
+}
+
+#[cfg(test)]
+mod placing_tests {
+    use super::{place_bounce, place_consolidated, place_freeze};
+    use hardwave_engine::DawEngine;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
+    use std::path::Path;
+
+    /// A short steady stereo file, as a render writes one.
+    pub(super) fn render_file(dir: &Path, frames: usize, level: f32) -> String {
+        let path = dir.join("render.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for _ in 0..frames * 2 {
+            w.write_sample(level).unwrap();
+        }
+        w.finalize().unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    pub(super) fn clip(id: &str, track: &str, at: u64, len: u64) -> ClipPlacement {
+        ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: id.into(),
+                name: id.into(),
+                source_path: id.into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: 100,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: String::new(),
+                treatment: Default::default(),
+                tuned_notes: Vec::new(),
+            }),
+            track_id: track.into(),
+            position_ticks: at,
+            length_ticks: len,
+            lane: 0,
+            color: None,
+            row: None,
+        }
+    }
+
+    fn clip_ids(engine: &DawEngine, track: &str) -> Vec<String> {
+        let p = engine.project.lock();
+        p.track(track)
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Audio(a) => a.id.clone(),
+                ClipContent::Midi(m) => m.id.clone(),
+            })
+            .collect()
+    }
+
+    /// A consolidate renders only the clips it replaces. A clip across an
+    /// edge of the range stays in place and was rendered into the glued
+    /// clip too, so its part inside the range was heard twice.
+    #[test]
+    fn a_consolidate_renders_only_the_clips_it_replaces() {
+        let mut p = hardwave_project::Project::default();
+        let id = p.add_audio_track("Vox".into());
+        {
+            let t = p.track_mut(&id).unwrap();
+            t.clips.push(clip("inside", &id, 960, 960));
+            t.clips.push(clip("across the start", &id, 480, 960));
+            t.clips.push(clip("across the end", &id, 1440, 960));
+            t.clips.push(clip("after", &id, 3000, 960));
+        }
+        let mut render = p.clone();
+        super::prepare_consolidate_render(&mut render, &id, 960, 1920, &|_| false);
+        let rendered: Vec<&str> = render
+            .track(&id)
+            .unwrap()
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Audio(a) => a.id.as_str(),
+                ClipContent::Midi(m) => m.id.as_str(),
+            })
+            .collect();
+        assert_eq!(rendered, ["inside"], "only what the glued clip replaces");
+    }
+
+    /// A steady 220 Hz sine, `frames` long, in the engine's pool as "sine".
+    pub(super) fn sine_source(engine: &DawEngine, frames: usize) {
+        let sr = engine.current_sample_rate();
+        let ch: Vec<f32> = (0..frames)
+            .map(|n| (std::f32::consts::TAU * 220.0 * n as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        engine.audio_pool.insert(
+            "sine".to_string(),
+            hardwave_engine::AudioBuffer {
+                channels: vec![ch.clone(), ch],
+                sample_rate: sr,
+                num_frames: frames,
+            },
+        );
+    }
+
+    /// A clip of the pool's sine.
+    pub(super) fn sine_clip(
+        id: &str,
+        track: &str,
+        at: u64,
+        len: u64,
+        frames: u64,
+    ) -> ClipPlacement {
+        let mut c = clip(id, track, at, len);
+        if let ClipContent::Audio(a) = &mut c.content {
+            a.source_path = "sine".into();
+            a.source_end = frames;
+        }
+        c
+    }
+
+    /// The whole song, `len` frames, interleaved.
+    pub(super) fn render(engine: &DawEngine, len: u64) -> Vec<f32> {
+        let mut out = Vec::new();
+        engine
+            .render_offline_with(
+                engine.current_sample_rate(),
+                len,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend_from_slice(b);
+                    true
+                },
+            )
+            .expect("it renders");
+        out
+    }
+
+    /// Interleaved stereo frames as a 32-bit float file at the engine's rate.
+    pub(super) fn write_file(engine: &DawEngine, dir: &Path, name: &str, frames: &[f32]) -> String {
+        let path = dir.join(name);
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: engine.current_sample_rate(),
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for &s in frames {
+            w.write_sample(s).unwrap();
+        }
+        w.finalize().unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    pub(super) fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b)
+            .fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+    }
+
+    /// Consolidating on a track with a pitch offset plays the part as it
+    /// did. The render had the track's pitch in it and the glued clip went
+    /// through it again: two pieces at +5 came back as one at +10.
+    #[test]
+    fn a_consolidated_part_on_a_pitched_track_plays_as_it_did() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = DawEngine::new();
+        let sr = engine.current_sample_rate();
+        let frames = 2 * sr as u64;
+        sine_source(&engine, frames as usize);
+        let id = {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Vox".into());
+            let t = p.track_mut(&id).unwrap();
+            t.pitch_semitones = 5;
+            t.clips.push(sine_clip("a", &id, 0, 960, frames));
+            t.clips.push(sine_clip("b", &id, 960, 960, frames));
+            id
+        };
+        let len = engine
+            .project
+            .lock()
+            .tempo_map
+            .tick_to_samples(1920, sr as f64);
+        let heard = render(&engine, len);
+
+        // The consolidate render, as the command makes it.
+        let mut glued = Vec::new();
+        let target = id.clone();
+        engine
+            .prepare_offline_render(sr, 0, None, move |p| {
+                super::prepare_consolidate_render(p, &target, 0, 1920, &|_| false)
+            })
+            .for_a_track()
+            .run(len, |b| {
+                glued.extend_from_slice(b);
+                true
+            });
+        let file = write_file(&engine, dir.path(), "glued.wav", &glued);
+        place_consolidated(&engine, &id, &file, 0, 1920).unwrap();
+
+        let played = render(&engine, len);
+        let peak = heard.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        // Up to the last 5 ms: a clip's own declick fades its last
+        // millisecond, and the glued clip fades the faded end again.
+        let upto = heard.len() - 2 * (sr as usize / 200);
+        let diff = worst_difference(&heard[..upto], &played[..upto]);
+        assert!(peak > 0.1, "the part plays: {peak}");
+        assert!(
+            diff < 1e-3,
+            "the glued part plays as the pieces did: off by {diff}"
+        );
+    }
+
+    fn send(target: &str, gain_db: f64, pre_fader: bool) -> hardwave_project::mixer::Send {
+        hardwave_project::mixer::Send {
+            target: target.into(),
+            gain_db,
+            pre_fader,
+            enabled: true,
+        }
+    }
+
+    /// A bounce keeps the original's sends, so its reverb and delay stay.
+    /// The new track had none, and the original is muted: the returns fell
+    /// silent. A send after the fader goes over as it is; one before the
+    /// fader goes over less the fader's level, which the bounce already has.
+    #[test]
+    fn a_bounce_keeps_the_sends_to_the_reverb_and_the_delay() {
+        use hardwave_project::automation::{AutomationLane, AutomationTarget};
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let (id, verb, delay) = {
+            let mut p = engine.project.lock();
+            let verb = p.add_audio_track("Verb".into());
+            let delay = p.add_audio_track("Delay".into());
+            let id = p.add_audio_track("Lead".into());
+            let t = p.track_mut(&id).unwrap();
+            t.volume_db = -6.0;
+            t.sends.push(send(&verb, -3.0, false));
+            t.sends.push(send(&delay, -10.0, true));
+            t.automation_lanes.push(AutomationLane {
+                id: "throw".into(),
+                target: AutomationTarget::SendLevel { send_index: 0 },
+                points: Vec::new(),
+                visible: true,
+                row: None,
+            });
+            (id, verb, delay)
+        };
+        let bounced = place_bounce(&engine, &id, "Lead", &file, 1920).unwrap();
+        let p = engine.project.lock();
+        let t = p.track(&bounced).unwrap();
+        let sends: Vec<(&str, f64, bool)> = t
+            .sends
+            .iter()
+            .map(|s| (s.target.as_str(), s.gain_db, s.pre_fader))
+            .collect();
+        assert_eq!(
+            sends,
+            [(verb.as_str(), -3.0, false), (delay.as_str(), -4.0, true)],
+            "the reverb as it was, the delay less the fader the bounce has in it"
+        );
+        assert!(
+            t.automation_lanes
+                .iter()
+                .any(|l| matches!(l.target, AutomationTarget::SendLevel { send_index: 0 })),
+            "the reverb throw goes with it"
+        );
+        drop(p);
+
+        // Panned, the part before the fader is not in the bounce: the
+        // send before the fader stays behind.
+        engine.project.lock().track_mut(&id).unwrap().pan = 0.4;
+        let bounced = place_bounce(&engine, &id, "Lead", &file, 1920).unwrap();
+        let p = engine.project.lock();
+        let targets: Vec<&str> = p
+            .track(&bounced)
+            .unwrap()
+            .sends
+            .iter()
+            .map(|s| s.target.as_str())
+            .collect();
+        assert_eq!(targets, [verb.as_str()]);
+    }
+
+    /// A freeze or a bounce renders on past the end of the song while
+    /// something still sounds, and its clip plays to where that dies away.
+    /// Both stopped at the last clip's end, so a frozen track's reverb was
+    /// cut off there.
+    #[test]
+    fn a_frozen_track_plays_its_tail_past_the_end_of_the_song() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = DawEngine::new();
+        let sr = engine.current_sample_rate();
+        let (id, song_end) = {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Lead".into());
+            p.track_mut(&id)
+                .unwrap()
+                .clips
+                .push(clip("a", &id, 0, 1920));
+            // An old render on an unfrozen track's freeze lane plays nothing
+            // and does not make the song longer.
+            let other = p.add_audio_track("Pad".into());
+            let mut old = clip("old", &other, 0, 9600);
+            old.lane = hardwave_project::clip::FREEZE_LANE;
+            p.track_mut(&other).unwrap().clips.push(old);
+            let (end, total) = super::render_with_tail(&p, sr);
+            assert_eq!(end, 1920, "the song ends with the lead");
+            let song_end = p.tempo_map.tick_to_samples(1920, sr as f64);
+            assert_eq!(total, song_end + 10 * sr as u64, "with room for a tail");
+            (id, song_end as usize)
+        };
+        // The part, half a second of tail dying away, then silence.
+        let tail = sr as usize / 2;
+        let mut frames = Vec::new();
+        for i in 0..song_end + tail + sr as usize {
+            let v = if i < song_end {
+                0.25
+            } else if i < song_end + tail {
+                0.01
+            } else {
+                0.0
+            };
+            frames.extend_from_slice(&[v, v]);
+        }
+        let file = write_file(&engine, dir.path(), "frozen.wav", &frames);
+        place_freeze(&engine, &id, &file, 1920).unwrap();
+        let p = engine.project.lock();
+        let render = p.track(&id).unwrap().clips.last().unwrap();
+        let plays_to = p
+            .tempo_map
+            .tick_to_samples(render.position_ticks + render.length_ticks, sr as f64)
+            as usize;
+        assert!(
+            plays_to >= song_end + tail && plays_to < song_end + tail + sr as usize / 100,
+            "the clip plays the tail and stops where it dies away: {plays_to} for {}",
+            song_end + tail
+        );
+    }
+
+    /// Bouncing, freezing and consolidating are one undo step each. Each
+    /// took two: the import of the render took a step of its own, so the
+    /// first undo only took the new clip away and left the original clips
+    /// gone, the track muted, or the bounced track there and empty.
+    #[test]
+    fn bouncing_freezing_and_consolidating_each_take_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let id = {
+            let mut p = engine.project.lock();
+            let id = p.add_audio_track("Vox".into());
+            let t = p.track_mut(&id).unwrap();
+            t.clips.push(clip("a", &id, 0, 960));
+            t.clips.push(clip("b", &id, 960, 960));
+            id
+        };
+        let steps = || engine.history_sizes().0;
+
+        let before = steps();
+        place_consolidated(&engine, &id, &file, 0, 1920).unwrap();
+        assert_eq!(clip_ids(&engine, &id).len(), 1, "glued into one");
+        assert_eq!(steps(), before + 1, "consolidating is one step");
+        assert!(engine.undo());
+        assert_eq!(
+            clip_ids(&engine, &id),
+            ["a", "b"],
+            "one undo brings both back"
+        );
+
+        let before = steps();
+        let tracks = engine.project.lock().tracks.len();
+        place_bounce(&engine, &id, "Vox", &file, 1920).unwrap();
+        assert_eq!(steps(), before + 1, "bouncing is one step");
+        assert!(engine.undo());
+        let p = engine.project.lock();
+        assert_eq!(p.tracks.len(), tracks, "one undo takes the new track away");
+        assert!(!p.track(&id).unwrap().muted, "and unmutes the original");
+        drop(p);
+
+        let before = steps();
+        place_freeze(&engine, &id, &file, 1920).unwrap();
+        assert!(engine.project.lock().track(&id).unwrap().frozen);
+        assert_eq!(steps(), before + 1, "freezing is one step");
+        assert!(engine.undo());
+        assert!(!engine.project.lock().track(&id).unwrap().frozen);
+        assert_eq!(clip_ids(&engine, &id), ["a", "b"], "and leaves no render");
     }
 }
 

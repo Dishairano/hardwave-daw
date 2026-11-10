@@ -27,7 +27,9 @@ pub struct ImportedClip {
     /// imported to move it onto the freeze lane.
     pub(crate) clip_id: String,
     name: String,
-    source_id: String,
+    /// Where its audio is in the pool: a bounce or a freeze reads it for
+    /// where its tail dies away.
+    pub(crate) source_id: String,
     duration_secs: f64,
     sample_rate: u32,
     channels: u16,
@@ -65,6 +67,20 @@ pub(crate) fn import_audio_file_blocking(
         state.engine.lock().trust_network_location(&file_path);
         crate::commands::engine::persist_audio_prefs_public(&state);
     }
+    let engine = state.engine.lock();
+    place_audio_file(&engine, track_id, file_path, position_ticks)
+}
+
+/// Load an audio file and put it on a track as a clip, without an undo
+/// step of its own: for a command that takes one step for all it does
+/// (a bounce, a freeze, a consolidate), where the import's own step made
+/// it two, and the first undo took away only the new clip.
+pub(crate) fn place_audio_file(
+    engine: &hardwave_engine::DawEngine,
+    track_id: String,
+    file_path: String,
+    position_ticks: Option<u64>,
+) -> Result<ImportedClip, String> {
     let path = PathBuf::from(&file_path);
     let file_name = path
         .file_stem()
@@ -73,17 +89,26 @@ pub(crate) fn import_audio_file_blocking(
         .to_string();
 
     // Load audio into pool
-    let engine = state.engine.lock();
     let (source_id, info) = engine.load_audio_file(&path)?;
 
-    // Calculate clip length in ticks based on duration and current BPM
-    let bpm = engine
-        .transport
-        .bpm
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let beats = info.duration_secs * bpm / 60.0;
-    let length_ticks = (beats * hardwave_midi::PPQ as f64).round() as u64;
+    // A loop whose name says its tempo follows the song's tempo and lasts
+    // its own beats; anything else keeps its speed and lasts its seconds
+    // from where it lands, through the tempo map. The length used to come
+    // from the tempo the transport showed, so a clip dropped after a tempo
+    // change was cut short or ran on.
     let pos_ticks = position_ticks.unwrap_or(0);
+    let follow_bpm = loop_bpm(&file_name, info.duration_secs);
+    let length_ticks = match follow_bpm {
+        Some(bpm) => hardwave_project::tempo_follow::follow_length(info.duration_secs, bpm),
+        None => {
+            let project = engine.project.lock();
+            hardwave_project::tempo_follow::keep_speed_length(
+                &project.tempo_map,
+                pos_ticks,
+                info.duration_secs,
+            )
+        }
+    };
 
     // Create clip in project
     let clip_id = uuid::Uuid::new_v4().to_string();
@@ -108,7 +133,11 @@ pub(crate) fn import_audio_file_blocking(
         // without this the project keeps no record of the file and every clip
         // reloads silent.
         source_file: path.to_string_lossy().into_owned(),
-        treatment: Default::default(),
+        treatment: hardwave_project::clip::SampleTreatment {
+            follow_bpm,
+            ..Default::default()
+        },
+        tuned_notes: Vec::new(),
     };
 
     let placement = hardwave_project::clip::ClipPlacement {
@@ -118,6 +147,7 @@ pub(crate) fn import_audio_file_blocking(
         length_ticks,
         lane: 0,
         color: None,
+        row: None,
     };
 
     {
@@ -242,6 +272,7 @@ pub fn slices_to_playlist(
                         fade_out_curve: Default::default(),
                         source_file: path.to_string_lossy().into_owned(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     },
                 ),
                 track_id: track_id.clone(),
@@ -249,6 +280,7 @@ pub fn slices_to_playlist(
                 length_ticks: length,
                 lane: 0,
                 color: None,
+                row: None,
             }
         })
         .collect();
@@ -301,6 +333,7 @@ pub(crate) fn track_clips_to_info(
                     source_frames,
                     source_rate,
                     treatment: TreatmentInfo::from(&ac.treatment),
+                    tune_key: crate::commands::tune_notes::tune_key(&ac.tuned_notes),
                     source_file: ac.source_file.clone(),
                     fade_in_ms: fade_ms(tempo, clip.position_ticks, ac.fade_in_ticks, true),
                     fade_out_ms: fade_ms(
@@ -310,6 +343,7 @@ pub(crate) fn track_clips_to_info(
                         false,
                     ),
                     note_preview: Vec::new(),
+                    row: clip.row,
                 }
             }
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
@@ -336,10 +370,12 @@ pub(crate) fn track_clips_to_info(
                 source_frames: 0,
                 source_rate: 0,
                 treatment: TreatmentInfo::default(),
+                tune_key: String::new(),
                 source_file: String::new(),
                 fade_in_ms: 0.0,
                 fade_out_ms: 0.0,
                 note_preview: note_preview(&mc.clip.notes),
+                row: clip.row,
             },
         })
         .collect()
@@ -390,6 +426,9 @@ pub struct TreatmentInfo {
     declick: String,
     load_regions: bool,
     load_slices: bool,
+    /// The tempo the sample is in when it follows the song's tempo; null
+    /// when it keeps its speed.
+    follow_bpm: Option<f64>,
 }
 
 impl From<&hardwave_project::clip::SampleTreatment> for TreatmentInfo {
@@ -408,6 +447,7 @@ impl From<&hardwave_project::clip::SampleTreatment> for TreatmentInfo {
             declick: t.declick.name().to_string(),
             load_regions: t.load_regions,
             load_slices: t.load_slices,
+            follow_bpm: t.follow_bpm,
         }
     }
 }
@@ -441,6 +481,8 @@ pub struct SampleSettings {
     declick: Option<String>,
     load_regions: Option<bool>,
     load_slices: Option<bool>,
+    /// Follow the song's tempo (true) or keep its own speed (false).
+    follows_tempo: Option<bool>,
 }
 
 /// Change the settings of a sample: every clip that plays the same file as
@@ -566,6 +608,11 @@ pub(crate) fn apply_sample_settings(
                     ac.fade_out_ticks = length - ac.fade_in_ticks;
                 }
             }
+            if let Some(follows) = s.follows_tempo {
+                // Each clip at the tempo it covers, so none of them changes
+                // how it sounds where it sits now.
+                hardwave_project::tempo_follow::set_follows_tempo(placement, follows, &tempo);
+            }
             changed += 1;
         }
     }
@@ -630,6 +677,11 @@ pub struct ClipInfo {
     source_rate: u32,
     /// Pan, polarity, swap, normalise, DC and resample, for the sample window.
     treatment: TreatmentInfo,
+    /// A fingerprint of the notes tuned by hand in the sample window's
+    /// NOTES view, empty when none are: the view reads the notes again
+    /// when it changes under it (an undo).
+    #[serde(rename = "tuneKey", skip_serializing_if = "String::is_empty")]
+    tune_key: String,
     /// Where the file is, for the sample window to name it.
     #[serde(rename = "sourceFile")]
     source_file: String,
@@ -643,6 +695,8 @@ pub struct ClipInfo {
     /// `NOTE_PREVIEW_MAX`, spread over the clip when there are more.
     #[serde(rename = "notePreview", skip_serializing_if = "Vec::is_empty")]
     note_preview: Vec<[u32; 3]>,
+    /// The playlist row it is drawn on. Not drawn there yet.
+    row: Option<u32>,
 }
 
 /// The most notes a clip sends for its preview: enough to show the shape
@@ -1087,6 +1141,7 @@ mod tests {
             warp_markers: Vec::new(),
             source_file: String::new(),
             treatment: Default::default(),
+            tuned_notes: Vec::new(),
         }
     }
 
@@ -1102,6 +1157,7 @@ mod tests {
             length_ticks: 4 * beat,
             lane: 0,
             color: None,
+            row: None,
         };
         project.track_mut("insert-001").unwrap().clips.push(place(
             "insert-001",
@@ -1195,6 +1251,49 @@ mod tests {
             ..Default::default()
         };
         assert!(apply_sample_settings(&mut project, "insert-001", "a", &wrong).is_err());
+    }
+
+    /// The sample window's tempo switch: following starts at the tempo the
+    /// clip sits in, so nothing changes until the tempo does; keeping its
+    /// speed again leaves it as it was.
+    #[test]
+    fn a_sample_can_follow_the_tempo_or_keep_its_speed() {
+        use hardwave_project::clip::{ClipContent, ClipPlacement};
+        let mut project = hardwave_project::Project::default();
+        let beat = hardwave_midi::PPQ;
+        project
+            .track_mut("insert-001")
+            .unwrap()
+            .clips
+            .push(ClipPlacement {
+                content: ClipContent::Audio(audio("a", "loop")),
+                track_id: "insert-001".into(),
+                position_ticks: 0,
+                length_ticks: 4 * beat,
+                lane: 0,
+                color: None,
+                row: None,
+            });
+        let treatment = |p: &hardwave_project::Project| match &p.track("insert-001").unwrap().clips
+            [0]
+        .content
+        {
+            ClipContent::Audio(a) => (a.treatment.follow_bpm, a.stretch_ratio),
+            _ => unreachable!(),
+        };
+        let follow = SampleSettings {
+            follows_tempo: Some(true),
+            ..Default::default()
+        };
+        apply_sample_settings(&mut project, "insert-001", "a", &follow).unwrap();
+        let bpm = project.tempo_map.bpm_at(0);
+        assert_eq!(treatment(&project), (Some(bpm), 1.0));
+        let keep = SampleSettings {
+            follows_tempo: Some(false),
+            ..Default::default()
+        };
+        apply_sample_settings(&mut project, "insert-001", "a", &keep).unwrap();
+        assert_eq!(treatment(&project), (None, 1.0));
     }
 
     #[test]
@@ -2002,6 +2101,22 @@ fn bpm_from_name(name: &str) -> Option<f64> {
     best
 }
 
+/// The tempo a file is a loop in, when its name says so: always for a
+/// labelled one ("Loop 150 BPM.wav"), and for a bare number only when the
+/// file lasts a whole number of bars at it, so "Kick 150.wav" stays a
+/// one-shot. A loop follows the song's tempo when it is placed; anything
+/// else keeps its speed.
+fn loop_bpm(name: &str, secs: f64) -> Option<f64> {
+    let bpm = bpm_from_name(name)?;
+    if name.to_lowercase().contains("bpm") {
+        return Some(bpm);
+    }
+    let beats = secs * bpm / 60.0;
+    let whole = beats.round();
+    let bars = whole / 4.0;
+    (whole >= 4.0 && bars.fract() == 0.0 && (beats - whole).abs() <= 0.05).then_some(bpm)
+}
+
 /// Preview a file, matched to the song's tempo when the file name says what
 /// tempo it is.
 ///
@@ -2094,6 +2209,30 @@ mod preview_tempo_tests {
         assert_eq!(bpm_from_name("session 2026 master.wav"), None);
         assert_eq!(bpm_from_name("Take 3.wav"), None);
         assert_eq!(bpm_from_name("Screech F.wav"), None);
+    }
+
+    #[test]
+    fn only_a_loop_follows_the_tempo_when_it_is_placed() {
+        use super::loop_bpm;
+        assert_eq!(loop_bpm("Loop 150 BPM", 6.4), Some(150.0), "labelled");
+        assert_eq!(
+            loop_bpm("loop_128bpm", 1.0),
+            Some(128.0),
+            "labelled, any length"
+        );
+        // Four bars at 174 is 5.517 s: a loop, by its length.
+        assert_eq!(loop_bpm("Drum loop 174", 16.0 * 60.0 / 174.0), Some(174.0));
+        assert_eq!(
+            loop_bpm("Kick 150", 0.42),
+            None,
+            "a one-shot keeps its speed"
+        );
+        assert_eq!(
+            loop_bpm("Vocal 150", 7.3),
+            None,
+            "not a whole number of bars"
+        );
+        assert_eq!(loop_bpm("Take 3", 8.0), None);
     }
 }
 
@@ -2418,6 +2557,7 @@ pub fn audio_clip_to_midi(
             length_ticks,
             lane: 0,
             color: None,
+            row: None,
         };
         if let Some(track) = project.track_mut(&new_track_id) {
             track.clips.push(placement);
@@ -2615,6 +2755,9 @@ pub fn tune_audio_clip(
                 if ac.id == clip_id {
                     ac.source_path = path_text.clone();
                     ac.source_start = 0;
+                    // Notes moved by hand were moved from where the old take
+                    // sang them; on the tuned take they would move again.
+                    ac.tuned_notes.clear();
                 }
             }
         }

@@ -24,6 +24,45 @@ pub type OfflineInsertFactory<'a> =
 /// file paths or import hashes and never contain it.
 const STRETCH_KEY_MARKER: &str = "#hw-stretch:";
 const WARP_KEY_MARKER: &str = "#hw-warp:";
+const TUNE_KEY_MARKER: &str = "#hw-tune:";
+
+/// Pool id for a take played with its notes tuned by hand (the sample
+/// window's NOTES view): the source and a fingerprint of its notes. The
+/// clip's stretch and warp are baked from this, as from the file.
+pub(crate) fn tune_cache_key(
+    source_id: &str,
+    notes: &[hardwave_project::clip::TunedNote],
+) -> String {
+    format!(
+        "{source_id}{TUNE_KEY_MARKER}{:016x}",
+        hardwave_project::clip::tuned_notes_hash(notes)
+    )
+}
+
+/// What a clip plays from before its stretch: its take with the notes
+/// tuned by hand when it has any, else the file.
+pub(crate) fn playing_source(audio_clip: &hardwave_project::clip::AudioClip) -> String {
+    if audio_clip.has_tuned_notes() {
+        tune_cache_key(&audio_clip.source_path, &audio_clip.tuned_notes)
+    } else {
+        audio_clip.source_path.clone()
+    }
+}
+
+/// The tuned-take id a pool id was made from (itself, or a stretch or
+/// warp of it), or None when it was not made from one.
+fn tuned_take_of(id: &str) -> Option<&str> {
+    let at = id.find(TUNE_KEY_MARKER)?;
+    id.get(..at + TUNE_KEY_MARKER.len() + 16)
+}
+
+/// One take with notes tuned by hand, to bake.
+#[derive(Debug, Clone)]
+struct TuneBake {
+    key: String,
+    source_id: String,
+    notes: Vec<hardwave_project::clip::TunedNote>,
+}
 
 /// Pool id for a warped clip rendered with its pitch kept: the source, how
 /// its markers cut it, its transpose, and the rate it was rendered at (an
@@ -687,6 +726,8 @@ pub struct DawEngine {
     history_group_open: Arc<std::sync::atomic::AtomicBool>,
     /// True once the open group has taken its snapshot.
     history_group_taken: Arc<std::sync::atomic::AtomicBool>,
+    /// A rebuild inside the open group wanted bakes, which wait for its end.
+    bake_after_group: Arc<std::sync::atomic::AtomicBool>,
 
     /// Circular buffer of recent master-bus output samples. Used by the UI
     /// for oscilloscope / spectrum / correlation visualizations.
@@ -769,6 +810,7 @@ impl DawEngine {
             record_last_pos: Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
             history_group_open: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_group_taken: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            bake_after_group: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             worker_pool: Arc::new(Mutex::new(None)),
@@ -899,11 +941,15 @@ impl DawEngine {
         self.history_group_taken.store(false, Relaxed);
     }
 
-    /// End the group, so the next mutation snapshots again.
+    /// End the group, so the next mutation snapshots again, and start the
+    /// bakes its rebuilds held back.
     pub fn end_history_group(&self) {
         use std::sync::atomic::Ordering::Relaxed;
         self.history_group_open.store(false, Relaxed);
         self.history_group_taken.store(false, Relaxed);
+        if self.bake_after_group.swap(false, Relaxed) {
+            self.prebake_stretch_sources_async();
+        }
     }
 
     pub fn history_group_open(&self) -> bool {
@@ -1451,8 +1497,129 @@ impl DawEngine {
         // Baking a long stem takes seconds (~16 s for 30 s of stereo), so
         // doing it inline would freeze the caller; until it lands the clip
         // simply plays varispeed, and the bake triggers its own rebuild.
-        self.prebake_stretch_sources_async();
+        //
+        // In the middle of a gesture (a tempo point being dragged) every step
+        // asked for bakes of a stretch gone a moment later, each on a thread
+        // of its own: they wait for the gesture to end.
+        if self.history_group_open() {
+            self.bake_after_group
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.prebake_stretch_sources_async();
+        }
         let _ = self.command_tx.try_send(EngineCommand::RebuildGraph);
+    }
+
+    /// The takes with notes tuned by hand this project's clips play.
+    fn tune_bake_plan(&self) -> Vec<TuneBake> {
+        use hardwave_project::clip::ClipContent;
+        let project = self.project.lock();
+        let mut acc: Vec<TuneBake> = Vec::new();
+        for track in &project.tracks {
+            for clip in &track.clips {
+                let ClipContent::Audio(audio_clip) = &clip.content else {
+                    continue;
+                };
+                if !audio_clip.has_tuned_notes() {
+                    continue;
+                }
+                let key = tune_cache_key(&audio_clip.source_path, &audio_clip.tuned_notes);
+                if !acc.iter().any(|b| b.key == key) {
+                    acc.push(TuneBake {
+                        key,
+                        source_id: audio_clip.source_path.clone(),
+                        notes: audio_clip.tuned_notes.clone(),
+                    });
+                }
+            }
+        }
+        acc
+    }
+
+    /// Render one take with its notes tuned into the pool, outside the
+    /// pool's lock like a stretch. The take's notes and periods are worked
+    /// out once per file and kept, so moving a note again only renders.
+    fn bake_tune_variant(pool: &AudioPool, bake: &TuneBake) {
+        if pool.contains(&bake.key) {
+            return;
+        }
+        let Some(src) = pool.get(&bake.source_id) else {
+            return;
+        };
+        let Some(take) = pool.take_analysis(&bake.source_id, &mut |_| {}) else {
+            return;
+        };
+        let rate = src.sample_rate as f64;
+        let moves: Vec<hardwave_dsp::note_tune::NoteMove> = bake
+            .notes
+            .iter()
+            .map(|n| hardwave_dsp::note_tune::NoteMove {
+                start: n.start * rate,
+                end: n.end * rate,
+                sung: n.sung,
+                pitch: n.pitch,
+                drift: n.drift,
+                new_start: n.new_start * rate,
+                new_end: n.new_end * rate,
+                formants: n.formants,
+            })
+            .collect();
+        let channels = hardwave_dsp::note_tune::render(&src.channels, &take, &moves);
+        let num_frames = channels.iter().map(|c| c.len()).min().unwrap_or(0);
+        if num_frames == 0 {
+            return;
+        }
+        pool.insert(
+            bake.key.clone(),
+            AudioBuffer {
+                channels,
+                sample_rate: src.sample_rate,
+                num_frames,
+            },
+        );
+    }
+
+    /// Take the tuned takes no clip plays any more out of the pool, with
+    /// everything stretched or warped from them, and hand them back. Only
+    /// for a file whose current tuning is already baked, so a clip never
+    /// drops back to the untuned take while its new one is on the way.
+    /// Handed back rather than dropped: the audio thread may hold one
+    /// until its next rebuild, and the last reference should not be let
+    /// go there.
+    fn evict_stale_tunes(pool: &AudioPool, project: &Mutex<Project>) -> Vec<Arc<AudioBuffer>> {
+        use hardwave_project::clip::ClipContent;
+        let live: std::collections::HashSet<String> = {
+            let project = project.lock();
+            project
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .filter_map(|c| match &c.content {
+                    ClipContent::Audio(a) if a.has_tuned_notes() => {
+                        Some(tune_cache_key(&a.source_path, &a.tuned_notes))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // Whether every tuning of a file the song plays is in the pool.
+        let ready = |source: &str| {
+            live.iter()
+                .filter(|key| {
+                    key.strip_prefix(source).is_some_and(|rest| {
+                        rest.starts_with(TUNE_KEY_MARKER)
+                            && rest.len() == TUNE_KEY_MARKER.len() + 16
+                    })
+                })
+                .all(|key| pool.contains(key))
+        };
+        pool.remove_where(|id| match tuned_take_of(id) {
+            Some(take) if !live.contains(take) => {
+                let source = &take[..take.len() - TUNE_KEY_MARKER.len() - 16];
+                ready(source)
+            }
+            _ => false,
+        })
     }
 
     /// The (source, stretch, semitones) variants this project's clips need.
@@ -1463,8 +1630,19 @@ impl DawEngine {
         for track in &project.tracks {
             for clip in &track.clips {
                 if let ClipContent::Audio(audio_clip) = &clip.content {
-                    if let Some((stretch, semis)) = bake_params(audio_clip) {
-                        let entry = (audio_clip.source_path.clone(), stretch, semis);
+                    // A clip that follows the tempo, as it plays at this map.
+                    let file_rate = self
+                        .audio_pool
+                        .get(&audio_clip.source_path)
+                        .map(|b| b.sample_rate as f64);
+                    let followed = crate::tempo_follow::tempo_followed(
+                        clip,
+                        audio_clip,
+                        &project.tempo_map,
+                        file_rate,
+                    );
+                    if let Some((stretch, semis)) = bake_params(&followed) {
+                        let entry = (playing_source(audio_clip), stretch, semis);
                         if !acc.contains(&entry) {
                             acc.push(entry);
                         }
@@ -1525,9 +1703,6 @@ impl DawEngine {
                 let ClipContent::Audio(audio_clip) = &clip.content else {
                     continue;
                 };
-                if audio_clip.warp_markers.is_empty() || audio_clip.treatment.resample {
-                    continue;
-                }
                 let Some(buffer_rate) = self
                     .audio_pool
                     .get(&audio_clip.source_path)
@@ -1535,22 +1710,31 @@ impl DawEngine {
                 else {
                     continue;
                 };
+                // A clip that follows the tempo across a change is played as
+                // warp markers, rendered here like any warped clip.
+                let followed = crate::tempo_follow::tempo_followed(
+                    clip,
+                    audio_clip,
+                    &project.tempo_map,
+                    Some(buffer_rate),
+                );
+                let audio_clip: &hardwave_project::clip::AudioClip = &followed;
+                if audio_clip.warp_markers.is_empty() || audio_clip.treatment.resample {
+                    continue;
+                }
                 let unity = if buffer_rate > 0.0 {
                     buffer_rate / sample_rate
                 } else {
                     1.0
                 };
                 let pieces = warp_pieces(clip, audio_clip, &project.tempo_map, sample_rate, unity);
-                let key = warp_cache_key(
-                    &audio_clip.source_path,
-                    &pieces,
-                    audio_clip.pitch_semitones,
-                    sample_rate,
-                );
+                let source_id = playing_source(audio_clip);
+                let key =
+                    warp_cache_key(&source_id, &pieces, audio_clip.pitch_semitones, sample_rate);
                 if !acc.iter().any(|b| b.key == key) {
                     acc.push(WarpBake {
                         key,
-                        source_id: audio_clip.source_path.clone(),
+                        source_id,
                         pieces,
                         semitones: audio_clip.pitch_semitones,
                     });
@@ -1609,6 +1793,10 @@ impl DawEngine {
     /// render varispeed and not match playback. Never call it from the audio
     /// thread — see [`Self::prebake_stretch_sources_async`] for the UI path.
     pub fn prebake_stretch_sources(&self) {
+        // Tuned takes first: a clip's stretch is baked from its tuned take.
+        for bake in self.tune_bake_plan() {
+            Self::bake_tune_variant(&self.audio_pool, &bake);
+        }
         for (source_id, stretch, semitones) in self.stretch_bake_plan() {
             Self::bake_stretch_variant(&self.audio_pool, &source_id, stretch, semitones);
         }
@@ -1623,8 +1811,14 @@ impl DawEngine {
     /// dragging a stretch control doesn't spawn a bake per frame.
     pub fn prebake_stretch_sources_async(&self) {
         let sample_rate = self.current_sample_rate() as f64;
-        let (todo, warps): (Vec<(String, f64, f64)>, Vec<WarpBake>) = {
+        type Plans = (Vec<TuneBake>, Vec<(String, f64, f64)>, Vec<WarpBake>);
+        let (tunes, todo, warps): Plans = {
             let mut inflight = self.stretch_inflight.lock();
+            let tunes = self
+                .tune_bake_plan()
+                .into_iter()
+                .filter(|b| !self.audio_pool.contains(&b.key) && inflight.insert(b.key.clone()))
+                .collect();
             let todo = self
                 .stretch_bake_plan()
                 .into_iter()
@@ -1638,37 +1832,90 @@ impl DawEngine {
                 .into_iter()
                 .filter(|b| !self.audio_pool.contains(&b.key) && inflight.insert(b.key.clone()))
                 .collect();
-            (todo, warps)
+            (tunes, todo, warps)
         };
-        if todo.is_empty() && warps.is_empty() {
+        if tunes.is_empty() && todo.is_empty() && warps.is_empty() {
             return;
         }
         let pool = self.audio_pool.clone();
         let tx = self.command_tx.clone();
         let inflight = Arc::clone(&self.stretch_inflight);
+        let project = Arc::clone(&self.project);
         std::thread::spawn(move || {
-            // Release the in-flight keys on the way out whatever happens. If a
-            // bake panicked and left them claimed, that source could never be
-            // retried and the clip would stay varispeed for the rest of the
-            // session with nothing to indicate why.
-            let _release = InflightRelease {
-                set: &inflight,
-                keys: todo
+            let stale = {
+                // Release the in-flight keys on the way out whatever happens. If a
+                // bake panicked and left them claimed, that source could never be
+                // retried and the clip would stay varispeed for the rest of the
+                // session with nothing to indicate why.
+                let _release = InflightRelease {
+                    set: &inflight,
+                    keys: tunes
+                        .iter()
+                        .map(|b| b.key.clone())
+                        .chain(
+                            todo.iter()
+                                .map(|(s, st, se)| stretch_cache_key(s, *st, *se)),
+                        )
+                        .chain(warps.iter().map(|b| b.key.clone()))
+                        .collect(),
+                };
+                // A tuned take plays as the file until its render lands.
+                for bake in &tunes {
+                    Self::bake_tune_variant(&pool, bake);
+                }
+                // A stretch or warp is made from the tuned take, which another
+                // bake may still be making.
+                let ours = |id: &str| tunes.iter().any(|b| b.key == id);
+                for id in todo
                     .iter()
-                    .map(|(s, st, se)| stretch_cache_key(s, *st, *se))
-                    .chain(warps.iter().map(|b| b.key.clone()))
-                    .collect(),
+                    .map(|t| t.0.as_str())
+                    .chain(warps.iter().map(|b| b.source_id.as_str()))
+                {
+                    if !ours(id) {
+                        Self::wait_for_tuned_take(&pool, &inflight, id);
+                    }
+                }
+                for (source_id, stretch, semitones) in &todo {
+                    Self::bake_stretch_variant(&pool, source_id, *stretch, *semitones);
+                }
+                // A warped clip plays like a tape until its render lands.
+                for bake in &warps {
+                    Self::bake_warp_variant(&pool, bake, sample_rate);
+                }
+                if tunes.is_empty() {
+                    Vec::new()
+                } else {
+                    Self::evict_stale_tunes(&pool, &project)
+                }
             };
-            for (source_id, stretch, semitones) in &todo {
-                Self::bake_stretch_variant(&pool, source_id, *stretch, *semitones);
-            }
-            // A warped clip plays like a tape until its render lands.
-            for bake in &warps {
-                Self::bake_warp_variant(&pool, bake, sample_rate);
-            }
             // Ask the audio thread to rebuild so the fresh bakes are picked up.
             let _ = tx.try_send(EngineCommand::RebuildGraph);
+            // The tunings nothing plays any more are let go here, once the
+            // audio thread has moved on to the new ones, not there.
+            if !stale.is_empty() {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                drop(stale);
+            }
         });
+    }
+
+    /// Wait while another bake is still making a tuned take this one is
+    /// made from. A long take's first tuning works out its notes first,
+    /// which takes a few seconds; anything but a tuned take returns at once.
+    fn wait_for_tuned_take(
+        pool: &AudioPool,
+        inflight: &Mutex<std::collections::HashSet<String>>,
+        id: &str,
+    ) {
+        if tuned_take_of(id) != Some(id) {
+            return;
+        }
+        for _ in 0..3000 {
+            if pool.contains(id) || !inflight.lock().contains(id) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     /// Audition a file on the engine's own output device.
@@ -2616,6 +2863,24 @@ impl DawEngine {
         }
     }
 
+    /// How long building the audio graph for the song takes, `runs` times
+    /// over. The graph is rebuilt on the audio thread after every edit, so
+    /// this is how long a block waits after one. The plug-ins are left out;
+    /// clips, notes, automation and routing are all there.
+    #[doc(hidden)]
+    pub fn graph_build_times(&self, runs: usize) -> Vec<std::time::Duration> {
+        let mut callback =
+            self.offline_callback(48_000, 512, 0, None, |_| {}, Arc::new(Mutex::new(None)));
+        (0..runs)
+            .map(|_| {
+                callback.needs_rebuild = true;
+                let started = std::time::Instant::now();
+                callback.rebuild_graph();
+                started.elapsed()
+            })
+            .collect()
+    }
+
     /// How long each block of the project takes to compute, block by
     /// block, at a given buffer size.
     ///
@@ -3019,6 +3284,11 @@ impl OfflineRender {
     /// usual law) is given back. Without this a bounced, frozen or
     /// consolidated part came back 3 dB quieter than the part it replaced,
     /// and lower again by wherever the master fader sat.
+    ///
+    /// It is also the track's part on the playlist. A render takes the
+    /// transport's mode, so freezing, bouncing or consolidating while the
+    /// transport was in pattern mode rendered the channel rack's pattern,
+    /// looped, in place of the part.
     pub fn for_a_track(mut self) -> Self {
         self.callback
             .transport
@@ -3026,7 +3296,33 @@ impl OfflineRender {
             .store(0.0, std::sync::atomic::Ordering::Relaxed);
         let (centre, _) = crate::pan::gains(0.0, self.callback.audio_prefs.pan_law());
         self.output_gain = if centre > 1e-6 { 1.0 / centre } else { 1.0 };
+        self.play_mode(false);
         self
+    }
+
+    /// Make this a render of the channel rack's pattern, played once: the
+    /// export's Pattern range. It rendered the song's first bars unless the
+    /// transport happened to be in pattern mode, and then looped the
+    /// pattern into the tail. The pattern plays from its start and is not
+    /// started again at its end, so what follows is only what still sounds.
+    pub fn the_pattern_once(mut self) -> Self {
+        self.play_mode(true);
+        self.callback
+            .transport
+            .pattern_wraps
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self
+    }
+
+    /// Render in pattern mode or out of it, whatever the transport is in.
+    /// The graph was built in the transport's mode, so it is built again
+    /// before the first block (the plug-ins carry over).
+    fn play_mode(&mut self, pattern: bool) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let transport = &self.callback.transport;
+        if transport.pattern_mode.swap(pattern, Relaxed) != pattern {
+            self.callback.needs_rebuild = true;
+        }
     }
 
     /// Render `total_samples` frames of the song from where the render was
@@ -3696,6 +3992,20 @@ impl EngineCallback {
         self.audio_pool.contains(&key).then_some(key)
     }
 
+    /// The pool id a clip plays from before its stretch: its take with the
+    /// notes tuned by hand once that render is in the pool, else the file.
+    /// LOOKUP ONLY, like `stretched_source`: the render is baked off this
+    /// thread.
+    fn tuned_source(&self, audio_clip: &hardwave_project::clip::AudioClip) -> String {
+        if audio_clip.has_tuned_notes() {
+            let key = tune_cache_key(&audio_clip.source_path, &audio_clip.tuned_notes);
+            if self.audio_pool.contains(&key) {
+                return key;
+            }
+        }
+        audio_clip.source_path.clone()
+    }
+
     /// Populate every track's insert chain from the project's saved
     /// `inserts` metadata, for offline render. The live path builds chains
     /// via the `InsertCommand` queue / `hydrate_chains_from_project`, but a
@@ -3929,6 +4239,7 @@ impl EngineCallback {
         tempo_map: &hardwave_project::TempoMap,
         sample_rate: f64,
         track_pitch_factor: f64,
+        silent_rows: &hardwave_project::layout::SilentRows,
     ) -> Vec<ClipRegion> {
         // Convert clip placements to sample-based ClipRegions.
         // Clips are visited in their project-defined order, then any overlap between
@@ -3938,17 +4249,26 @@ impl EngineCallback {
         // auto-computed value.
         // Frozen: the render, and nothing else. Live: everything but
         // the render, which is parked on its own lane.
+        // A clip on a playlist row that is switched off (or not soloed
+        // while another is) is left out, as FL's track switch does.
         let clips_to_play = track.clips.iter().filter(|clip| {
             let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
-            if track.frozen {
-                is_freeze
-            } else {
-                !is_freeze
-            }
+            let on_track = if track.frozen { is_freeze } else { !is_freeze };
+            on_track && !silent_rows.has(clip.row)
         });
         let mut regions: Vec<ClipRegion> = clips_to_play
             .filter_map(|clip| match &clip.content {
                 hardwave_project::clip::ClipContent::Audio(audio_clip) => {
+                    // A clip that follows the tempo is played as a stretch or
+                    // as warp markers at this tempo map (`tempo_follow`), the
+                    // same clip the bakes were planned from.
+                    let file_rate = self
+                        .audio_pool
+                        .get(&audio_clip.source_path)
+                        .map(|b| b.sample_rate as f64);
+                    let followed =
+                        crate::tempo_follow::tempo_followed(clip, audio_clip, tempo_map, file_rate);
+                    let audio_clip: &hardwave_project::clip::AudioClip = &followed;
                     let timeline_start =
                         tempo_map.tick_to_samples(clip.position_ticks, sample_rate);
                     let timeline_end = tempo_map
@@ -4051,6 +4371,10 @@ impl EngineCallback {
                     // A warped clip rendered with its pitch kept (see
                     // `warp_bake_plan`), when the render has landed: played
                     // straight through, its markers already in it.
+                    // A take with notes tuned by hand plays its tuned render
+                    // once that has landed (see `tune_bake_plan`); until
+                    // then, the file. Its stretch and warp are made from it.
+                    let base = self.tuned_source(audio_clip);
                     let warp_baked = if audio_clip.warp_markers.is_empty() || treatment.resample {
                         None
                     } else {
@@ -4066,7 +4390,7 @@ impl EngineCallback {
                                 let pieces =
                                     warp_pieces(clip, audio_clip, tempo_map, sample_rate, unity);
                                 let key = warp_cache_key(
-                                    &audio_clip.source_path,
+                                    &base,
                                     &pieces,
                                     audio_clip.pitch_semitones,
                                     sample_rate,
@@ -4079,11 +4403,7 @@ impl EngineCallback {
                         && ((stretch - 1.0).abs() > 1e-4
                             || audio_clip.pitch_semitones.abs() > 1e-4);
                     let baked = if needs_bake {
-                        self.stretched_source(
-                            &audio_clip.source_path,
-                            stretch,
-                            audio_clip.pitch_semitones,
-                        )
+                        self.stretched_source(&base, stretch, audio_clip.pitch_semitones)
                     } else {
                         None
                     };
@@ -4097,11 +4417,7 @@ impl EngineCallback {
                                 (audio_clip.source_start as f64 * stretch) as u64,
                                 track_pitch_factor,
                             ),
-                            (None, None) => (
-                                audio_clip.source_path.clone(),
-                                audio_clip.source_start,
-                                pitch_factor / stretch,
-                            ),
+                            (None, None) => (base, audio_clip.source_start, pitch_factor / stretch),
                         };
                     // Rate-match the source to the rate we're rendering at.
                     // Pool buffers are normalised to the *device* rate on
@@ -4291,6 +4607,41 @@ impl EngineCallback {
                 .as_ref()
                 .is_some_and(|heard| !heard.contains(&track.id) && !track.solo_safe)
         };
+        // Playlist rows switched off, or not soloed while one is: what sits
+        // on them (clips, notes, automation) is left out below. Rows never
+        // route sound, so the channels and their effects keep running.
+        let silent_rows = hardwave_project::layout::SilentRows::of(&project.rows);
+        let audible_lanes = |track: &hardwave_project::track::Track| {
+            track
+                .automation_lanes
+                .iter()
+                .filter(|lane| !silent_rows.has(lane.row))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        // Automation clips that move another track's knob (FL's automation
+        // clip channels), gathered once the way MIDI routes are: the target
+        // track's node plays them as its own. A clip with no target moves
+        // the track it sits on, as every clip did before.
+        let mut handed: HashMap<&str, Vec<&hardwave_project::automation_clip::AutomationClip>> =
+            HashMap::new();
+        for source in &project.tracks {
+            for clip in &source.automation_clips {
+                if let Some(target) = clip.target_track.as_deref() {
+                    if target != source.id && !silent_rows.has(clip.row) {
+                        handed.entry(target).or_default().push(clip);
+                    }
+                }
+            }
+        }
+        let audible_automation_clips = |track: &hardwave_project::track::Track| {
+            let own = track.automation_clips.iter().filter(|clip| {
+                clip.target_track.as_deref().is_none_or(|t| t == track.id)
+                    && !silent_rows.has(clip.row)
+            });
+            let theirs = handed.get(track.id.as_str()).into_iter().flatten().copied();
+            own.chain(theirs).cloned().collect::<Vec<_>>()
+        };
 
         // Reconcile the per-track meter map with the current tracks: reuse existing
         // Arcs where possible, create new ones, drop meters for removed tracks.
@@ -4380,8 +4731,8 @@ impl EngineCallback {
                     hardwave_project::vca::offset_for(&project.vcas, &track.id);
                 midi_node.set_volume_db(track.volume_db + vca_gain_db);
                 midi_node.set_pan(track.pan);
-                midi_node.set_automation_lanes(track.automation_lanes.clone());
-                midi_node.set_automation_clips(track.automation_clips.clone());
+                midi_node.set_automation_lanes(audible_lanes(track));
+                midi_node.set_automation_clips(audible_automation_clips(track));
                 midi_node.set_stereo_separation(track.stereo_separation);
                 // The mixer strip's polarity, swap and delay and the rack's
                 // filter, as an audio track has them.
@@ -4486,6 +4837,7 @@ impl EngineCallback {
                             length_ticks: rack.length_ticks(),
                             lane: 0,
                             color: None,
+                            row: None,
                         }
                     })
                 } else {
@@ -4506,8 +4858,8 @@ impl EngineCallback {
                         continue;
                     };
                     // A muted clip contributes nothing, the same way a muted
-                    // audio clip is skipped.
-                    if midi_ref.clip.muted {
+                    // audio clip is skipped; nor does one on a silent row.
+                    if midi_ref.clip.muted || silent_rows.has(clip.row) {
                         continue;
                     }
                     // MIDI effects sit between the clip and the
@@ -4589,7 +4941,13 @@ impl EngineCallback {
                 let midi_pitch_factor = 2.0_f64.powf(
                     (track.pitch_semitones as f64) / 12.0 + (track.fine_tune_cents as f64) / 1200.0,
                 );
-                let audio = self.audio_regions(track, tempo_map, sample_rate, midi_pitch_factor);
+                let audio = self.audio_regions(
+                    track,
+                    tempo_map,
+                    sample_rate,
+                    midi_pitch_factor,
+                    &silent_rows,
+                );
                 if !audio.is_empty() {
                     midi_node.set_audio_clips(self.audio_pool.clone(), audio);
                 }
@@ -4680,8 +5038,8 @@ impl EngineCallback {
             // so process() never has to walk the project tree under a
             // lock. Empty list is the no-automation steady state.
             node.set_prefs(self.audio_prefs.clone());
-            node.set_automation_lanes(track.automation_lanes.clone());
-            node.set_automation_clips(track.automation_clips.clone());
+            node.set_automation_lanes(audible_lanes(track));
+            node.set_automation_clips(audible_automation_clips(track));
             // Reattach the plug-in chain stashed at the top of this
             // rebuild. Tracks that didn't exist before fall through to
             // the default-empty chain that TrackNode::new gave them.
@@ -4744,7 +5102,13 @@ impl EngineCallback {
                 2.0_f64.powf(track_pitch_offset)
             };
 
-            let regions = self.audio_regions(track, tempo_map, sample_rate, track_pitch_factor);
+            let regions = self.audio_regions(
+                track,
+                tempo_map,
+                sample_rate,
+                track_pitch_factor,
+                &silent_rows,
+            );
             node.set_clips(regions);
 
             // This track's row of the launcher grid. Lengths are in
@@ -6017,13 +6381,19 @@ pub fn keyboard_track_of(project: &hardwave_project::Project) -> Option<String> 
 }
 
 /// A track with nothing in it and nothing reaching it: an empty insert of
-/// a new song. It makes no sound, so the graph leaves it out.
+/// a new song, or a bus or return nothing plays into (an FL insert that
+/// has a name and no effects). It makes no sound, so the graph leaves it
+/// out.
 fn is_placeholder(
     track: &hardwave_project::Track,
     reached: &std::collections::HashSet<&str>,
 ) -> bool {
-    matches!(track.kind, hardwave_project::TrackKind::Audio)
-        && track.clips.is_empty()
+    matches!(
+        track.kind,
+        hardwave_project::TrackKind::Audio
+            | hardwave_project::TrackKind::Bus
+            | hardwave_project::TrackKind::Return
+    ) && track.clips.is_empty()
         && track.inserts.is_empty()
         && track.automation_lanes.is_empty()
         && track.automation_clips.is_empty()
@@ -6255,12 +6625,14 @@ mod offline_insert_tests {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             });
             t.inserts.push(PluginSlot {
                 id: "slot1".into(),
@@ -6390,12 +6762,14 @@ mod offline_insert_tests {
                         fade_out_curve: FadeCurve::Linear,
                         source_file: String::new(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: id.clone(),
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -6472,12 +6846,14 @@ mod offline_insert_tests {
                         fade_out_curve: FadeCurve::Linear,
                         source_file: String::new(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: id.clone(),
                     position_ticks: 8 * beat,
                     length_ticks: 4 * beat,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             project.tempo_map.tick_to_samples(8 * beat, sr as f64)
@@ -6579,6 +6955,7 @@ mod offline_insert_tests {
                     length_ticks: lengths.1,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -6691,6 +7068,7 @@ mod offline_insert_tests {
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -6853,6 +7231,7 @@ mod offline_insert_tests {
             fade_out_curve: FadeCurve::Linear,
             source_file: String::new(),
             treatment: Default::default(),
+            tuned_notes: Vec::new(),
         };
         assert_eq!(bake_params(&clip), Some((2.0, 0.0)), "stretched: baked");
         clip.treatment.resample = true;
@@ -6945,12 +7324,14 @@ mod offline_insert_tests {
                         fade_out_curve: FadeCurve::Linear,
                         source_file: wav.to_string_lossy().into_owned(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: track.clone(),
                     position_ticks: 0,
                     length_ticks: 1920,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
             let path = dir.join("song.hwp");
@@ -7033,12 +7414,14 @@ mod offline_insert_tests {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: id.clone(),
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             };
             if let Some(t) = project.track_mut(&id) {
                 t.clips.push(clip("clip-live"));
@@ -7047,6 +7430,7 @@ mod offline_insert_tests {
                 id: "arr-b".into(),
                 name: "B".into(),
                 timelines: Default::default(),
+                rows: Vec::new(),
             };
             arrangement.timelines.insert(
                 id.clone(),
@@ -7106,12 +7490,14 @@ mod offline_insert_tests {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: id2.clone(),
                 position_ticks: 0,
                 length_ticks: 1920,
                 lane: 0,
                 color: None,
+                row: None,
             };
             ghost.track_id = id2.clone();
             if let Some(t) = project.track_mut(&id2) {
@@ -7851,6 +8237,46 @@ mod rt_safety_tests {
         assert!(cb.deferred_insert_commands.is_empty());
     }
 
+    /// An insert nothing plays into and with no effects (FL's named but
+    /// unused inserts) builds no node, bus or return; one something
+    /// reaches, or with an effect on it, does.
+    #[test]
+    fn an_empty_bus_builds_no_node() {
+        use hardwave_project::track::{PluginSlot, Track};
+        let mut project = Project::default();
+        project.tracks.truncate(1);
+        project
+            .tracks
+            .push(Track::new_bus("empty".into(), "KICK REVERB".into()));
+        let mut ret = Track::new_bus("ret".into(), "Return".into());
+        ret.kind = hardwave_project::TrackKind::Return;
+        project.tracks.push(ret);
+        project
+            .tracks
+            .push(Track::new_bus("fed".into(), "Fed".into()));
+        let mut fx = Track::new_bus("fx".into(), "With effect".into());
+        fx.inserts.push(PluginSlot {
+            id: "s".into(),
+            plugin_id: "test.gain".into(),
+            enabled: true,
+            state: None,
+            sidechain_source: None,
+            wet: 1.0,
+        });
+        project.tracks.push(fx);
+        let mut source = Track::new_audio("src".into(), "Source".into());
+        source.output_bus = Some("fed".into());
+        project.tracks.push(source);
+        let (cb, _cmd_tx) = make_callback(Arc::new(Mutex::new(project)));
+        assert!(!cb.track_id_to_node.contains_key("empty"));
+        assert!(!cb.track_id_to_node.contains_key("ret"));
+        assert!(
+            cb.track_id_to_node.contains_key("fed"),
+            "something plays into it"
+        );
+        assert!(cb.track_id_to_node.contains_key("fx"), "it has an effect");
+    }
+
     #[test]
     fn insert_command_for_pending_track_is_parked_not_dropped() {
         let mut project = Project::default();
@@ -8494,6 +8920,7 @@ mod monitoring_tests {
                         },
                         points: Vec::new(),
                         visible: true,
+                        row: None,
                     });
             }
             song
@@ -8587,12 +9014,14 @@ mod monitoring_tests {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "beat".into(),
             position_ticks: 0,
             length_ticks: 1920,
             lane: 0,
             color: None,
+            row: None,
         });
         p.tracks.push(beat);
         let mut rec = hardwave_project::Track::new_audio("rec".into(), "Resample".into());
@@ -8885,12 +9314,14 @@ mod track_render_tests {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: track_id.into(),
             position_ticks: 0,
             length_ticks: LEN_TICKS,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 
@@ -9003,6 +9434,113 @@ mod track_render_tests {
         t.frozen = true;
     }
 
+    /// An instrument track with one note on the playlist, and a channel
+    /// rack whose pattern plays nothing on it.
+    fn note_and_empty_pattern() -> (DawEngine, String) {
+        let engine = DawEngine::new();
+        let id = {
+            let mut p = engine.project.lock();
+            let id = p.add_midi_track("Lead".into());
+            let mut midi = hardwave_midi::MidiClip::new("m".into(), "m".into(), LEN_TICKS);
+            midi.notes.push(hardwave_midi::MidiNote {
+                start_tick: 0,
+                duration_ticks: LEN_TICKS,
+                pitch: 69,
+                velocity: 0.8,
+                ..Default::default()
+            });
+            p.track_mut(&id).unwrap().clips.push(ClipPlacement {
+                content: ClipContent::Midi(hardwave_project::clip::MidiClipRef {
+                    id: "m".into(),
+                    clip: midi,
+                }),
+                track_id: id.clone(),
+                position_ticks: 0,
+                length_ticks: LEN_TICKS,
+                lane: 0,
+                color: None,
+                row: None,
+            });
+            p.channel_rack_state = Some(r#"{"patterns":[{"id":"p"}],"activeId":"p"}"#.into());
+            p.refresh_step_rack();
+            id
+        };
+        (engine, id)
+    }
+
+    /// Freezing, bouncing or consolidating with the transport in pattern
+    /// mode renders the track's part on the playlist. It rendered the
+    /// pattern, here nothing at all.
+    #[test]
+    fn a_render_for_a_track_is_the_playlist_in_pattern_mode() {
+        let (engine, id) = note_and_empty_pattern();
+        let len = engine
+            .project
+            .lock()
+            .tempo_map
+            .tick_to_samples(LEN_TICKS, SR as f64);
+        let song = render_for_a_track(&engine, &id, len, |_| {});
+        assert!(peak(&song) > 0.05, "the note plays: {}", peak(&song));
+        engine
+            .transport
+            .pattern_mode
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let in_pattern_mode = render_for_a_track(&engine, &id, len, |_| {});
+        let diff = worst_difference(&song, &in_pattern_mode);
+        assert!(diff < 1e-6, "the part, not the pattern: off by {diff}");
+    }
+
+    /// An export of the pattern plays it once, from its start, whatever mode
+    /// the transport is in, and its tail is what still sounds, not the
+    /// pattern again.
+    #[test]
+    fn a_pattern_export_plays_the_pattern_once() {
+        let engine = DawEngine::new();
+        {
+            let mut p = engine.project.lock();
+            let id = p.add_midi_track("Hat".into());
+            // A step on the second sixteenth, so a pattern started again
+            // plays it again even when the loop lands inside the bar.
+            let mut row = vec![0.0; 16];
+            row[1] = 1.0;
+            let steps = serde_json::json!({ id.clone(): row });
+            let rack = serde_json::json!({
+                "patterns": [{ "id": "p", "steps": steps }],
+                "activeId": "p",
+            });
+            p.channel_rack_state = Some(rack.to_string());
+            p.refresh_step_rack();
+        }
+        // One bar of pattern and one of tail.
+        let bar = engine
+            .project
+            .lock()
+            .tempo_map
+            .tick_to_samples(4 * hardwave_midi::PPQ, SR as f64) as usize;
+        let render = |once: bool| -> Vec<f32> {
+            let mut out = Vec::new();
+            let r = engine.prepare_offline_render(SR, 0, None, |_| {});
+            let r = if once { r.the_pattern_once() } else { r };
+            r.run(2 * bar as u64, |b| {
+                out.extend_from_slice(b);
+                true
+            });
+            out
+        };
+        // A fifth of a second from a frame, interleaved: the step is a
+        // sixteenth in, a tenth of a second at 140 BPM.
+        let from = |s: &[f32], frame: usize| -> f32 {
+            peak(&s[2 * frame..2 * (frame + SR as usize / 5)])
+        };
+        let once = render(true);
+        assert!(from(&once, 0) > 0.05, "the step plays near the start");
+        assert!(from(&once, bar) < 1e-4, "and not again in the tail");
+        // What it rendered before, with the transport in song mode: the
+        // song's first bar, here nothing.
+        let song = render(false);
+        assert!(from(&song, 0) < 1e-4);
+    }
+
     /// The loudest difference between two renders, away from the first and
     /// last few milliseconds where each clip's own declick fades sit.
     fn worst_difference(a: &[f32], b: &[f32]) -> f32 {
@@ -9108,6 +9646,265 @@ mod track_render_tests {
             "the frozen track plays as it did: worst difference {diff}, peaks {} and {}",
             peak(&heard),
             peak(&played)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tempo_follow_tests {
+    //! A song whose tempo changes, played back and exported: audio that
+    //! follows the tempo lands on the beats the tempo map puts it on, audio
+    //! that keeps its speed plays as recorded, and the two renders agree.
+    use super::*;
+    use hardwave_midi::PPQ;
+    use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement, SampleTreatment};
+    use hardwave_project::tempo::{TempoEntry, TempoMap, TempoRamp};
+    use std::sync::atomic::Ordering::Relaxed;
+
+    const RATE: u32 = 48_000;
+    /// A beat of the loop: it is in 150 BPM.
+    const LOOP_BEAT: usize = 19_200;
+    const BEATS: usize = 16;
+
+    fn entry(tick: u64, bpm: f64, ramp: TempoRamp) -> TempoEntry {
+        TempoEntry {
+            tick,
+            bpm,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            ramp,
+        }
+    }
+
+    /// 150 for two bars, then a ramp up to 175 over the next bar, held.
+    fn ramp_up() -> TempoMap {
+        TempoMap {
+            entries: vec![
+                entry(0, 150.0, TempoRamp::Instant),
+                entry(PPQ * 8, 150.0, TempoRamp::Linear),
+                entry(PPQ * 12, 175.0, TempoRamp::Instant),
+            ],
+        }
+    }
+
+    /// A click on every beat of a 150 BPM loop, sixteen beats long.
+    fn click_loop() -> AudioBuffer {
+        let mut ch = vec![0.0f32; LOOP_BEAT * BEATS];
+        for beat in 0..BEATS {
+            ch[beat * LOOP_BEAT] = 1.0;
+        }
+        AudioBuffer {
+            channels: vec![ch.clone(), ch],
+            sample_rate: RATE,
+            num_frames: LOOP_BEAT * BEATS,
+        }
+    }
+
+    /// The song: the click loop at the start of an audio track, following
+    /// the tempo or keeping its speed. Played like a tape, so the test
+    /// hears where each click lands without a phase vocoder's smear.
+    fn song(map: TempoMap, follow: bool) -> Project {
+        let mut project = Project {
+            tempo_map: map,
+            ..Default::default()
+        };
+        let id = project.add_audio_track("Loop".into());
+        let track = project.track_mut(&id).unwrap();
+        track.clips.push(ClipPlacement {
+            content: ClipContent::Audio(AudioClip {
+                id: "loop".into(),
+                name: "Loop 150 BPM".into(),
+                source_path: "loop".into(),
+                source_hash: String::new(),
+                source_start: 0,
+                source_end: (LOOP_BEAT * BEATS) as u64,
+                gain_db: 0.0,
+                fade_in_ticks: 0,
+                fade_out_ticks: 0,
+                muted: false,
+                reversed: false,
+                pitch_semitones: 0.0,
+                stretch_ratio: 1.0,
+                warp_markers: Vec::new(),
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                source_file: String::new(),
+                treatment: SampleTreatment {
+                    resample: true,
+                    follow_bpm: follow.then_some(150.0),
+                    ..Default::default()
+                },
+                tuned_notes: Vec::new(),
+            }),
+            track_id: id.clone(),
+            position_ticks: 0,
+            length_ticks: PPQ * 20,
+            lane: 0,
+            color: None,
+            row: None,
+        });
+        project
+    }
+
+    fn exported(project: Project, frames: u64) -> Vec<f32> {
+        let engine = DawEngine::new();
+        engine.audio_pool.insert("loop".to_string(), click_loop());
+        *engine.project.lock() = project;
+        let mut out = Vec::new();
+        engine
+            .render_offline_with(
+                RATE,
+                frames,
+                0,
+                None,
+                |_| {},
+                |b| {
+                    out.extend(b.iter().step_by(2));
+                    true
+                },
+            )
+            .expect("it renders");
+        out
+    }
+
+    /// The same song through the callback the sound card drives, a small
+    /// block at a time.
+    fn played(project: Project, frames: usize) -> Vec<f32> {
+        let transport = TransportState::default();
+        transport.sample_rate.store(RATE as u64, Relaxed);
+        transport
+            .bpm
+            .store(project.tempo_map.entries[0].bpm, Relaxed);
+        transport.playing.store(true, Relaxed);
+        let pool = AudioPool::new();
+        pool.insert("loop".to_string(), click_loop());
+        let (meter_producer, _meter_consumer) = RingBuffer::<MeterSnapshot>::new(4);
+        let (_command_tx, command_rx) = bounded::<EngineCommand>(4);
+        let (_cmd_tx, cmd_rx) = crate::insert_chain::command_channel(8);
+        let (grave_tx, _grave_rx) = crate::insert_chain::graveyard_channel(8);
+        let mut cb = EngineCallback::new(
+            transport,
+            Arc::new(Mutex::new(project)),
+            meter_producer,
+            command_rx,
+            pool,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(None)),
+            crate::input_node::capture_set(),
+            master_tap::new_shared(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cmd_rx,
+            grave_tx,
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(MidiInputManager::new())),
+            Arc::new(Mutex::new(MidiCaptureRing::new(64))),
+            RATE,
+            256,
+            LoadCounters::new(),
+            crate::metronome::MetronomeSettings::silent(),
+            crate::preview_player::PreviewRequest::new(),
+            crate::audio_prefs::AudioPrefs::new(),
+            Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            Arc::new(crate::session::SessionState::new()),
+        );
+        let mut out = Vec::with_capacity(frames);
+        let mut block = vec![0.0f32; 512];
+        while out.len() < frames {
+            block.fill(0.0);
+            cb.process(&mut block, 256, 2);
+            out.extend(block.iter().step_by(2));
+        }
+        out.truncate(frames);
+        out
+    }
+
+    /// Where each click is heard: the loudest sample near where it should be.
+    fn clicks_near(out: &[f32], expected: &[u64]) -> Vec<u64> {
+        expected
+            .iter()
+            .map(|&at| {
+                let from = (at as usize).saturating_sub(400);
+                let to = (at as usize + 400).min(out.len());
+                let (i, _) = out[from..to]
+                    .iter()
+                    .enumerate()
+                    .fold((0, 0.0f32), |best, (i, v)| {
+                        if v.abs() > best.1 {
+                            (i, v.abs())
+                        } else {
+                            best
+                        }
+                    });
+                (from + i) as u64
+            })
+            .collect()
+    }
+
+    fn beats_of(map: &TempoMap) -> Vec<u64> {
+        (0..BEATS as u64)
+            .map(|b| map.tick_to_samples(b * PPQ, RATE as f64))
+            .collect()
+    }
+
+    /// The loop follows the tempo: through the steady start, up the ramp
+    /// and on at 175, every click is on the beat the tempo map has there.
+    /// It used to play on at 150, so by the end it was a beat and a half
+    /// behind the grid it was drawn on.
+    #[test]
+    fn a_loop_that_follows_the_tempo_stays_on_the_beat() {
+        let map = ramp_up();
+        let beats = beats_of(&map);
+        let out = exported(song(map, true), beats[BEATS - 1] + 4_800);
+        for (k, (heard, want)) in clicks_near(&out, &beats)
+            .into_iter()
+            .zip(&beats)
+            .enumerate()
+        {
+            assert!(
+                heard.abs_diff(*want) <= 3,
+                "beat {k}: the click is at {heard}, the beat at {want}"
+            );
+        }
+    }
+
+    /// A loop that keeps its speed plays as recorded: its clicks keep the
+    /// loop's own spacing whatever the tempo does around them.
+    #[test]
+    fn a_clip_that_keeps_its_speed_plays_as_recorded() {
+        let map = ramp_up();
+        let recorded: Vec<u64> = (0..BEATS as u64).map(|b| b * LOOP_BEAT as u64).collect();
+        let out = exported(song(map.clone(), false), recorded[BEATS - 1] + 4_800);
+        for (heard, want) in clicks_near(&out, &recorded).into_iter().zip(&recorded) {
+            assert!(heard.abs_diff(*want) <= 1, "{heard} against {want}");
+        }
+        // And that is off the song's beats once the ramp has begun.
+        let beats = beats_of(&map);
+        assert!(recorded[15].abs_diff(beats[15]) > 4_800);
+    }
+
+    /// Playback and the export are one song: the clicks land on the same
+    /// samples whether the song is played a block at a time or bounced.
+    #[test]
+    fn playback_and_the_export_agree() {
+        let map = ramp_up();
+        let beats = beats_of(&map);
+        let frames = beats[BEATS - 1] + 4_800;
+        let live = played(song(map.clone(), true), frames as usize);
+        let bounced = exported(song(map, true), frames);
+        let heard_live = clicks_near(&live, &beats);
+        let heard_bounced = clicks_near(&bounced, &beats);
+        assert_eq!(heard_live, heard_bounced);
+        let peak_live = live.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let peak_bounced = bounced.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(peak_live > 0.1, "the live render is heard");
+        assert!(
+            (peak_live - peak_bounced).abs() < 1e-3,
+            "{peak_live} against {peak_bounced}"
         );
     }
 }

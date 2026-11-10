@@ -187,6 +187,10 @@ struct Voice {
 /// is stolen — bounds CPU while comfortably covering chords.
 const MAX_VOICES: usize = 16;
 
+/// Frames of room made for an instrument track's audio clips when they are
+/// set, so playing them does not allocate: the largest device buffer.
+const CLIP_BLOCK_FRAMES: usize = 8192;
+
 const TWO_PI: f32 = std::f32::consts::TAU;
 
 /// A detune in cents as a frequency multiplier. 100 cents is a semitone.
@@ -356,9 +360,10 @@ pub struct MidiTrackNode {
     kick_l: Vec<f32>,
     kick_r: Vec<f32>,
     /// The channel's audio clips (a consolidated part, a sample dropped on
-    /// it), played by a track node of their own and mixed into the dry
-    /// signal before the inserts, so they go through the same effects and
-    /// fader as the synth.
+    /// it), played by a track node of their own and mixed in where the
+    /// instrument's sound comes out: with the built-in synth's sound, or
+    /// after a plug-in instrument, before the effects that follow it. They go
+    /// through the same effects and fader as the synth.
     clips: Option<TrackNode>,
     clip_out: Vec<Vec<f32>>,
     clip_midi_scratch: Vec<hardwave_midi::MidiEvent>,
@@ -515,6 +520,61 @@ impl MidiTrackNode {
         node.set_prefs(self.prefs.clone());
         node.set_clips(regions);
         self.clips = Some(node);
+        // Room for the clips' block here, off the audio thread: it was
+        // made in the first block they played.
+        if self.clip_out.len() < 2 {
+            self.clip_out = (0..2).map(|_| vec![0.0; CLIP_BLOCK_FRAMES]).collect();
+        }
+    }
+
+    /// The channel's audio clips for this block, added to `left` and
+    /// `right`. Their node pans them to the centre with the pan law, and the
+    /// track pan applies the law again later: scaling by the centre gain
+    /// keeps a clip level with the synth.
+    fn mix_audio_clips(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        block_size: usize,
+        ctx: &ProcessContext,
+    ) {
+        let Some(clips) = self.clips.as_mut() else {
+            return;
+        };
+        let want = (ctx.buffer_size as usize).max(block_size);
+        // Made with the clips; never two short here.
+        if self.clip_out.len() < 2 {
+            return;
+        }
+        for ch in self.clip_out.iter_mut() {
+            // Grows only when the device's buffer outgrows the room made
+            // in `set_audio_clips`, not per block.
+            if ch.len() < want {
+                ch.resize(want, 0.0);
+            }
+            ch[..want].fill(0.0);
+        }
+        self.clip_midi_scratch.clear();
+        clips.process(
+            &[],
+            &mut self.clip_out,
+            &[],
+            &mut self.clip_midi_scratch,
+            ctx,
+        );
+        let (cl, _) = crate::pan::gains(0.0, self.prefs.pan_law());
+        let k = if cl > 1e-6 { 1.0 / cl } else { 1.0 };
+        // The clips' node sizes its output to the block the context names,
+        // which can be shorter than these buffers (a render's last block).
+        let n = block_size
+            .min(left.len())
+            .min(right.len())
+            .min(self.clip_out[0].len())
+            .min(self.clip_out[1].len());
+        for i in 0..n {
+            left[i] += self.clip_out[0][i] * k;
+            right[i] += self.clip_out[1][i] * k;
+        }
     }
 
     /// Set the built-in synth's oscillator shape. Audio thread picks it
@@ -1720,11 +1780,18 @@ impl AudioNode for MidiTrackNode {
 
         // If the chain hosts an instrument plug-in, it is the sound source:
         // discard the built-in synth's dry signal so the two don't double.
-        let has_instrument = self.chain.slots.iter().any(|s| {
-            s.plugin.descriptor().category
-                == hardwave_plugin_host::types::PluginCategory::Instrument
-        });
-        if has_instrument {
+        // The chain up to it makes the sound and the slots after it are the
+        // channel's effects.
+        let instrument_end = self
+            .chain
+            .slots
+            .iter()
+            .rposition(|s| {
+                s.plugin.descriptor().category
+                    == hardwave_plugin_host::types::PluginCategory::Instrument
+            })
+            .map_or(0, |i| i + 1);
+        if instrument_end > 0 {
             for buf in outputs.iter_mut() {
                 for s in buf.iter_mut() {
                     *s = 0.0;
@@ -1732,42 +1799,14 @@ impl AudioNode for MidiTrackNode {
             }
         }
 
-        // The channel's audio clips, into the dry signal. Their node pans
-        // them to the centre with the pan law, and the track pan applies
-        // the law again below: scaling by the centre gain keeps a clip
-        // level with the synth.
-        if let Some(clips) = self.clips.as_mut() {
-            let want = (ctx.buffer_size as usize).max(block_size);
-            if self.clip_out.len() < 2 {
-                self.clip_out = vec![Vec::new(), Vec::new()];
-            }
-            for ch in self.clip_out.iter_mut() {
-                if ch.len() < want {
-                    ch.resize(want, 0.0);
-                }
-                ch[..want].fill(0.0);
-            }
-            self.clip_midi_scratch.clear();
-            clips.process(
-                &[],
-                &mut self.clip_out,
-                &[],
-                &mut self.clip_midi_scratch,
-                ctx,
-            );
-            let (cl, _) = crate::pan::gains(0.0, self.prefs.pan_law());
-            let k = if cl > 1e-6 { 1.0 / cl } else { 1.0 };
-            // The clips' node sizes its output to the block the context
-            // names, which can be shorter than these buffers (a render's
-            // last block).
-            let n = block_size
-                .min(self.clip_out[0].len())
-                .min(self.clip_out[1].len());
+        // The channel's audio clips go in with the built-in synth's sound,
+        // before the effects. With a plug-in instrument they go in after
+        // it, below: an instrument writes its own sound over what it is
+        // given, so a part consolidated on a channel with a plug-in synth
+        // played silence.
+        if instrument_end == 0 {
             if let [left, right, ..] = outputs {
-                for i in 0..n {
-                    left[i] += self.clip_out[0][i] * k;
-                    right[i] += self.clip_out[1][i] * k;
-                }
+                self.mix_audio_clips(left, right, block_size, ctx);
             }
         }
 
@@ -1811,7 +1850,21 @@ impl AudioNode for MidiTrackNode {
                         sample_rate: ctx.sample_rate,
                         position_samples: ctx.position_samples,
                     });
-                self.chain.process(
+                if instrument_end > 0 {
+                    self.chain.process_slots(
+                        0..instrument_end,
+                        left,
+                        right,
+                        block_size,
+                        &mut self.chain_scratch,
+                        &block_midi,
+                        sidechain,
+                    );
+                    self.mix_audio_clips(left, right, block_size, ctx);
+                }
+                let all = self.chain.slots.len();
+                self.chain.process_slots(
+                    instrument_end..all,
                     left,
                     right,
                     block_size,
@@ -2481,6 +2534,173 @@ mod tests {
         assert!(
             flat < 1e-4,
             "instrument (DC) should replace the built-in sine, got delta={flat}"
+        );
+    }
+
+    /// A plug-in that plays what it is given at `gain`. As an instrument it
+    /// stands for a synth with no notes to play: it writes silence over its
+    /// input, as a real one does.
+    fn scaling_slot(id: &str, instrument: bool, gain: f32) -> crate::insert_chain::LiveSlot {
+        use hardwave_plugin_host::types::{
+            HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+        };
+        struct Scale {
+            desc: PluginDescriptor,
+            gain: f32,
+        }
+        impl HostedPlugin for Scale {
+            fn descriptor(&self) -> &PluginDescriptor {
+                &self.desc
+            }
+            fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+                Ok(())
+            }
+            fn deactivate(&mut self) {}
+            fn process(
+                &mut self,
+                inputs: &[&[f32]],
+                outputs: &mut [Vec<f32>],
+                _mi: &[MidiEvent],
+                _mo: &mut Vec<MidiEvent>,
+                n: usize,
+            ) {
+                for (o, i) in outputs.iter_mut().zip(inputs.iter()) {
+                    o.clear();
+                    o.extend(i[..n].iter().map(|s| s * self.gain));
+                }
+            }
+            fn get_parameter_count(&self) -> u32 {
+                0
+            }
+            fn get_parameter_info(&self, _i: u32) -> Option<ParameterInfo> {
+                None
+            }
+            fn get_parameter_value(&self, _i: u32) -> f64 {
+                0.0
+            }
+            fn set_parameter_value(&mut self, _i: u32, _v: f64) {}
+            fn get_state(&self) -> Vec<u8> {
+                Vec::new()
+            }
+            fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+                Ok(())
+            }
+            fn latency_samples(&self) -> u32 {
+                0
+            }
+            fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+                false
+            }
+            fn close_editor(&mut self) {}
+            fn has_editor(&self) -> bool {
+                false
+            }
+        }
+        crate::insert_chain::LiveSlot {
+            param_ranges: Vec::new(),
+            levels: Default::default(),
+            slot_id: id.into(),
+            plugin: Box::new(Scale {
+                desc: PluginDescriptor {
+                    id: format!("test.{id}"),
+                    name: id.into(),
+                    vendor: "t".into(),
+                    version: "1".into(),
+                    format: PluginFormat::Clap,
+                    path: std::path::PathBuf::from("<native>"),
+                    category: if instrument {
+                        PluginCategory::Instrument
+                    } else {
+                        PluginCategory::Effect
+                    },
+                    num_inputs: 2,
+                    num_outputs: 2,
+                    has_midi_input: instrument,
+                    has_editor: false,
+                },
+                gain,
+            }),
+            enabled: true,
+            wet: 1.0,
+            sidechain_active: false,
+            gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+        }
+    }
+
+    /// An instrument track playing a steady 0.5 audio clip through `chain`,
+    /// one block: the left side at the block's middle, and whether the
+    /// clips' buffer stayed where it was made.
+    fn clip_through(chain: Vec<crate::insert_chain::LiveSlot>) -> (f32, bool) {
+        let pool = AudioPool::new();
+        pool.insert(
+            "glued".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![vec![0.5; 4800], vec![0.5; 4800]],
+                sample_rate: 48_000,
+                num_frames: 4800,
+            },
+        );
+        let mut node = make_node();
+        node.set_audio_clips(
+            pool,
+            vec![ClipRegion {
+                source_id: "glued".into(),
+                timeline_start: 0,
+                timeline_end: 4800,
+                source_offset: 0,
+                gain: 1.0,
+                muted: false,
+                fade_in_samples: 0,
+                fade_out_samples: 0,
+                fade_in_curve: Default::default(),
+                fade_out_curve: Default::default(),
+                reversed: false,
+                source_step: 1.0,
+                warp: Vec::new(),
+                treat: Default::default(),
+            }],
+        );
+        for slot in chain {
+            node.push_offline_slot(slot, 48_000.0, 256);
+        }
+        let made = node.clip_out[0].as_ptr();
+        let mut out = vec![vec![0.0f32; 256]; 4];
+        let inputs: [&[f32]; 0] = [];
+        node.process(
+            &inputs,
+            &mut out,
+            &[],
+            &mut Vec::new(),
+            &ctx_at(48_000.0, 256, 0, true),
+        );
+        (out[0][128], node.clip_out[0].as_ptr() == made)
+    }
+
+    /// A part consolidated on a channel with a plug-in synth plays, through
+    /// the effects after the synth. The clips went in before the synth,
+    /// which wrote its own sound over them: the glued part was silent.
+    #[test]
+    fn an_audio_clip_plays_after_a_plug_in_instrument_and_through_the_effects() {
+        // The clip at 0.5 through the track's pan law, with no plug-ins.
+        let (dry, _) = clip_through(Vec::new());
+        assert!((0.33..0.38).contains(&dry), "the clip as it is, got {dry}");
+
+        let (after_synth, kept) = clip_through(vec![
+            scaling_slot("synth", true, 0.0),
+            scaling_slot("half", false, 0.5),
+        ]);
+        assert!(
+            (after_synth - dry * 0.5).abs() < 1e-4,
+            "the clip after the synth, halved by the effect: {after_synth} against {dry}"
+        );
+        assert!(kept, "playing the clips made no new buffer");
+
+        // With the built-in synth the clip goes through every effect, as it
+        // always did.
+        let (builtin, _) = clip_through(vec![scaling_slot("half", false, 0.5)]);
+        assert!(
+            (builtin - dry * 0.5).abs() < 1e-4,
+            "halved: {builtin} against {dry}"
         );
     }
 

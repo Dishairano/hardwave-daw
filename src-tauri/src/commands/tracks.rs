@@ -13,6 +13,10 @@ pub struct InsertInfo {
     pub wet: f32,
     #[serde(rename = "sidechainSource")]
     pub sidechain_source: Option<String>,
+    /// For a sampler, the file its sample came from, so the channel rack
+    /// can say what a channel plays.
+    #[serde(rename = "samplePath", skip_serializing_if = "Option::is_none")]
+    pub sample_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -75,6 +79,14 @@ pub struct TrackInfo {
     /// engine's hardstyle default for this layer".
     #[serde(rename = "kickPatch")]
     kick_patch: KickPatchInfo,
+    /// Its number in the mixer (0 the master), or none for a channel that
+    /// is not in the mixer. Not drawn yet.
+    #[serde(rename = "mixerNumber")]
+    mixer_number: Option<u16>,
+    /// The channel rack group it is listed in, or none for an insert or
+    /// the master. Not drawn yet.
+    #[serde(rename = "rackGroup")]
+    rack_group: Option<u16>,
 }
 
 #[derive(Serialize)]
@@ -102,6 +114,8 @@ pub struct AutomationLaneInfo {
     pub target: AutomationTargetInfo,
     pub points: Vec<AutomationPointInfo>,
     pub visible: bool,
+    /// The playlist row it is drawn on. Not drawn there yet.
+    pub row: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -142,6 +156,11 @@ pub struct AutomationClipInfo {
     #[serde(rename = "colorArgb")]
     pub color_argb: u32,
     pub points: Vec<AutomationPointInfo>,
+    /// The playlist row it is drawn on. Not drawn there yet.
+    pub row: Option<u32>,
+    /// The track whose knob it moves, when not the one it sits on.
+    #[serde(rename = "targetTrack")]
+    pub target_track: Option<String>,
 }
 
 /// Map a project automation target to its UI DTO (shared by lanes + clips).
@@ -161,9 +180,24 @@ fn target_to_info(target: &hardwave_project::automation::AutomationTarget) -> Au
     }
 }
 
+/// The file a sampler slot's sample came from, from the song's copy of
+/// its state.
+pub(crate) fn sampler_sample_path(
+    project: &hardwave_project::Project,
+    slot: &hardwave_project::track::PluginSlot,
+) -> Option<String> {
+    if slot.plugin_id != hardwave_native_plugins::sampler::NativeSampler::ID {
+        return None;
+    }
+    project
+        .plugin_state(&slot.id)
+        .and_then(|e| hardwave_native_plugins::sampler::sample_path_of(&e.chunk))
+}
+
 pub(crate) fn track_to_info(
     t: &hardwave_project::Track,
     plugin_name_lookup: &dyn Fn(&str) -> String,
+    sample_path: &dyn Fn(&hardwave_project::track::PluginSlot) -> Option<String>,
 ) -> TrackInfo {
     let inserts = t
         .inserts
@@ -175,6 +209,7 @@ pub(crate) fn track_to_info(
             enabled: s.enabled,
             wet: s.wet,
             sidechain_source: s.sidechain_source.clone(),
+            sample_path: sample_path(s),
         })
         .collect();
     TrackInfo {
@@ -243,6 +278,7 @@ pub(crate) fn track_to_info(
                     })
                     .collect(),
                 visible: l.visible,
+                row: l.row,
             })
             .collect(),
         automation_clips: t
@@ -265,6 +301,8 @@ pub(crate) fn track_to_info(
                         tension: p.tension,
                     })
                     .collect(),
+                row: c.row,
+                target_track: c.target_track.clone(),
             })
             .collect(),
         instrument: match t.instrument {
@@ -319,6 +357,8 @@ pub(crate) fn track_to_info(
                 }),
             ],
         },
+        mixer_number: t.mixer_number,
+        rack_group: t.rack_group,
     }
 }
 
@@ -339,7 +379,7 @@ pub fn get_tracks(state: State<AppState>) -> Vec<TrackInfo> {
     project
         .tracks
         .iter()
-        .map(|t| track_to_info(t, &name_of))
+        .map(|t| track_to_info(t, &name_of, &|slot| sampler_sample_path(&project, slot)))
         .collect()
 }
 
@@ -370,7 +410,7 @@ pub fn get_tracks_with_clips(state: State<AppState>) -> Vec<TrackWithClipsPayloa
         .tracks
         .iter()
         .map(|t| TrackWithClipsPayload {
-            track: track_to_info(t, &name_of),
+            track: track_to_info(t, &name_of, &|slot| sampler_sample_path(&project, slot)),
             clips: crate::commands::audio::track_clips_to_info(
                 t,
                 &engine.audio_pool,
@@ -405,7 +445,7 @@ pub fn get_track_with_clips(
         .iter()
         .find(|t| t.id == track_id)
         .map(|t| TrackWithClipsPayload {
-            track: track_to_info(t, &name_of),
+            track: track_to_info(t, &name_of, &|slot| sampler_sample_path(&project, slot)),
             clips: crate::commands::audio::track_clips_to_info(
                 t,
                 &engine.audio_pool,
@@ -798,6 +838,14 @@ mod keyboard_target_tests {
         project.tracks.push(bass);
         assert_eq!(keyboard_target(&project).armed, vec!["Bass".to_string()]);
     }
+}
+
+/// The MIDI track picked for the keyboard, as `set_keyboard_track` left
+/// it: the channel rack plays a channel through the keyboard's routing for
+/// a moment and then puts it back.
+#[tauri::command]
+pub fn get_keyboard_track(state: State<AppState>) -> Option<String> {
+    state.engine.lock().project.lock().keyboard_track.clone()
 }
 
 /// One saved mixer state: every track's fader, pan, mute and solo, its

@@ -145,12 +145,14 @@ fn song() -> DawEngine {
                 fade_out_curve: FadeCurve::Linear,
                 source_file: String::new(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: drums.clone(),
             position_ticks: 0,
             length_ticks: 4 * BAR,
             lane: 0,
             color: None,
+            row: None,
         });
         t.inserts.push(slot("slot-eq", NativeEq::ID));
         t.inserts.push(slot("slot-comp", NativeCompressor::ID));
@@ -171,6 +173,7 @@ fn song() -> DawEngine {
             target: AutomationTarget::TrackVolume,
             points: vec![point(0, 0.4), point(BAR, 0.8), point(2 * BAR, 0.5)],
             visible: true,
+            row: None,
         });
     }
     let lead = project.add_midi_track("Lead".into());
@@ -198,6 +201,7 @@ fn song() -> DawEngine {
             length_ticks: 2 * BAR,
             lane: 0,
             color: None,
+            row: None,
         });
     }
     drop(project);
@@ -363,6 +367,7 @@ fn no_built_in_plug_in_allocates_on_the_audio_thread() {
                     length_ticks: 2 * BAR,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             } else {
                 let t = project.add_audio_track("One".into());
@@ -388,12 +393,14 @@ fn no_built_in_plug_in_allocates_on_the_audio_thread() {
                         fade_out_curve: FadeCurve::Linear,
                         source_file: String::new(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: t.clone(),
                     position_ticks: 0,
                     length_ticks: 2 * BAR,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }

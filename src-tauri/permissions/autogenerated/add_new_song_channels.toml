@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-new-song-channels"
+description = "Enables the add_new_song_channels command without any pre-configured scope."
+commands.allow = ["add_new_song_channels"]
+
+[[permission]]
+identifier = "deny-add-new-song-channels"
+description = "Denies the add_new_song_channels command without any pre-configured scope."
+commands.deny = ["add_new_song_channels"]

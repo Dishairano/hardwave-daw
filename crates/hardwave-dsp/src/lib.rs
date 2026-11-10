@@ -27,6 +27,7 @@ pub mod mix_feedback;
 pub mod modulation;
 pub mod modulation_matrix;
 pub mod multiband;
+pub mod note_tune;
 pub mod onset;
 pub mod oversample;
 pub mod parametric_eq;

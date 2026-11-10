@@ -87,6 +87,7 @@ fn stretch_preserves_pitch() {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 };
                 t.clips.push(ClipPlacement {
                     content: ClipContent::Audio(clip),
@@ -95,6 +96,7 @@ fn stretch_preserves_pitch() {
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -279,12 +281,14 @@ fn pitch_shift_preserves_duration() {
                         // to reading source_path as the file location.
                         source_file: String::new(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: track_id.clone(),
                     position_ticks: 0,
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -372,12 +376,14 @@ fn stretch_bake_is_explicit_and_off_the_audio_thread() {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -446,12 +452,14 @@ fn async_stretch_bake_lands_and_does_not_stampede() {
                     // to reading source_path as the file location.
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: 0,
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -588,12 +596,14 @@ fn a_recorded_take_comes_back_in_the_bounce_at_its_position() {
                     fade_out_curve: FadeCurve::Linear,
                     source_file: String::new(),
                     treatment: Default::default(),
+                    tuned_notes: Vec::new(),
                 }),
                 track_id: track_id.clone(),
                 position_ticks: one_second_of_ticks,
                 length_ticks: 1_000_000,
                 lane: 0,
                 color: None,
+                row: None,
             });
         }
     }
@@ -666,12 +676,14 @@ fn render_rate_does_not_detune_audio_clips() {
                         // to reading source_path as the file location.
                         source_file: String::new(),
                         treatment: Default::default(),
+                        tuned_notes: Vec::new(),
                     }),
                     track_id: track_id.clone(),
                     position_ticks: 0,
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }
@@ -758,6 +770,7 @@ fn a_warped_clip_keeps_its_pitch() {
                     fade_out_curve: FadeCurve::Linear,
                     source_file: String::new(),
                     treatment,
+                    tuned_notes: Vec::new(),
                 };
                 t.clips.push(ClipPlacement {
                     content: ClipContent::Audio(clip),
@@ -766,6 +779,7 @@ fn a_warped_clip_keeps_its_pitch() {
                     length_ticks: 1_000_000,
                     lane: 0,
                     color: None,
+                    row: None,
                 });
             }
         }

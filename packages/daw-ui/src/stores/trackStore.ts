@@ -139,12 +139,23 @@ export interface ClipInfo {
     /** Show the file's regions and slice markers. */
     loadRegions?: boolean
     loadSlices?: boolean
+    /** The tempo the sample is in when it follows the song's tempo; null
+     *  when it keeps its speed. */
+    followBpm?: number | null
   }
+  /** A fingerprint of the notes tuned by hand in the sample window's NOTES
+   *  view; absent when none are. It changes when an undo changes them. */
+  tuneKey?: string
+  /** Warp markers pinning the file to ticks; empty for a plain clip. */
+  warpMarkers?: { clip_tick: number; source_sample: number }[]
   /** Where the file is on disk. */
   sourceFile?: string
   /** The fades in time, at the tempo where the clip sits. */
   fadeInMs?: number
   fadeOutMs?: number
+  /** The playlist row it is drawn on, from 0; null for a clip made before
+   *  rows were kept. Not used by the playlist yet. */
+  row?: number | null
 }
 
 export interface InsertInfo {
@@ -154,6 +165,8 @@ export interface InsertInfo {
   enabled: boolean
   wet: number
   sidechainSource: string | null
+  /** For a sampler: the file its sample came from. */
+  samplePath?: string
 }
 
 /** What an armed track lets you hear: nothing, always the input, or the
@@ -209,6 +222,12 @@ export interface TrackInfo {
    *  meaning "use engine default for this layer". Only meaningful
    *  when `instrument === 'kick_synth'`. */
   kickPatch?: { layers: (KickLayerPatch | null)[]; drive: number }
+  /** Its number in the mixer (0 the master); null for a channel not in the
+   *  mixer. Not used by the mixer yet. */
+  mixerNumber?: number | null
+  /** The channel rack group it is listed in; null for an insert or the
+   *  master. Not used by the rack yet. */
+  rackGroup?: number | null
 }
 
 export interface KickLayerPatch {
@@ -247,6 +266,8 @@ export interface AutomationLaneInfo {
   target: AutomationTargetInfo
   points: AutomationPointInfo[]
   visible: boolean
+  /** The playlist row it is drawn on. Not used by the playlist yet. */
+  row?: number | null
 }
 
 export interface AutomationClipInfo {
@@ -256,6 +277,10 @@ export interface AutomationClipInfo {
   lengthTicks: number
   colorArgb: number
   points: AutomationPointInfo[]
+  /** The playlist row it is drawn on. Not used by the playlist yet. */
+  row?: number | null
+  /** The track whose knob it moves, when not the one it sits on. */
+  targetTrack?: string | null
 }
 
 export interface TrackWithClips extends TrackInfo {
@@ -1352,6 +1377,9 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (ok) {
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().undoOne()
+      // The step may have been a tempo change: the lane and the grid read
+      // the map again.
+      void import('./tempoMapStore').then(({ useTempoMapStore }) => useTempoMapStore.getState().refresh())
       await get().fetchTracks()
       await rehydrateRack()
     }
@@ -1363,6 +1391,9 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     if (ok) {
       useProjectStore.getState().markDirty()
       useHistoryStore.getState().redoOne()
+      // The step may have been a tempo change: the lane and the grid read
+      // the map again.
+      void import('./tempoMapStore').then(({ useTempoMapStore }) => useTempoMapStore.getState().refresh())
       await get().fetchTracks()
       await rehydrateRack()
     }

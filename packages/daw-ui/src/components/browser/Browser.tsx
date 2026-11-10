@@ -528,6 +528,21 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     } catch {}
   }
 
+  // The drums installed with the DAW: the sounds a new song opens with and a
+  // few others. They come first, open, so swapping a channel's sound is a
+  // drag; the ones the song plays say so.
+  const [drums, setDrums] = useState<string[]>([])
+  useEffect(() => {
+    invoke<string>('get_drum_folder')
+      .then(dir => invoke<DiskEntry[]>('list_directory', { path: dir }))
+      .then(entries => setDrums(entries.filter(e => !e.isDir).map(e => e.path)))
+      .catch(() => setDrums([]))
+  }, [])
+  const songTracks = useTrackStore(s => s.tracks)
+  const samplesInUse = useMemo(() => new Set(
+    songTracks.flatMap(tr => (tr.inserts ?? []).map(slot => slot.samplePath).filter((p): p is string => !!p)),
+  ), [songTracks])
+
   // The sample library: a folder of the DAW's own, listed in Places from
   // the first start, where a pack's .zip is installed in one step.
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
@@ -580,10 +595,11 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
     } catch {}
   }
 
-  const renderDiskFile = (path: string, depth: number) => (
+  const renderDiskFile = (path: string, depth: number, note?: string) => (
     <FileItem
       key={path} path={path} depth={depth}
       showDir={false}
+      note={note}
       isFavorite={fileFavorites.has(path)}
       isPreviewing={previewing === path}
       autoPreview={autoPreview}
@@ -868,6 +884,14 @@ function FilesTab({ audioOnly = false }: { audioOnly?: boolean } = {}) {
             </div>
           )}
         </TreeGroup>
+      )}
+
+      {drums.length > 0 && (
+        <div data-testid="browser-drums">
+          <TreeGroup label={t('Hardwave drums')} count={drums.length} expanded onToggle={() => {}}>
+            {drums.filter(filter).map(p => renderDiskFile(p, 1, samplesInUse.has(p) ? t('in use') : undefined))}
+          </TreeGroup>
+        </div>
       )}
 
       <div data-testid="browser-places">
@@ -1365,8 +1389,10 @@ function PluginItem({ plugin, canAdd, isFavorite, onToggleFavorite }: {
   )
 }
 
-function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = false, tags = [], onAddTag, onRemoveTag, onClearTags, onToggleFavorite, onPreview, onImport, onRemove, showDir = true }: {
+function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = false, tags = [], onAddTag, onRemoveTag, onClearTags, onToggleFavorite, onPreview, onImport, onRemove, showDir = true, note }: {
   path: string; depth?: number; isFavorite: boolean; isPreviewing: boolean;
+  /** A word on the right, small and grey: "in use" for a sample the song plays. */
+  note?: string;
   autoPreview?: boolean;
   tags?: string[];
   onAddTag?: () => void;
@@ -1492,6 +1518,9 @@ function FileItem({ path, depth = 0, isFavorite, isPreviewing, autoPreview = fal
           </div>
         )}
       </div>
+      {note && (
+        <small style={{ fontSize: 10, color: hw.textFaint, whiteSpace: 'nowrap', flexShrink: 0 }}>{note}</small>
+      )}
       <FileWaveform path={path} />
       <button
         onClick={(e) => { e.stopPropagation(); onPreview() }}

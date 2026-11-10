@@ -560,12 +560,14 @@ mod untrusted_projects {
                 fade_out_curve: Default::default(),
                 source_file: file.into(),
                 treatment: Default::default(),
+                tuned_notes: Vec::new(),
             }),
             track_id: "t".into(),
             position_ticks: 0,
             length_ticks: 960,
             lane: 0,
             color: None,
+            row: None,
         }
     }
 

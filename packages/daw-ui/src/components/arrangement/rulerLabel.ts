@@ -1,3 +1,5 @@
+import { secsAtTick, type TempoPoint } from '../../utils/tempoTime'
+
 /** What the playlist ruler counts in. */
 export type RulerUnits = 'bars' | 'time' | 'timecode' | 'samples'
 /** Frame rates the timecode ruler and the MIDI timecode sender share. */
@@ -7,19 +9,23 @@ const PPQ = 960
 
 /**
  * The ruler label over a bar line. The time is worked out from the same
- * tick the bar line sits on, through the project tempo, so the readings
- * never disagree with the bars.
+ * tick the bar line sits on, through the song's tempo map (or one tempo),
+ * so the readings never disagree with the bars or with what is heard: at
+ * one tempo, every bar after a tempo change was labelled with the wrong
+ * time.
  */
 export function rulerLabel(
   tick: number,
   bar: number,
   units: RulerUnits,
-  bpm: number,
+  tempo: number | readonly TempoPoint[],
   fps: TimecodeFps,
   sampleRate: number,
 ): string {
   if (units === 'bars') return String(bar)
-  const total = (tick / PPQ) * (60 / Math.max(1, bpm))
+  const total = typeof tempo === 'number'
+    ? (tick / PPQ) * (60 / Math.max(1, tempo))
+    : secsAtTick(tempo, tick)
   if (units === 'samples') return String(Math.round(total * sampleRate))
   const minutes = Math.floor(total / 60)
   const seconds = total - minutes * 60

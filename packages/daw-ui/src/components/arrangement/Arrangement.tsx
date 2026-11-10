@@ -35,6 +35,10 @@ import { useTempoMapStore } from '../../stores/tempoMapStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { reloadTimelineState } from '../../stores/timelineState'
 import { bpmAt, flagEntry, tempoFlags } from './tempoFlags'
+import { layoutBpm, sampleAtTick, tickAtSample } from '../../utils/tempoTime'
+import { fileLayout, stretchLabel } from './clipTime'
+import { TEMPO_LANE_HEIGHT, drawTempoLane, laneScale } from './tempoLaneDraw'
+import { TempoLane } from './TempoLane'
 import { gridLines } from '../../utils/meter'
 import { mixHex, hexLuma } from '../../lib/color'
 import { rgbColour } from '../../lib/waveformColour'
@@ -48,7 +52,11 @@ const RESIZE_HANDLE_PX = 6
 // drawn in the same pixel-space as the grid lines underneath. The HTML
 // ruler in HwApp.tsx is hidden via .fl-pl-ruler-hidden when the canvas
 // owns the ruler so we never have two competing visual layers.
-const RULER_HEIGHT = 22
+const BAR_RULER_HEIGHT = 22
+// Where the track rows start: under the ruler, and under the tempo lane when
+// it is shown. Set as the arrangement renders (there is one), so every row,
+// hit test and scroll reads the same top without each carrying the lane.
+let RULER_HEIGHT = BAR_RULER_HEIGHT
 
 type DragMode =
   | 'none'
@@ -454,10 +462,27 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   // plays. The ones the marker list still holds from before never changed
   // the song and are not drawn.
   const tempoEntries = useTempoMapStore(s => s.entries)
+  // The tempo lane, under the ruler. With it shown, the tempo is drawn
+  // there, so the ruler keeps only the signature changes.
+  const tempoLaneShown = useGeneralPrefsStore(s => s.tempoLaneShown)
+  const laneHot = useTempoMapStore(s => s.laneHot)
+  const laneScaleHeld = useTempoMapStore(s => s.laneScale)
+  RULER_HEIGHT = BAR_RULER_HEIGHT + (tempoLaneShown ? TEMPO_LANE_HEIGHT : 0)
   const markers = useMemo(() => [
     ...songMarkers.filter(m => m.kind !== 'tempo' && m.kind !== 'timesig'),
-    ...tempoFlags(tempoEntries),
-  ].sort((a, b) => a.tick - b.tick), [songMarkers, tempoEntries])
+    ...tempoFlags(tempoEntries).filter(f => !(tempoLaneShown && f.kind === 'tempo')),
+  ].sort((a, b) => a.tick - b.tick), [songMarkers, tempoEntries, tempoLaneShown])
+  // Samples, where the engine counts, and ticks, where the playlist lays
+  // the song out, convert through the tempo map: the playhead, a click on
+  // the ruler and the loop are where the song is at that moment, not where
+  // one tempo would put it. Read from a ref so the handlers made earlier
+  // still convert with the map as it is now.
+  const tempoRef = useRef(tempoEntries)
+  tempoRef.current = tempoEntries
+  const tickAtPosition = (samples: number) =>
+    tickAtSample(tempoRef.current, samples, useTransportStore.getState().sampleRate || 48000)
+  const positionAtTick = (tick: number) =>
+    sampleAtTick(tempoRef.current, tick, useTransportStore.getState().sampleRate || 48000)
   const tempoActions = useTempoMapStore.getState
   // Bar layout from the project's tempo map, so a signature change part-way
   // through the song moves the bar lines and the bar numbers with it.
@@ -490,7 +515,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     return () => ro.disconnect()
   }, [contentH])
   const PIXELS_PER_SECOND = PIXELS_PER_SECOND_BASE * horizontalZoom
-  const beatsPerSecond = bpm / 60
+  // The playlist is in bars and beats at a fixed scale: the opening tempo's
+  // beat is as wide as it always was. It used to scale with the tempo the
+  // transport showed, so playing through a tempo change stretched the whole
+  // playlist under the playhead.
+  // Held while a tempo point is dragged, so dragging the opening tempo
+  // does not zoom the playlist under the pointer.
+  const layoutRef = useRef(layoutBpm(tempoEntries, bpm))
+  if (laneScaleHeld === null) layoutRef.current = layoutBpm(tempoEntries, bpm)
+  const layoutTempo = layoutRef.current
+  const beatsPerSecond = layoutTempo / 60
   const pixelsPerBeat = PIXELS_PER_SECOND / beatsPerSecond
   const pixelsPerTick = pixelsPerBeat / PPQ
   const snapTicks = snapToTicks(snapValue, snapEnabled)
@@ -538,7 +572,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       for (const track of audioTracks) {
         for (const clip of track.clips) {
           if (!clip.source_id) continue
-          const tier = Math.min(WHOLE_TIER, clipTier(clip, pixelsPerTick, bpm))
+          const tier = Math.min(WHOLE_TIER, clipTier(clip, pixelsPerTick, layoutTempo))
           const key = `${clip.source_id}:${tier}`
           if (waveformData.has(key) || waveformPending.has(key)) continue
           waveformPending.add(key)
@@ -614,9 +648,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       useTransportStore.getState().setPlaylistMetrics(w, songEnd)
     }
 
-    const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const scrollOffset = followPlayhead
-      ? followScroll(playheadSecs * PIXELS_PER_SECOND, w, followMode)
+      ? followScroll(tickAtPosition(positionSamples) * pixelsPerTick, w, followMode)
       : scrollX
 
     // Background: neutral near-black, the same base as the rest of the
@@ -655,14 +688,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // tempo, so the numbers never lined up with the canvas vertical
     // grid lines. Drawing inside the canvas guarantees alignment by
     // construction.
-    if (RULER_HEIGHT > 0) {
+    if (BAR_RULER_HEIGHT > 0) {
       ctx.fillStyle = '#040406'
-      ctx.fillRect(0, 0, w, RULER_HEIGHT)
+      ctx.fillRect(0, 0, w, BAR_RULER_HEIGHT)
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(0, RULER_HEIGHT - 0.5)
-      ctx.lineTo(w, RULER_HEIGHT - 0.5)
+      ctx.moveTo(0, BAR_RULER_HEIGHT - 0.5)
+      ctx.lineTo(w, BAR_RULER_HEIGHT - 0.5)
       ctx.stroke()
     }
 
@@ -688,7 +721,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // what happened when they were counted from one fixed bar width. Labels
     // are dropped rather than drawn on top of each other when the zoom makes
     // the bars narrow.
-    if (RULER_HEIGHT > 0) {
+    if (BAR_RULER_HEIGHT > 0) {
       const MIN_LABEL_GAP_PX = 34
       ctx.fillStyle = 'rgba(180, 180, 200, 0.7)'
       ctx.font = '600 10px "JetBrains Mono", ui-monospace, Consolas, monospace'
@@ -699,7 +732,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // seconds come from the same tick the bar line sits on, through the
       // project tempo, so the two readings never disagree.
       const label = (line: { tick: number; bar: number }): string =>
-        rulerLabel(line.tick, line.bar, rulerUnits, bpm, timecodeFps, sampleRate || 48000)
+        rulerLabel(line.tick, line.bar, rulerUnits, tempoEntries, timecodeFps, sampleRate || 48000)
       // Time labels are wider than a bar number, so they need more room
       // before they start overlapping.
       const gap = labelGap(rulerUnits, MIN_LABEL_GAP_PX)
@@ -709,7 +742,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         if (x < -20 || x > w) continue
         if (x - lastLabelX < gap) continue
         lastLabelX = x
-        ctx.fillText(label(line), x, RULER_HEIGHT / 2 + 1)
+        ctx.fillText(label(line), x, BAR_RULER_HEIGHT / 2 + 1)
       }
 
       // Section names, over the bar numbers they cover. Drawn as a tinted
@@ -719,14 +752,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         const x2 = Math.floor(section.endTicks * pixelsPerTick - scrollOffset)
         if (x2 < 0 || x1 > w) continue
         ctx.fillStyle = 'rgba(220,38,38,0.16)'
-        ctx.fillRect(x1, 0, Math.max(1, x2 - x1), RULER_HEIGHT)
+        ctx.fillRect(x1, 0, Math.max(1, x2 - x1), BAR_RULER_HEIGHT)
         ctx.strokeStyle = 'rgba(220,38,38,0.5)'
         ctx.beginPath()
         ctx.moveTo(x1 + 0.5, 0)
-        ctx.lineTo(x1 + 0.5, RULER_HEIGHT)
+        ctx.lineTo(x1 + 0.5, BAR_RULER_HEIGHT)
         ctx.stroke()
         ctx.fillStyle = 'rgba(255,220,220,0.9)'
-        ctx.fillText(section.name, x1 + 5, RULER_HEIGHT / 2 + 1)
+        ctx.fillText(section.name, x1 + 5, BAR_RULER_HEIGHT / 2 + 1)
       }
       ctx.fillStyle = 'rgba(180, 180, 200, 0.7)'
     }
@@ -817,12 +850,18 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       }
     }
 
+    // The tempo lane, over anything scrolled up under it.
+    if (tempoLaneShown) {
+      drawTempoLane(ctx, {
+        entries: tempoEntries, top: BAR_RULER_HEIGHT, width: w, pxPerTick: pixelsPerTick, scrollOffset,
+        scale: laneScaleHeld ?? laneScale(tempoEntries), hot: laneHot, lines,
+      })
+    }
+
     // Loop region overlay
     if (looping && loopEnd > loopStart && sampleRate > 0) {
-      const loopStartSecs = loopStart / sampleRate
-      const loopEndSecs = loopEnd / sampleRate
-      const loopX1 = loopStartSecs * PIXELS_PER_SECOND - scrollOffset
-      const loopX2 = loopEndSecs * PIXELS_PER_SECOND - scrollOffset
+      const loopX1 = tickAtPosition(loopStart) * pixelsPerTick - scrollOffset
+      const loopX2 = tickAtPosition(loopEnd) * pixelsPerTick - scrollOffset
 
       // Shaded region across all tracks
       ctx.fillStyle = 'rgba(220, 38, 38, 0.06)'
@@ -830,7 +869,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
       // Ruler highlight
       ctx.fillStyle = 'rgba(220, 38, 38, 0.15)'
-      ctx.fillRect(loopX1, 0, loopX2 - loopX1, RULER_HEIGHT)
+      ctx.fillRect(loopX1, 0, loopX2 - loopX1, BAR_RULER_HEIGHT)
 
       // Loop boundary lines
       ctx.strokeStyle = 'rgba(220, 38, 38, 0.5)'
@@ -849,15 +888,15 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // Start marker — right-pointing triangle
       ctx.beginPath()
       ctx.moveTo(loopX1, 0)
-      ctx.lineTo(loopX1 + 6, RULER_HEIGHT / 2)
-      ctx.lineTo(loopX1, RULER_HEIGHT)
+      ctx.lineTo(loopX1 + 6, BAR_RULER_HEIGHT / 2)
+      ctx.lineTo(loopX1, BAR_RULER_HEIGHT)
       ctx.closePath()
       ctx.fill()
       // End marker — left-pointing triangle
       ctx.beginPath()
       ctx.moveTo(loopX2, 0)
-      ctx.lineTo(loopX2 - 6, RULER_HEIGHT / 2)
-      ctx.lineTo(loopX2, RULER_HEIGHT)
+      ctx.lineTo(loopX2 - 6, BAR_RULER_HEIGHT / 2)
+      ctx.lineTo(loopX2, BAR_RULER_HEIGHT)
       ctx.closePath()
       ctx.fill()
     }
@@ -871,7 +910,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.fillRect(pX1, RULER_HEIGHT, pX2 - pX1, h - RULER_HEIGHT)
 
       ctx.fillStyle = 'rgba(20, 184, 166, 0.14)'
-      ctx.fillRect(pX1, 0, pX2 - pX1, RULER_HEIGHT)
+      ctx.fillRect(pX1, 0, pX2 - pX1, BAR_RULER_HEIGHT)
 
       ctx.strokeStyle = 'rgba(20, 184, 166, 0.7)'
       ctx.lineWidth = 1
@@ -886,8 +925,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       ctx.strokeStyle = '#14B8A6'
       ctx.lineWidth = 1.5
       ctx.beginPath()
-      ctx.moveTo(pX1 + 6, 2); ctx.lineTo(pX1, 2); ctx.lineTo(pX1, RULER_HEIGHT - 2); ctx.lineTo(pX1 + 6, RULER_HEIGHT - 2)
-      ctx.moveTo(pX2 - 6, 2); ctx.lineTo(pX2, 2); ctx.lineTo(pX2, RULER_HEIGHT - 2); ctx.lineTo(pX2 - 6, RULER_HEIGHT - 2)
+      ctx.moveTo(pX1 + 6, 2); ctx.lineTo(pX1, 2); ctx.lineTo(pX1, BAR_RULER_HEIGHT - 2); ctx.lineTo(pX1 + 6, BAR_RULER_HEIGHT - 2)
+      ctx.moveTo(pX2 - 6, 2); ctx.lineTo(pX2, 2); ctx.lineTo(pX2, BAR_RULER_HEIGHT - 2); ctx.lineTo(pX2 - 6, BAR_RULER_HEIGHT - 2)
       ctx.stroke()
     }
 
@@ -896,8 +935,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // no saying. Violet because red is the playhead and the two must
     // never be confused.
     if (peer) {
-      const peerSecs = (peer.tick / PPQ) * (60 / Math.max(1, bpm))
-      const peerX = Math.floor(peerSecs * PIXELS_PER_SECOND - scrollOffset) + 0.5
+      const peerX = Math.floor(peer.tick * pixelsPerTick - scrollOffset) + 0.5
       if (peerX >= 0 && peerX <= w) {
         ctx.strokeStyle = 'rgba(168,85,247,0.85)'
         ctx.lineWidth = 1
@@ -914,9 +952,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         // line stays readable; flipped to the right near the left edge.
         const labelX = peerX - width >= 0 ? peerX - width : peerX
         ctx.fillStyle = 'rgba(168,85,247,0.95)'
-        ctx.fillRect(labelX, 3, width, RULER_HEIGHT - 6)
+        ctx.fillRect(labelX, 3, width, BAR_RULER_HEIGHT - 6)
         ctx.fillStyle = '#fff'
-        ctx.fillText(label, labelX + 5, RULER_HEIGHT - 8)
+        ctx.fillText(label, labelX + 5, BAR_RULER_HEIGHT - 8)
       }
     }
 
@@ -944,7 +982,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         const padX = 4
         const textW = ctx.measureText(text).width
         const pillW = Math.ceil(textW + padX * 2)
-        const pillH = Math.min(RULER_HEIGHT - 3, 14)
+        const pillH = Math.min(BAR_RULER_HEIGHT - 3, 14)
         const pillY = 2
         ctx.fillStyle = m.color
         ctx.beginPath()
@@ -971,9 +1009,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         ctx.beginPath()
         ctx.moveTo(mx, 1)
         ctx.lineTo(mx + 10, 1)
-        ctx.lineTo(mx + 10, RULER_HEIGHT - 10)
-        ctx.lineTo(mx + 4, RULER_HEIGHT - 6)
-        ctx.lineTo(mx, RULER_HEIGHT - 10)
+        ctx.lineTo(mx + 10, BAR_RULER_HEIGHT - 10)
+        ctx.lineTo(mx + 4, BAR_RULER_HEIGHT - 6)
+        ctx.lineTo(mx, BAR_RULER_HEIGHT - 10)
         ctx.closePath()
         ctx.fill()
 
@@ -1002,9 +1040,9 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         // Tiny caret in ruler
         ctx.fillStyle = '#14B8A6'
         ctx.beginPath()
-        ctx.moveTo(ecX - 4, RULER_HEIGHT - 6)
-        ctx.lineTo(ecX + 4, RULER_HEIGHT - 6)
-        ctx.lineTo(ecX, RULER_HEIGHT)
+        ctx.moveTo(ecX - 4, BAR_RULER_HEIGHT - 6)
+        ctx.lineTo(ecX + 4, BAR_RULER_HEIGHT - 6)
+        ctx.lineTo(ecX, BAR_RULER_HEIGHT)
         ctx.closePath()
         ctx.fill()
       }
@@ -1014,7 +1052,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
    drawMainRef.current = draw
    draw()
    drawPlayheadRef.current()
-  }, [tracks, bpm, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, timecodeFps, followMode, sections, meterSegments, peer])
+  }, [tracks, layoutTempo, tempoEntries, tempoLaneShown, laneHot, laneScaleHeld, sampleRate, selectedClipId, selectedClipIds, looping, loopStart, loopEnd, trackHeight, horizontalZoom, snapValue, snapEnabled, editCursorTicks, markers, renamingMarker, clipToGroup, groupColors, punchEnabled, punchInTicks, punchOutTicks, verticalScroll, scrollX, followPlayhead, rulerUnits, timecodeFps, followMode, sections, meterSegments, peer])
 
   // The playhead: one element over the arrangement, moved with a
   // transform straight from the transport store. No React render, no
@@ -1023,8 +1061,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const playheadRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(followPlayhead)
   followRef.current = followPlayhead
-  const viewRef = useRef({ pps: PIXELS_PER_SECOND, scrollX })
-  viewRef.current = { pps: PIXELS_PER_SECOND, scrollX }
+  const viewRef = useRef({ pxPerTick: pixelsPerTick, scrollX, followMode })
+  viewRef.current = { pxPerTick: pixelsPerTick, scrollX, followMode }
   useEffect(() => {
     // The view's width, kept by the ResizeObserver below: reading it on
     // every position forced a layout 30 times a second.
@@ -1033,12 +1071,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const el = playheadRef.current
       const container = containerRef.current
       if (!el || !container) return
-      const { positionSamples, playing, sampleRate: sr } = useTransportStore.getState()
+      const { positionSamples, playing } = useTransportStore.getState()
       const w = width
-      const { pps, scrollX: sx } = viewRef.current
-      const secs = sr > 0 ? positionSamples / sr : 0
-      const offset = followRef.current ? Math.max(0, secs * pps - w * 0.25) : sx
-      const x = Math.floor(secs * pps - offset)
+      const { pxPerTick, scrollX: sx, followMode: mode } = viewRef.current
+      // Where the song is, on the bars it is drawn on: the same offset the
+      // clips are drawn with, or the line and the clips part company.
+      const px = tickAtPosition(positionSamples) * pxPerTick
+      const offset = followRef.current ? followScroll(px, w, mode) : sx
+      const x = Math.floor(px - offset)
       const show = (playing || positionSamples > 0) && x >= -6 && x <= w + 6
       el.style.display = show ? 'block' : 'none'
       if (show) el.style.transform = `translate3d(${x - PLAYHEAD_HALF}px, 0, 0)`
@@ -1149,7 +1189,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // to any other tier we've already fetched so we render something during refetch.
     // Past WHOLE_TIER the buckets come in tiles (see wantTile), with the
     // whole-file waveform standing in for a tile still on its way.
-    const tier = clipTier(clip, pxPerTick, bpm)
+    const tier = clipTier(clip, pxPerTick, layoutTempo)
     const tiled = tier > WHOLE_TIER
     let peaks = waveformData.get(`${clip.source_id}:${Math.min(tier, WHOLE_TIER)}`)
     if (!peaks) {
@@ -1181,20 +1221,31 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // starts in it, so what is drawn is what is heard. It used to be
       // the whole file squeezed into the clip, which only matched an
       // untrimmed clip exactly as long as its file.
-      let originX = x
+      let bucketX = (j: number) => x + j * (w / n)
+      let bucketAt = (px: number) => (px - x) / (w / n)
       let pxPerBucket = w / n
       if (clip.sourceFrames && clip.sourceRate) {
-        const pxPerSec = pxPerTick * (bpm / 60) * PPQ
         const stretch = clip.timeFactor ?? (clip.stretchRatio > 0 ? clip.stretchRatio : 1)
-        pxPerBucket = (clip.sourceFrames / clip.sourceRate / n) * stretch * pxPerSec
         // While its left edge is dragged the audio stays where it plays:
         // the start is cut off, not moved, so draw from where it began.
         const trimming = dragRef.current
-        const anchorX =
+        const anchorTick =
           trimming && trimming.mode === 'resize-left' && trimming.clipId === clip.id && !clip.reversed
-            ? trimming.originalPositionTicks * pxPerTick - scrollOffset
-            : x
-        originX = anchorX - ((clip.sourceStart ?? 0) / clip.sourceRate) * stretch * pxPerSec
+            ? trimming.originalPositionTicks
+            : clip.position_ticks
+        const anchorX = anchorTick * pxPerTick - scrollOffset
+        // The file along the playlist as the engine plays it: over the
+        // beats when the clip follows the tempo, in seconds from its start
+        // when it keeps its speed (`clipTime.ts`).
+        const layout = fileLayout({
+          entries: tempoEntries, anchorTick, lengthTicks: clip.length_ticks, pxPerTick,
+          sourceStartSec: (clip.sourceStart ?? 0) / clip.sourceRate, timeFactor: stretch,
+          followBpm: clip.treatment?.followBpm, warped: (clip.warpMarkers?.length ?? 0) > 0,
+        })
+        const bucketSec = clip.sourceFrames / clip.sourceRate / n
+        bucketX = (j: number) => anchorX + layout.xAt(j * bucketSec)
+        bucketAt = (px: number) => layout.secAt(px - anchorX) / bucketSec
+        pxPerBucket = bucketSec * layout.pxPerSec
       }
       // Reversed, the engine reads the clip's own stretch of the file from
       // its end back to its start, so that stretch is drawn mirrored inside
@@ -1208,8 +1259,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const right = Math.min(x + w, viewWidth)
       const from = backwards ? 2 * x + w - right : left
       const to = backwards ? 2 * x + w - left : right
-      const startJ = Math.max(0, Math.floor((from - originX) / pxPerBucket) - 1)
-      const endJ = Math.min(n, Math.ceil((to - originX) / pxPerBucket) + 1)
+      const startJ = Math.max(0, Math.floor(bucketAt(from)) - 1)
+      const endJ = Math.min(n, Math.ceil(bucketAt(to)) + 1)
 
       if (tiled) {
         for (let t = Math.floor(startJ / TILE); t <= Math.floor((endJ - 1) / TILE); t++) {
@@ -1234,7 +1285,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
           const pk = exactAt(j)
           // A tile still on its way leaves a gap rather than a wrong line.
           if (!pk) { finish(); continue }
-          const centre = originX + (j + 0.5) * pxPerBucket
+          const centre = bucketX(j + 0.5)
           const cx = backwards ? 2 * x + w - centre : centre
           const cy = midY - (pk[0] + pk[1]) * ampScale
           const c = rgbColour(pk[3], pk[4], pk[5])
@@ -1264,7 +1315,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         // its click purple-blue. Whole-pixel columns keep the outline crisp.
         const colW = Math.max(1, Math.ceil(pxPerBucket))
         for (let j = startJ; j < endJ; j++) {
-          const bx = Math.floor(place(originX + j * pxPerBucket))
+          const bx = Math.floor(place(bucketX(j)))
           const pk = peakAt(j)
           if (!pk) continue
           ctx.fillStyle = rgbColour(pk[3], pk[4], pk[5])
@@ -1287,6 +1338,23 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
 
       ctx.globalAlpha = 1.0
       ctx.restore()
+    }
+
+    // A clip that follows the tempo says how far the song stretches it
+    // where it sits, as the mockup's loop across the build does.
+    if (clip.kind === 'audio' && h - headerH > 24 && w > 90) {
+      const label = stretchLabel(tempoEntries, clip.position_ticks, clip.length_ticks, clip.treatment?.followBpm, clip.timeFactor ?? 1)
+      if (label) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(x, y + headerH, w, h - headerH)
+        ctx.clip()
+        ctx.font = '9px Inter, ui-sans-serif, sans-serif'
+        ctx.textBaseline = 'alphabetic'
+        ctx.fillStyle = mixHex(color, '#ffffff', 0.6)
+        ctx.fillText(label, x + 6, y + h - 5)
+        ctx.restore()
+      }
     }
 
     // Fade-in / fade-out overlays (triangular gradients)
@@ -1424,11 +1492,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
   const getScrollOffset = useCallback(() => {
     if (!followPlayhead) return scrollX
     const { positionSamples } = useTransportStore.getState()
-    const playheadSecs = sampleRate > 0 ? positionSamples / sampleRate : 0
     const container = containerRef.current
     const w = container ? container.getBoundingClientRect().width : 800
-    return followScroll(playheadSecs * PIXELS_PER_SECOND, w, followMode)
-  }, [sampleRate, followPlayhead, followMode, scrollX])
+    return followScroll(tickAtPosition(positionSamples) * pixelsPerTick, w, followMode)
+  }, [pixelsPerTick, followPlayhead, followMode, scrollX]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // View > Zoom to selection: the selected clips fill the width, with a
   // little room either side, and the view stops following the playhead so
@@ -1438,21 +1505,21 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const { selectedClipIds: ids } = useTrackStore.getState()
       const picked = audioTracks.flatMap(t => t.clips.filter(c => ids.has(c.id)))
       const container = containerRef.current
-      if (picked.length === 0 || !container || bpm <= 0) return
+      if (picked.length === 0 || !container || layoutTempo <= 0) return
       const start = Math.min(...picked.map(c => c.position_ticks))
       const end = Math.max(...picked.map(c => c.position_ticks + c.length_ticks))
       const w = container.getBoundingClientRect().width
-      const secs = ((end - start) / PPQ) * (60 / bpm)
+      const secs = ((end - start) / PPQ) * (60 / layoutTempo)
       if (secs <= 0 || w <= 0) return
       const store = useTransportStore.getState()
       store.setHorizontalZoom((w * 0.9) / (secs * PIXELS_PER_SECOND_BASE))
       const pps = PIXELS_PER_SECOND_BASE * useTransportStore.getState().horizontalZoom
       setFollowPlayhead(false)
-      setScrollX(Math.max(0, (start / PPQ) * (60 / bpm) * pps - w * 0.05))
+      setScrollX(Math.max(0, (start / PPQ) * (60 / layoutTempo) * pps - w * 0.05))
     }
     window.addEventListener('daw:zoomToSelection', zoomToSelection)
     return () => window.removeEventListener('daw:zoomToSelection', zoomToSelection)
-  }, [audioTracks, bpm, setFollowPlayhead])
+  }, [audioTracks, layoutTempo, setFollowPlayhead])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     // Middle button held: slide the playlist left and right, as in FL.
@@ -1498,8 +1565,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     // Where you are working, for the other person in the room. Does
     // nothing when there is no room.
     {
-      const secs = (mouseX + scrollOffset) / PIXELS_PER_SECOND
-      const tick = secs * (Math.max(1, bpm) / 60) * PPQ
+      const tick = (mouseX + scrollOffset) / pixelsPerTick
       const row = mouseY > RULER_HEIGHT && trackHeight > 0
         ? Math.floor((mouseY - RULER_HEIGHT + verticalScroll) / trackHeight)
         : null
@@ -1530,13 +1596,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         return mouseX >= mx - 1 && mouseX <= mx + 11 && mouseY <= RULER_HEIGHT - 4
       })
       if (markerHit) {
-        const secs = markerHit.tick / PPQ / (bpm / 60)
-        setPosition(Math.round(secs * (sampleRate || 48000)))
+        setPosition(positionAtTick(markerHit.tick))
         return
       }
-      const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
-      const samples = Math.round(seconds * (sampleRate || 48000))
-      setPosition(samples)
+      setPosition(positionAtTick(Math.max(0, (mouseX + scrollOffset) / pixelsPerTick)))
       dragRef.current = {
         mode: 'scrub', clipId: '', trackId: '',
         startMouseX: mouseX, startMouseY: mouseY, currentMouseX: mouseX, currentMouseY: mouseY,
@@ -1864,17 +1927,14 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       const anchor = drag.originalPositionTicks
       const a = Math.min(anchor, snappedLive)
       const b = Math.max(anchor, snappedLive)
-      // Convert tick → samples using the same path the canvas uses to
-      // draw the loop region, so the visual preview matches whatever the
-      // engine will eventually loop.
-      const aSec = (a / PPQ) * (60 / Math.max(1, bpm))
-      const bSec = (b / PPQ) * (60 / Math.max(1, bpm))
-      const sr = sampleRate || 48000
+      // Convert tick → samples through the tempo map, the same path the
+      // canvas uses to draw the loop region, so the visual preview matches
+      // whatever the engine will eventually loop.
       // Live preview only — don't IPC on every mousemove. The commit
       // happens once on mouseup via transport.setLoop.
       useTransportStore.setState({
-        loopStart: Math.round(aSec * sr),
-        loopEnd: Math.round(bSec * sr),
+        loopStart: positionAtTick(a),
+        loopEnd: positionAtTick(b),
       })
       forceRender(n => n + 1)
       return
@@ -1884,8 +1944,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // offset — otherwise playback advancing the playhead would make the
       // mapped tick run away forward under a near-stationary cursor.
       const scrollOffset = drag.scrubScrollOffset ?? getScrollOffset()
-      const seconds = Math.max(0, (mouseX + scrollOffset) / PIXELS_PER_SECOND)
-      setPosition(Math.round(seconds * (sampleRate || 48000)))
+      setPosition(positionAtTick(Math.max(0, (mouseX + scrollOffset) / pixelsPerTick)))
       return
     }
 
@@ -1910,8 +1969,10 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
       // moves forward by the dragged distance, in samples as the offset into
       // a sample is. Only the part not sent yet goes: sending the whole
       // distance on every move added it again each time.
-      const seconds = dTicks / PPQ * (60 / Math.max(1, bpm))
-      const total = Math.round(seconds * (sampleRate || 48000))
+      // The time those ticks take where the clip is, through the tempo map,
+      // not at the tempo the transport shows somewhere else in the song.
+      const from = drag.originalPositionTicks
+      const total = positionAtTick(Math.max(0, from + dTicks)) - positionAtTick(from)
       const step = total - (drag.slipSamples ?? 0)
       if (step !== 0) {
         drag.slipSamples = total
@@ -2496,23 +2557,16 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
-      const sr = sampleRate || 48000
       const { positionSamples } = useTransportStore.getState()
-      const playheadTicks = Math.round((positionSamples / sr) * (bpm / 60) * PPQ)
+      const playheadTicks = Math.round(tickAtPosition(positionSamples))
       if (e.altKey && e.code === 'ArrowRight') {
         e.preventDefault()
         const next = jumpToNext(playheadTicks)
-        if (next) {
-          const secs = next.tick / PPQ / (bpm / 60)
-          setPosition(Math.round(secs * sr))
-        }
+        if (next) setPosition(positionAtTick(next.tick))
       } else if (e.altKey && e.code === 'ArrowLeft') {
         e.preventDefault()
         const prev = jumpToPrev(playheadTicks)
-        if (prev) {
-          const secs = prev.tick / PPQ / (bpm / 60)
-          setPosition(Math.round(secs * sr))
-        }
+        if (prev) setPosition(positionAtTick(prev.tick))
       } else if (e.shiftKey && e.code === 'KeyM' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         addMarker(playheadTicks)
@@ -2520,7 +2574,7 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [sampleRate, bpm, jumpToNext, jumpToPrev, addMarker, setPosition])
+  }, [jumpToNext, jumpToPrev, addMarker, setPosition]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drag-and-drop
   const [dropHighlight, setDropHighlight] = useState(false)
@@ -2773,6 +2827,17 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
         onContextMenu={handleContextMenu}
         onWheel={handleWheel}
       />
+      {tempoLaneShown && (
+        <TempoLane
+          top={BAR_RULER_HEIGHT}
+          pixelsPerTick={pixelsPerTick}
+          getScrollOffset={getScrollOffset}
+          snapTicks={snapTicks}
+          segments={meterSegments}
+          onWheel={handleWheel}
+          onSetHint={onSetHint}
+        />
+      )}
       <div ref={playheadRef} aria-hidden style={PLAYHEAD_STYLE}>
         <div style={PLAYHEAD_GLOW} />
         <div style={PLAYHEAD_LINE} />
@@ -2820,9 +2885,8 @@ export function Arrangement({ onSetHint }: ArrangementProps = {}) {
             setContextMenu(null)
           }} />
           <MenuItem label={t('Split at playhead (S)')} onClick={async () => {
-            const sr = sampleRate || 48000
             const { positionSamples } = useTransportStore.getState()
-            const atTicks = Math.round((positionSamples / sr) * (bpm / 60) * 960)
+            const atTicks = Math.round(tickAtPosition(positionSamples))
             try { await splitClip(contextMenu.trackId, contextMenu.clipId, atTicks) } catch {}
             setContextMenu(null)
           }} />
