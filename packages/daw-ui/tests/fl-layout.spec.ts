@@ -92,10 +92,9 @@ test.describe('Channel Rack — FL Studio layout', () => {
 
   test('has top toolbar with correct elements', async ({ page }) => {
     const rack = page.getByTestId('panel-channel-rack')
-    // Group filter buttons
-    await expect(rack.getByRole('button', { name: 'All', exact: true })).toBeVisible()
-    await expect(rack.getByRole('button', { name: 'Audio' })).toBeVisible()
-    await expect(rack.getByRole('button', { name: 'MIDI' })).toBeVisible()
+    // Group filter: All, then the song's own rack groups (FL step 4)
+    await expect(rack.getByTestId('rack-group-filter')).toBeVisible()
+    await expect(rack.getByTestId('rack-group-all')).toBeVisible()
 
     // Swing label
     await expect(page.getByTestId('rack-swing')).toBeVisible()
