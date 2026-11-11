@@ -369,6 +369,20 @@ fn no_built_in_plug_in_allocates_on_the_audio_thread() {
                     color: None,
                     row: None,
                 });
+                // The sampler plays the tone as its sample: with nothing
+                // loaded it has nothing to do, and the copy of its sample it
+                // made every block was never seen here.
+                if id == hardwave_native_plugins::sampler::NativeSampler::ID {
+                    let tone = engine.audio_pool.get("rt-one").unwrap().channels.clone();
+                    let state = hardwave_native_plugins::sampler::encode_sample_state_with(
+                        SR,
+                        60,
+                        tone,
+                        "rt-one.wav",
+                        Vec::new(),
+                    );
+                    project.set_plugin_state("slot-one", "native-sampler", state);
+                }
             } else {
                 let t = project.add_audio_track("One".into());
                 let track = project.track_mut(&t).unwrap();

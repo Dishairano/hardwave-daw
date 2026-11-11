@@ -3339,6 +3339,109 @@ impl DawEngine {
         Ok(())
     }
 
+    /// [`Self::play_live_in_device_blocks`] with a stopwatch on it: how long
+    /// the callback took for each device block, and how long each node of
+    /// the graph took over the whole run. For finding what playback spends
+    /// its time on. Plug-ins are made with `instantiate`, as an export
+    /// makes them. `on_block` gets each block, outside the timing.
+    #[doc(hidden)]
+    pub fn profile_live_blocks(
+        &self,
+        sample_rate: u32,
+        total_samples: u64,
+        device_frames: usize,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+        mut on_block: impl FnMut(&[f32]),
+    ) -> LiveProfile {
+        let buffer_size = (self.audio_device.buffer_size as usize).max(1);
+        let device_frames = device_frames.max(1);
+        let mut callback = self.offline_callback(
+            sample_rate,
+            buffer_size,
+            0,
+            None,
+            instantiate,
+            |_| {},
+            Arc::new(Mutex::new(None)),
+        );
+        // As on the audio thread, which the sound card's callback sets up
+        // this way.
+        let _flushed = hardwave_audio_io::denormals::flush_denormals_while();
+        let mut profile = LiveProfile::default();
+        let mut buf = vec![0.0_f32; device_frames * 2];
+        let mut left = total_samples;
+        let mut timed_graph = None;
+        while left > 0 {
+            let frames = left.min(device_frames as u64) as usize;
+            buf.fill(0.0);
+            // A graph swapped in starts its own count.
+            let graph_id = callback.graph_seq;
+            if timed_graph != Some(graph_id) {
+                if timed_graph.is_some() {
+                    profile.swaps += 1;
+                }
+                callback.graph.time_nodes(true);
+                timed_graph = Some(graph_id);
+            }
+            let before: Vec<[u64; 2]> = callback
+                .graph
+                .node_nanos()
+                .map(|n| n.to_vec())
+                .unwrap_or_default();
+            let started = std::time::Instant::now();
+            callback.process(&mut buf, frames, 2);
+            let took = started.elapsed();
+            // What each kind of node took in this block.
+            let mut kinds = [0u64; LIVE_PROFILE_KINDS.len()];
+            let after: Vec<[u64; 2]> = callback
+                .graph
+                .node_nanos()
+                .map(|n| n.to_vec())
+                .unwrap_or_default();
+            for (id, (a, b)) in after.iter().zip(&before).enumerate() {
+                let gather = a[0] - b[0];
+                let ran = a[1] - b[1];
+                if gather + ran == 0 {
+                    continue;
+                }
+                let (name, kind) = callback
+                    .graph
+                    .node_label(id)
+                    .unwrap_or_else(|| (String::new(), "other"));
+                let k = LIVE_PROFILE_KINDS
+                    .iter()
+                    .position(|&n| n == kind)
+                    .unwrap_or(LIVE_PROFILE_KINDS.len() - 1);
+                kinds[k] += ran;
+                kinds[LIVE_PROFILE_KINDS.len() - 2] += gather;
+                let entry = match profile
+                    .nodes
+                    .iter_mut()
+                    .position(|n| n.name == name && n.kind == kind)
+                {
+                    Some(i) => &mut profile.nodes[i],
+                    None => {
+                        profile.nodes.push(NodeCost {
+                            name,
+                            kind,
+                            ..NodeCost::default()
+                        });
+                        profile.nodes.last_mut().unwrap()
+                    }
+                };
+                entry.gather_ns += gather;
+                entry.run_ns += ran;
+                entry.blocks += 1;
+                entry.max_ns = entry.max_ns.max(gather + ran);
+            }
+            profile.blocks.push(took);
+            profile.kinds.push(kinds);
+            on_block(&buf[..frames * 2]);
+            left -= frames as u64;
+        }
+        profile
+    }
+
     /// What one graph costs, `runs` times over, with the song playing from
     /// half a minute in: `build` is the work done off the audio thread,
     /// `swap` what the audio thread does to put the graph in. The plug-ins
@@ -4091,6 +4194,43 @@ struct EngineCallback {
 }
 
 /// What one graph cost (see `DawEngine::graph_build_times`).
+/// The kinds of work [`LiveProfile::kinds`] counts per block, in order:
+/// audio tracks and buses, instrument tracks, the master, gathering the
+/// inputs of every node (sums, sends and compensation lines), and nodes of
+/// any other kind.
+#[doc(hidden)]
+pub const LIVE_PROFILE_KINDS: [&str; 5] = ["track", "instrument", "master", "gather", "other"];
+
+/// What [`DawEngine::profile_live_blocks`] measured.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct LiveProfile {
+    /// The whole callback, per device block.
+    pub blocks: Vec<std::time::Duration>,
+    /// Per block, nanoseconds per kind of work ([`LIVE_PROFILE_KINDS`]).
+    pub kinds: Vec<[u64; 5]>,
+    /// Per node, over the run.
+    pub nodes: Vec<NodeCost>,
+    /// How many graphs were swapped in during the run.
+    pub swaps: usize,
+}
+
+/// One node's time over a [`LiveProfile`] run.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone)]
+pub struct NodeCost {
+    pub name: String,
+    pub kind: &'static str,
+    /// Gathering its inputs.
+    pub gather_ns: u64,
+    /// Running it.
+    pub run_ns: u64,
+    /// The blocks it ran in.
+    pub blocks: u64,
+    /// Its slowest block, both together.
+    pub max_ns: u64,
+}
+
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug)]
 pub struct GraphBuildTime {

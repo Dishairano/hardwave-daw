@@ -191,6 +191,31 @@ impl Biquad {
 
         (yl, yr)
     }
+
+    /// [`Self::process_stereo`] over a whole block, in place. The same
+    /// arithmetic in the same order, so the same samples; one channel at a
+    /// time with the filter's memory kept in registers, which is several
+    /// times faster than going through the struct for every sample.
+    pub fn process_block(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let (b0, b1, b2, a1, a2) = (self.b0, self.b1, self.b2, self.a1, self.a2);
+        let run = |buf: &mut [f32], mem: [f32; 4]| -> [f32; 4] {
+            let [mut x1, mut x2, mut y1, mut y2] = mem;
+            for s in buf.iter_mut() {
+                let x = *s;
+                let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+                x2 = x1;
+                x1 = x;
+                y2 = y1;
+                y1 = y;
+                *s = y;
+            }
+            [x1, x2, y1, y2]
+        };
+        [self.x1_l, self.x2_l, self.y1_l, self.y2_l] =
+            run(left, [self.x1_l, self.x2_l, self.y1_l, self.y2_l]);
+        [self.x1_r, self.x2_r, self.y1_r, self.y2_r] =
+            run(right, [self.x1_r, self.x2_r, self.y1_r, self.y2_r]);
+    }
 }
 
 #[cfg(test)]
@@ -296,5 +321,32 @@ mod tests {
         // was cleared.
         let y = bq.process_mono(0.0);
         assert!(y.abs() < 1e-6, "expected clean state after reset, got {y}");
+    }
+
+    /// A block at a time gives exactly the samples a sample at a time
+    /// does, and leaves the filter remembering the same, so blocks follow
+    /// on from each other.
+    #[test]
+    fn a_block_at_a_time_is_the_same_as_a_sample_at_a_time() {
+        let mut one = Biquad::default();
+        one.set(BiquadKind::Peak, 48_000.0, 1_000.0, 2.0, 9.0);
+        let mut block = one;
+        let signal = |n: usize, seed: f32| -> Vec<f32> {
+            (0..n)
+                .map(|i| {
+                    ((i as f32 * 0.37 + seed).sin() * 0.8) + if i % 97 == 0 { 0.5 } else { 0.0 }
+                })
+                .collect()
+        };
+        for round in 0..3 {
+            let (l, r) = (signal(512, round as f32), signal(512, 10.0 + round as f32));
+            let (mut bl, mut br) = (l.clone(), r.clone());
+            block.process_block(&mut bl, &mut br);
+            for i in 0..512 {
+                let (yl, yr) = one.process_stereo(l[i], r[i]);
+                assert_eq!(yl.to_bits(), bl[i].to_bits(), "left {i} of block {round}");
+                assert_eq!(yr.to_bits(), br[i].to_bits(), "right {i} of block {round}");
+            }
+        }
     }
 }
