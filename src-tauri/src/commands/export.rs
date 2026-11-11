@@ -3217,7 +3217,7 @@ mod stem_and_freeze_tests {
     /// An export bakes its stretched clips with the engine let go, so the
     /// window's commands (the autosave, the polls, the transport) get it
     /// at once; the export window hears how far the bakes are; and
-    /// stopping the export stops it between bakes, with no file. The first
+    /// stopping the export stops it before the next bake, with no file. The first
     /// export after an FL import held the engine through every bake, and
     /// the window froze for a minute and a half.
     #[test]
@@ -3265,19 +3265,18 @@ mod stem_and_freeze_tests {
                     "the engine is free while the export bakes"
                 );
                 seen.push((done, total));
-                if done == 1 {
-                    cancel.store(true, Ordering::Relaxed);
-                }
+                // Stopped as soon as the bakes start.
+                cancel.store(true, Ordering::Relaxed);
             },
             super::RenderAs::Mix,
             |_| {},
         )
         .expect("no error");
         assert!(loudness.is_none(), "stopped");
-        assert_eq!(seen, vec![(0, 2), (1, 2)], "stopped after the first bake");
+        assert_eq!(seen, vec![(0, 2)], "stopped before a bake was made");
         assert!(!out.exists(), "no file");
 
-        // Started again, it makes the bake that is left and the file.
+        // Started again, it makes the bakes and the file.
         cancel.store(false, Ordering::Relaxed);
         let mut seen = Vec::new();
         let loudness = super::render_unlocked_measured(
@@ -3294,7 +3293,7 @@ mod stem_and_freeze_tests {
         )
         .expect("no error");
         assert!(loudness.is_some());
-        assert_eq!(seen, vec![(0, 1), (1, 1)]);
+        assert_eq!(seen, vec![(0, 2), (1, 2), (2, 2)]);
         assert!(out.exists());
     }
 

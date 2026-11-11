@@ -3,7 +3,7 @@
 //! from the engine in a moment and made without it.
 
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// The bakes a render needs that the pool does not hold yet, listed by
 /// [`DawEngine::offline_bakes`] and made by [`Self::run`], which needs
@@ -63,17 +63,30 @@ impl OfflineBakes {
         self.len() == 0
     }
 
-    /// Make the bakes, one after another, telling `progress(done, total)`
-    /// after each. A bake that playback's own bake has made in the meantime
-    /// is skipped.
-    /// Stops between bakes once `cancel` is set and says false; what was
-    /// made by then stays in the pool for the next try.
-    pub fn run(&self, cancel: &AtomicBool, mut progress: impl FnMut(usize, usize)) -> bool {
+    /// Make the bakes, telling `progress(done, total)` after each. A bake
+    /// that playback's own bake has made in the meantime is skipped. Stops
+    /// between bakes once `cancel` is set and says false; what was made by
+    /// then stays in the pool for the next try.
+    ///
+    /// The stretches and warps do not depend on each other, so they are
+    /// made side by side on up to four cores, one core left for playback
+    /// and the window. Each comes out the same whichever core makes it.
+    pub fn run(&self, cancel: &AtomicBool, progress: impl FnMut(usize, usize)) -> bool {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        self.run_on(cores.saturating_sub(1).clamp(1, 4), cancel, progress)
+    }
+
+    fn run_on(
+        &self,
+        workers: usize,
+        cancel: &AtomicBool,
+        mut progress: impl FnMut(usize, usize),
+    ) -> bool {
         let total = self.len();
         let mut done = 0;
         progress(done, total);
-        // Tuned takes first: a stretch or a warp is made from its clip's
-        // tuned take.
+        // Tuned takes first, in turn: a stretch or a warp is made from its
+        // clip's tuned take.
         for bake in &self.tunes {
             if cancel.load(Ordering::Relaxed) {
                 return false;
@@ -82,23 +95,51 @@ impl OfflineBakes {
             done += 1;
             progress(done, total);
         }
-        for (source_id, stretch, semitones) in &self.stretches {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
-            }
-            DawEngine::bake_stretch_variant(&self.pool, source_id, *stretch, *semitones);
-            done += 1;
-            progress(done, total);
+        enum Job<'a> {
+            Stretch(&'a str, f64, f64),
+            Warp(&'a WarpBake),
         }
-        for bake in &self.warps {
-            if cancel.load(Ordering::Relaxed) {
-                return false;
+        let jobs: Vec<Job> = self
+            .stretches
+            .iter()
+            .map(|(source_id, stretch, semitones)| Job::Stretch(source_id, *stretch, *semitones))
+            .chain(self.warps.iter().map(Job::Warp))
+            .collect();
+        let next = AtomicUsize::new(0);
+        let (finished_tx, finished) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            for _ in 0..workers.min(jobs.len()) {
+                let finished_tx = finished_tx.clone();
+                let (jobs, next) = (&jobs, &next);
+                scope.spawn(move || {
+                    while !cancel.load(Ordering::Relaxed) {
+                        let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                            break;
+                        };
+                        match *job {
+                            Job::Stretch(source_id, stretch, semitones) => {
+                                DawEngine::bake_stretch_variant(
+                                    &self.pool, source_id, stretch, semitones,
+                                );
+                            }
+                            Job::Warp(bake) => {
+                                DawEngine::bake_warp_variant(&self.pool, bake, self.sample_rate);
+                            }
+                        }
+                        if finished_tx.send(()).is_err() {
+                            break;
+                        }
+                    }
+                });
             }
-            DawEngine::bake_warp_variant(&self.pool, bake, self.sample_rate);
-            done += 1;
-            progress(done, total);
-        }
-        true
+            // Progress is told here, on the caller's thread.
+            drop(finished_tx);
+            for () in finished {
+                done += 1;
+                progress(done, total);
+            }
+        });
+        done == total
     }
 }
 
@@ -228,20 +269,50 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_bake_stops_between_bakes_and_says_so() {
+    fn a_stopped_bake_makes_no_more_and_says_so() {
         let engine = two_stretched_clips();
-        let bakes = engine.offline_bakes(SR, None);
         let stop = AtomicBool::new(false);
         let mut seen = Vec::new();
-        let finished = bakes.run(&stop, |done, total| {
-            seen.push((done, total));
-            if done == 1 {
+        let finished = engine
+            .offline_bakes(SR, None)
+            .run_on(2, &stop, |done, total| {
+                seen.push((done, total));
                 stop.store(true, Ordering::Relaxed);
-            }
-        });
+            });
         assert!(!finished);
-        assert_eq!(seen, vec![(0, 2), (1, 2)]);
-        assert!(baked(&engine, 1.5), "what was made stays made");
-        assert!(!baked(&engine, 2.0), "the second was never started");
+        assert_eq!(seen, vec![(0, 2)]);
+        assert!(
+            !baked(&engine, 1.5) && !baked(&engine, 2.0),
+            "none was started"
+        );
+        // Started again, it makes them.
+        let again = engine.offline_bakes(SR, None);
+        assert!(again.run_on(2, &AtomicBool::new(false), |_, _| {}));
+        assert!(baked(&engine, 1.5) && baked(&engine, 2.0));
+    }
+
+    /// Made side by side, the bakes are the very same as one by one.
+    #[test]
+    fn bakes_made_side_by_side_are_the_same_as_one_by_one() {
+        let one_by_one = two_stretched_clips();
+        assert!(one_by_one
+            .offline_bakes(SR, None)
+            .run_on(1, &AtomicBool::new(false), |_, _| {}));
+        let side_by_side = two_stretched_clips();
+        let mut told = Vec::new();
+        assert!(side_by_side.offline_bakes(SR, None).run_on(
+            3,
+            &AtomicBool::new(false),
+            |done, total| told.push((done, total))
+        ));
+        assert_eq!(told, vec![(0, 2), (1, 2), (2, 2)]);
+        for stretch in [1.5, 2.0] {
+            let key = stretch_cache_key("chord", stretch, 0.0);
+            let (a, b) = (
+                one_by_one.audio_pool.get(&key).expect("baked"),
+                side_by_side.audio_pool.get(&key).expect("baked"),
+            );
+            assert!(a.channels == b.channels, "stretch {stretch}");
+        }
     }
 }
