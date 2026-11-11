@@ -11,40 +11,20 @@ use atomic_float::AtomicF32;
 use crate::audio_pool::{AudioBuffer, AudioPool};
 use crate::graph::{AudioNode, ProcessContext};
 
-/// Publishes how long a block took into the track's meter when it drops,
-/// so every way out of `process` is counted, not just the last line.
-pub(crate) struct CpuTimer {
-    // An Arc rather than a borrow: the node mutates itself while this is
-    // alive, which a borrow of one of its fields would forbid. Cloning an
-    // Arc is one atomic increment, not an allocation.
-    meter: Arc<TrackMeterState>,
-    started: std::time::Instant,
-}
-
-impl CpuTimer {
-    pub(crate) fn new(meter: &Arc<TrackMeterState>) -> Self {
-        Self {
-            meter: Arc::clone(meter),
-            started: std::time::Instant::now(),
-        }
-    }
-}
-
-impl Drop for CpuTimer {
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let took = self.started.elapsed().as_nanos() as u64;
-        // Averaged over about eight blocks, so one slow block (a plug-in
-        // loading, the OS scheduling something else) does not read as a
-        // track eating the CPU.
-        let previous = self.meter.cpu_ns.load(Relaxed);
-        let smoothed = if previous == 0 {
-            took
-        } else {
-            (previous * 7 + took) / 8
-        };
-        self.meter.cpu_ns.store(smoothed, Relaxed);
-    }
+/// Fold one timed block into a track's load read-out. The graph times a
+/// node on one block in [`crate::graph::CPU_STRIDE`], so this averages over
+/// about four of those, a second or so, and one slow block (a plug-in
+/// loading, the OS scheduling something else) does not read as a track
+/// eating the CPU.
+pub(crate) fn report_cpu(meter: &TrackMeterState, took: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let previous = meter.cpu_ns.load(Relaxed);
+    let smoothed = if previous == 0 {
+        took
+    } else {
+        (previous * 3 + took) / 4
+    };
+    meter.cpu_ns.store(smoothed, Relaxed);
 }
 
 /// Post-fader meter state shared between the audio thread and the UI thread.
@@ -1128,6 +1108,10 @@ impl AudioNode for TrackNode {
         Some(&self.track_id)
     }
 
+    fn report_cpu(&self, nanos: u64) {
+        report_cpu(&self.meter, nanos);
+    }
+
     /// Report the insert chain's latency so the graph can compensate it.
     fn latency_samples(&self) -> u32 {
         self.chain.latency_samples()
@@ -1277,11 +1261,6 @@ impl AudioNode for TrackNode {
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         ctx: &ProcessContext,
     ) {
-        // How long this track takes, for the per-track load read-out. The
-        // clock read costs a few nanoseconds and needs no lock, the same
-        // reason the whole-block CPU meter can do it on this thread. The
-        // guard publishes on every exit, including the early ones.
-        let _cpu = CpuTimer::new(&self.meter);
         // The mixer's live fader, pan and width. Automation, where a lane
         // or clip drives them, still overrides below.
         if let Some((volume, pan, width)) = self.meter.live_mix() {

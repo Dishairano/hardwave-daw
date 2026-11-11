@@ -1112,6 +1112,10 @@ impl AudioNode for MidiTrackNode {
         self.mod_pan = pan;
     }
 
+    fn report_cpu(&self, nanos: u64) {
+        crate::track_node::report_cpu(&self.meter, nanos);
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -1133,8 +1137,6 @@ impl AudioNode for MidiTrackNode {
         _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
         ctx: &ProcessContext,
     ) {
-        // Per-track load, published on every exit from this block.
-        let _cpu = crate::track_node::CpuTimer::new(&self.meter);
         // The mixer's live fader, pan and width, as for audio tracks.
         if let Some((volume, pan, width)) = self.meter.live_mix() {
             self.fader_volume = volume;

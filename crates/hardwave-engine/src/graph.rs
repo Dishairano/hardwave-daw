@@ -137,6 +137,13 @@ pub trait AudioNode: Send {
         None
     }
 
+    /// How long this node's work took in one block, in nanoseconds, for
+    /// its load read-out in the mixer. The graph times each node on one
+    /// block in [`CPU_STRIDE`], not on every block. Default: not shown.
+    fn report_cpu(&self, nanos: u64) {
+        let _ = nanos;
+    }
+
     /// How many plug-ins the node's chain holds.
     fn chain_len(&self) -> usize {
         0
@@ -164,6 +171,13 @@ pub trait AudioNode: Send {
         let _ = (slot_id, active);
     }
 }
+
+/// Each node's work is timed on one block in this many, for the mixer's
+/// per-track load read-out. Reading the clock is not free: on a Windows
+/// virtual machine one read took 14 microseconds, and two per track on
+/// every block came to a fifth of a 512-frame block on a 127-track song.
+/// This way a block reads the clock for a handful of nodes at most.
+pub const CPU_STRIDE: usize = 32;
 
 /// Number of output channels every node gets. Tracks use 0/1 for post-fader
 /// stereo and 2/3 for the pre-fader tap that feeds pre-fader sends; other
@@ -325,6 +339,9 @@ pub struct AudioGraph {
     /// it, added up over the blocks since timing was switched on. `None`
     /// (the default) times nothing. For measurements only.
     node_nanos: Option<Vec<[u64; 2]>>,
+    /// Counts the blocks, to pick the nodes timed for their load read-out
+    /// this block (see [`CPU_STRIDE`]).
+    cpu_turn: usize,
 }
 
 impl AudioGraph {
@@ -346,6 +363,7 @@ impl AudioGraph {
             delay_keys: Vec::new(),
             planned_latency: 0,
             node_nanos: None,
+            cpu_turn: 0,
         }
     }
 
@@ -728,8 +746,10 @@ impl AudioGraph {
         self.ensure_order();
         // More than one core, when a pool is attached and the graph is
         // wide enough to be worth it.
+        let cpu_turn = self.cpu_turn % CPU_STRIDE;
+        self.cpu_turn = self.cpu_turn.wrapping_add(1);
         if self.pool.is_some() && !self.levels.is_empty() {
-            self.process_in_parallel(ctx, midi_in);
+            self.process_in_parallel(ctx, midi_in, cpu_turn);
             return;
         }
         // Iterate by index — `processing_order` mutates inside the loop
@@ -828,6 +848,7 @@ impl AudioGraph {
             } else {
                 &midi_empty
             };
+            let clocked = (order_idx % CPU_STRIDE == cpu_turn).then(std::time::Instant::now);
             self.nodes[node_id].process(
                 &input_refs,
                 &mut scratch.outputs,
@@ -835,6 +856,9 @@ impl AudioGraph {
                 &mut scratch.midi_out,
                 ctx,
             );
+            if let Some(started) = clocked {
+                self.nodes[node_id].report_cpu(started.elapsed().as_nanos() as u64);
+            }
 
             // Swap the freshly-written output with the persistent buffer.
             // Zero copy — the persistent buffer becomes the next-block
@@ -858,7 +882,12 @@ impl AudioGraph {
     /// output buffers of nodes in earlier levels, which are finished
     /// before this level starts. That is what makes handing out
     /// pointers to separate nodes sound.
-    fn process_in_parallel(&mut self, ctx: &ProcessContext, midi_in: &[hardwave_midi::MidiEvent]) {
+    fn process_in_parallel(
+        &mut self,
+        ctx: &ProcessContext,
+        midi_in: &[hardwave_midi::MidiEvent],
+        cpu_turn: usize,
+    ) {
         let Some(pool) = self.pool.clone() else {
             return;
         };
@@ -876,6 +905,7 @@ impl AudioGraph {
             buffer_size: self.buffer_size,
             midi_in,
             ctx,
+            cpu_turn,
         };
         let run = |node_id: usize| {
             // SAFETY: every node id in a level is distinct, and a node
@@ -986,6 +1016,8 @@ struct NodeWork<'a> {
     buffer_size: usize,
     midi_in: &'a [hardwave_midi::MidiEvent],
     ctx: &'a ProcessContext,
+    /// The nodes whose id falls on this in [`CPU_STRIDE`] are timed.
+    cpu_turn: usize,
 }
 
 // SAFETY: the nodes handed to different threads are distinct, and the
@@ -1081,6 +1113,7 @@ impl NodeWork<'_> {
         } else {
             &midi_empty
         };
+        let clocked = (node_id % CPU_STRIDE == self.cpu_turn).then(std::time::Instant::now);
         node.process(
             &input_refs,
             &mut scratch.outputs,
@@ -1088,6 +1121,9 @@ impl NodeWork<'_> {
             &mut scratch.midi_out,
             self.ctx,
         );
+        if let Some(started) = clocked {
+            node.report_cpu(started.elapsed().as_nanos() as u64);
+        }
 
         let buffers = unsafe { &mut *self.buffers.add(node_id) };
         std::mem::swap(&mut scratch.outputs, buffers);
@@ -1238,6 +1274,63 @@ mod tests {
         g.process(&ctx(), &[]);
         assert_eq!(quiet_runs.load(Relaxed), 3);
         assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+    }
+
+    /// A node that counts the times it was timed for its load read-out.
+    struct Clocked {
+        reports: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AudioNode for Clocked {
+        fn name(&self) -> &str {
+            "clocked"
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            _outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+        }
+        fn report_cpu(&self, _nanos: u64) {
+            self.reports
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Each node is timed for its load read-out on one block in
+    /// `CPU_STRIDE`, and a block times a few nodes, not all of them: every
+    /// node read the clock twice on every block, which on a Windows virtual
+    /// machine (14 microseconds a read) took a fifth of the block on a big
+    /// song.
+    #[test]
+    fn a_block_times_a_few_nodes_and_every_node_gets_its_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        use std::sync::Arc;
+        let mut g = AudioGraph::new(16);
+        let counts: Vec<Arc<AtomicUsize>> =
+            (0..80).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+        for c in &counts {
+            g.add_node(Box::new(Clocked { reports: c.clone() }));
+        }
+        g.finalize_pdc(true);
+        let total =
+            |counts: &[Arc<AtomicUsize>]| counts.iter().map(|c| c.load(Relaxed)).sum::<usize>();
+        let mut most_in_a_block = 0;
+        for _ in 0..3 * CPU_STRIDE {
+            let before = total(&counts);
+            g.process(&ctx(), &[]);
+            most_in_a_block = most_in_a_block.max(total(&counts) - before);
+        }
+        assert!(
+            most_in_a_block <= 80usize.div_ceil(CPU_STRIDE),
+            "{most_in_a_block} nodes timed in one block"
+        );
+        for c in &counts {
+            assert_eq!(c.load(Relaxed), 3, "each node timed once a round");
+        }
     }
 
     /// A track's node for the rebuild test: a steady level, a latency, and
