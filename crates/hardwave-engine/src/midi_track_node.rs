@@ -2061,6 +2061,10 @@ impl AudioNode for MidiTrackNode {
         self.rms_smooth = 0.0;
     }
 
+    fn flush_plugin_parameters(&mut self) {
+        self.chain.flush_parameters();
+    }
+
     fn snapshot_plugin_states(&self) -> Vec<(String, Vec<u8>)> {
         self.chain
             .slots

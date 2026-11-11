@@ -249,6 +249,10 @@ fn serve_frames<R: Read, W: Write>(
                 let _ = plugin.set_state(&frame.payload);
             }
             REQ_GET_STATE => {
+                // Values set since the last block go in first, or a
+                // plug-in asked while the song is stopped answers with
+                // the settings from before them.
+                plugin.flush_parameters();
                 if !send(out, Frame::new(RES_STATE, plugin.get_state())) {
                     break;
                 }

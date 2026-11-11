@@ -614,6 +614,14 @@ impl InsertChain {
         }
     }
 
+    /// Hand every slot's waiting parameter changes to its plug-in without
+    /// a block (see `HostedPlugin::flush_parameters`). Audio thread.
+    pub fn flush_parameters(&mut self) {
+        for slot in &mut self.slots {
+            slot.plugin.flush_parameters();
+        }
+    }
+
     /// Load opaque plug-in state bytes (the same blob `get_state` returns)
     /// into the slot. Used by preset load. Audio-thread cost is the
     /// plug-in's own `set_state` — same risk class as project save's
