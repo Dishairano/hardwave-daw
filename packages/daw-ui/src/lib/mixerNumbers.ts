@@ -119,3 +119,16 @@ export function parseInsertNumber(text: string, last: number): number | null {
   const n = Number(s)
   return n <= last ? n : null
 }
+
+/** The highest insert number a song can have (`MAX_MIXER_NUMBER` in the
+ *  project crate's sanitize.rs). */
+export const MAX_MIXER_NUMBER = 2000
+
+/** A number typed into the rack's insert box: any insert the mixer can
+ *  have, not only the ones the list shows, since picking an empty number
+ *  makes the insert. The list stops at 125 (or the highest in use), and
+ *  140 typed there did nothing and said nothing. Null when the text is
+ *  not one. */
+export function parseTypedInsert(text: string): number | null {
+  return parseInsertNumber(text, MAX_MIXER_NUMBER)
+}
