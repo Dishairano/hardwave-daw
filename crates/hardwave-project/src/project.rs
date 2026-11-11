@@ -390,10 +390,15 @@ impl Project {
     /// them could edit it, so nothing made by hand is lost. Each step is
     /// keyed on the version it starts from, and the version is stamped at
     /// the end so the next save writes the current format.
+    ///
+    /// Whatever the version, a clip, automation clip or lane saved without
+    /// a row (every clip of a song made in 0.266.43) is given the row the
+    /// playlist draws it on, so its row's mute and solo hold for it.
     fn migrate(&mut self) {
         if self.version < 4 {
             self.lay_out_as_before();
         }
+        self.settle_rows();
         self.version = FORMAT_VERSION;
     }
 
@@ -407,6 +412,17 @@ impl Project {
         old.forget_layout();
         // Older builds had the pan law's drop at every track.
         old.inserts_unity_at_centre = false;
+        let data = rmp_serde::to_vec_named(&old).unwrap_or_default();
+        zstd::encode_all(data.as_slice(), 3).unwrap_or_default()
+    }
+
+    /// This song's bytes stamped as format `version`, every field kept: a
+    /// song as a build of that format saved it. For tests of what opening
+    /// it does.
+    #[doc(hidden)]
+    pub fn bytes_as_format(&self, version: u32) -> Vec<u8> {
+        let mut old = self.clone();
+        old.version = version;
         let data = rmp_serde::to_vec_named(&old).unwrap_or_default();
         zstd::encode_all(data.as_slice(), 3).unwrap_or_default()
     }

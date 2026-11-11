@@ -7,7 +7,8 @@ import {
   insertOf,
   insertsByNumber,
   lastMixerNumber,
-  parseInsertNumber,
+  MAX_MIXER_NUMBER,
+  parseTypedInsert,
   stepNumber,
 } from '../../lib/mixerNumbers'
 import { routeToInsert } from '../../lib/insertActions'
@@ -148,6 +149,8 @@ function InsertList({ anchor, current, last, onPick, onClose }: {
   const tracks = useTrackStore((s) => s.tracks)
   const byNumber = useMemo(() => insertsByNumber(tracks), [tracks])
   const [typed, setTyped] = useState('')
+  // A typed number that is not one: said in the foot until the text changes.
+  const [refused, setRefused] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -175,13 +178,17 @@ function InsertList({ anchor, current, last, onPick, onClose }: {
           value={typed}
           placeholder={insertBoxText(current)}
           aria-label={t('Insert number')}
-          onChange={(e) => setTyped(e.target.value)}
+          onChange={(e) => {
+            setTyped(e.target.value)
+            setRefused(false)
+          }}
           onKeyDown={(e) => {
             e.stopPropagation()
             if (e.key === 'Escape') onClose()
             if (e.key !== 'Enter') return
-            const n = parseInsertNumber(typed, last)
+            const n = parseTypedInsert(typed)
             if (n != null) onPick(n)
+            else setRefused(true)
           }}
         />
       </div>
@@ -206,8 +213,10 @@ function InsertList({ anchor, current, last, onPick, onClose }: {
           )
         })}
       </div>
-      <div className="cr-ins-pop-foot">
-        {tf('Type a number, or scroll the list (to {last}). The dimmed numbers are empty: picking one makes the insert. On the box itself, drag or scroll to step through numbers.', { last })}
+      <div className={'cr-ins-pop-foot' + (refused ? ' refused' : '')} role={refused ? 'alert' : undefined}>
+        {refused
+          ? tf('Type M for the master, or an insert number from 1 to {max}.', { max: MAX_MIXER_NUMBER })
+          : tf('Type a number, or scroll the list (to {last}). The dimmed numbers are empty: picking one makes the insert. On the box itself, drag or scroll to step through numbers.', { last })}
       </div>
     </div>,
     document.body,

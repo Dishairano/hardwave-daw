@@ -9,6 +9,7 @@ import {
   mixerSlots,
   mixerSlotsKey,
   parseInsertNumber,
+  parseTypedInsert,
   rackChannels,
   stepNumber,
 } from './mixerNumbers'
@@ -109,6 +110,14 @@ describe('the insert box', () => {
     expect(parseInsertNumber(' 17 ', 125)).toBe(17)
     expect(parseInsertNumber('126', 125)).toBeNull()
     expect(parseInsertNumber('4a', 125)).toBeNull()
+  })
+
+  it('takes a typed number past the end of the list, up to the mixer\'s last', () => {
+    expect(parseTypedInsert('140')).toBe(140)
+    expect(parseTypedInsert('2000')).toBe(2000)
+    expect(parseTypedInsert('M')).toBe(0)
+    expect(parseTypedInsert('2001')).toBeNull()
+    expect(parseTypedInsert('-3')).toBeNull()
   })
 })
 

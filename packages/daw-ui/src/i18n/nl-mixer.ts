@@ -509,6 +509,7 @@ export const nlMixer: Record<string, string> = {
   '{track} plays into insert {n}. Click for the inserts, or drag or scroll to step through them': '{track} speelt in insert {n}. Klik voor de inserts, of sleep of scrol om er doorheen te stappen',
   'PLAYS INTO': 'SPEELT IN',
   'Insert number': 'Insertnummer',
+  'Type M for the master, or an insert number from 1 to {max}.': 'Typ M voor de master, of een insertnummer van 1 tot {max}.',
   'Type a number, or scroll the list (to {last}). The dimmed numbers are empty: picking one makes the insert. On the box itself, drag or scroll to step through numbers.': 'Typ een nummer, of scrol door de lijst (tot {last}). De gedimde nummers zijn leeg: kies er een en de insert wordt gemaakt. Op het vakje zelf sleep of scrol je door de nummers.',
   '{track} plays into the master; route it in the mixer or the channel rack': '{track} speelt in de master; stuur het om in de mixer of de channel rack',
   '{track} plays into insert {n}, {name}; route it in the mixer or the channel rack': '{track} speelt in insert {n}, {name}; stuur het om in de mixer of de channel rack',

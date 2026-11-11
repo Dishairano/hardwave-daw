@@ -5,18 +5,28 @@ run-name: Security · ${{ github.ref_name }}
 # new advisory against something already shipped shows up without
 # waiting for a commit.
 #
-# - Rust dependencies: known vulnerabilities, yanked crates, licences
-#   and sources, per deny.toml. A vulnerability fails; there is no warn.
-# - UI dependencies: npm audit on the lockfile, including build tools.
+# The checks themselves live in secure-code-check.yml, shared with the
+# Suite and the plug-ins, so the release runs exactly the same ones on
+# its tag:
+#
+# - Rust dependencies of the DAW and of the launcher: known
+#   vulnerabilities, yanked crates, licences and sources, per deny.toml.
+#   A vulnerability fails; there is no warn.
+# - npm dependencies: the interface with its build tools, and what the
+#   launcher ships.
 # - Secrets: gitleaks over the whole history.
+# - Static analysis: Semgrep's free security rules; a high finding fails.
 # - Fuzzing: every reader of outside input (songs, FL files, audio
 #   headers, plug-in state and bridge, OSC, room messages, sample
 #   paths) fed generated input; anything that panics, hangs or runs out
 #   of memory fails. A minute per target on a push, ten every Monday.
+# - The app window's content policy, and an SBOM of what ships.
 #
 # It runs on GitHub's machines, never the founder's PC, with a read-only
 # token and actions pinned to a commit, so a moved tag upstream cannot
-# change what runs here.
+# change what runs here. release.sh tags only once this run is green on
+# the commit being released; the workflow keeps the name "Security"
+# because that is what it waits for.
 
 on:
   push:
@@ -35,135 +45,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-dependencies:
-    name: Rust dependencies (cargo deny)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check advisories bans licenses sources
-
-  # The launcher under installer/ has lock files of its own, and it is no
-  # small thing: it downloads and runs the DAW's installer, and it is the
-  # DAW's uninstaller. It went unchecked until rustls 0.23.45 and a
-  # yanked zip sat in its lock while the DAW's own were clean.
-  launcher-dependencies:
-    name: Launcher and uninstaller dependencies
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          manifest-path: installer/src-tauri/Cargo.toml
-          arguments: --config deny.toml
-          command: check advisories bans licenses sources
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 20
-      # What ships in the launcher. Its build tools (vite 5, tailwind 3)
-      # need major upgrades to clear their advisories and are audited
-      # once those are done.
-      - name: Audit the shipped packages
-        working-directory: installer
-        run: npm audit --omit=dev --audit-level=moderate
-
-  ui-dependencies:
-    name: UI dependencies (npm audit)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 20
-      - name: Audit the lockfile
-        working-directory: packages/daw-ui
-        run: npm audit --audit-level=moderate
-
-  ui-content-policy:
-    name: App window content policy
-    # Pinned: ubuntu-latest became Ubuntu 26.04 on 21 Oct 2026, and Playwright
-    # 1.58 cannot install Chromium there, which failed this check on every
-    # commit. Move back to ubuntu-latest once Playwright supports 26.04.
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 20
-      - name: Build the UI
-        working-directory: packages/daw-ui
-        run: npm ci && npm run build
-      - name: Browser for the check
-        working-directory: packages/daw-ui
-        run: npx playwright install --with-deps chromium
-      - name: Load the build under the app's policy; anything blocked fails
-        working-directory: packages/daw-ui
-        run: npm run check:csp
-
-  secrets:
-    name: Secrets in history (gitleaks)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Fetch gitleaks, checked against its published hash
-        run: >-
-          curl -sSLo gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
-          && echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tgz" | sha256sum -c -
-          && tar xzf gitleaks.tgz gitleaks
-      - name: Scan every commit
-        run: ./gitleaks git --redact --no-banner --exit-code 1 .
-
-  fuzz:
-    name: Fuzz the readers of outside input
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Nightly Rust (libFuzzer needs it)
-        run: rustup toolchain install nightly --profile minimal
-      - name: Fetch cargo-fuzz, checked against its published hash
-        run: >-
-          curl -sSLo cargo-fuzz.tgz https://github.com/rust-fuzz/cargo-fuzz/releases/download/0.13.2/cargo-fuzz-0.13.2-x86_64-unknown-linux-musl.tar.gz
-          && echo "b5b704018b63e0f151c17a057ac53b5111e1db545d1b9f72fee79f08a545931c  cargo-fuzz.tgz" | sha256sum -c -
-          && mkdir -p cargo-fuzz-bin && tar xzf cargo-fuzz.tgz -C cargo-fuzz-bin
-          && install -m755 "$(find cargo-fuzz-bin -name cargo-fuzz -type f | head -1)" "$HOME/.cargo/bin/cargo-fuzz"
-      # The audio crates link ALSA through alsa-sys, whose build script
-      # needs the headers and pkg-config; the runner image has neither.
-      - name: System libraries the audio crates link
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libasound2-dev pkg-config
-      - name: Build the targets
-        working-directory: fuzz
-        run: cargo +nightly fuzz build -O --target x86_64-unknown-linux-gnu
-      - name: Run every target
-        working-directory: fuzz
-        env:
-          SECONDS_EACH: ${{ github.event_name == 'schedule' && '600' || '60' }}
-        run: |
-          set -e
-          for target in $(cargo +nightly fuzz list); do
-            echo "::group::$target"
-            cargo +nightly fuzz run -O --target x86_64-unknown-linux-gnu "$target" -- \
-              -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10
-            echo "::endgroup::"
-          done
-      - name: Keep what broke it
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: fuzz-crashes
-          path: fuzz/artifacts
-          retention-days: 30
+  check:
+    name: Secure Code Check
+    uses: ./.github/workflows/secure-code-check.yml
+    with:
+      tools-ref: ${{ github.sha }}
+      cargo-manifests: |
+        Cargo.toml
+        installer/src-tauri/Cargo.toml
+      # The interface with its build tools; the launcher's shipped packages
+      # only (its vite 5 and tailwind 3 need major upgrades to clear their
+      # advisories and are audited once those are done).
+      npm-audit: |
+        packages/daw-ui
+        installer --omit=dev
+      semgrep-languages: rust typescript javascript
+      fuzz: true
+      # The audio crates link ALSA through alsa-sys.
+      fuzz-apt-packages: libasound2-dev pkg-config
+      content-policy-dir: packages/daw-ui
+      fuzz-seconds: ${{ github.event_name == 'schedule' && 600 || 60 }}
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}

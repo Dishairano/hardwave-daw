@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildRowIndex, itemAt, itemsInBox, itemsInView, rowAtY, rowName, shownRowCount, silentRows, trackPlaces,
 } from './rowIndex'
+import sharedCasesText from './shownRows.cases.json?raw'
 
 const clip = (id: string, at: number, len: number, row?: number | null) => ({
   id, position_ticks: at, length_ticks: len, row,
@@ -119,5 +120,31 @@ describe('rows on screen', () => {
     expect([muted(0), muted(1), muted(5)]).toEqual([false, true, false])
     const solo = silentRows([{ muted: false, soloed: true }, { muted: false, soloed: false }, { muted: true, soloed: true }])
     expect([solo(0), solo(1), solo(2), solo(9)]).toEqual([false, true, true, true])
+  })
+})
+
+describe('the rule shared with the engine', () => {
+  // The same cases crates/hardwave-project/src/layout.rs checks
+  // `shown_rows` on: a row's mute and solo silence exactly what the
+  // playlist draws on it.
+  const cases = JSON.parse(sharedCasesText) as {
+    tracks: {
+      id: string
+      kind: string
+      clips: { id: string; row: number | null }[]
+      automationClips: { id: string; row: number | null }[]
+      automationLanes: { id: string; row: number | null }[]
+    }[]
+    shown: Record<string, number>
+  }
+
+  it('draws what has no row of its own where the engine says it is', () => {
+    const tracks = cases.tracks.map((t) => ({
+      ...t,
+      clips: t.clips.map((c) => clip(c.id, 0, 960, c.row)),
+      automationClips: t.automationClips.map((c) => auto(c.id, 0, 960, c.row)),
+    }))
+    const index = buildRowIndex(tracks)
+    expect(Object.fromEntries(index.rowOf)).toEqual(cases.shown)
   })
 })

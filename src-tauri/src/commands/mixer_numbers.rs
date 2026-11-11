@@ -11,8 +11,10 @@ use tauri::State;
 
 /// Make insert `number` a track (an empty bus into the master), named
 /// `name` or "Insert N". Used when an effect, a send or a name is put on
-/// an empty number in the mixer. Returns the insert's id; one that is
-/// already there is returned unchanged, with no undo step.
+/// an empty number in the mixer. Returns the insert's id. An insert that
+/// is already there takes the name, as naming it in the mixer does, in
+/// one undo step; with no name, or the name it has, it is returned
+/// unchanged and no undo step is taken.
 #[tauri::command]
 pub fn make_insert(
     state: State<AppState>,
@@ -27,8 +29,23 @@ pub(crate) fn make_insert_in(
     number: u16,
     name: Option<&str>,
 ) -> Result<String, String> {
-    if let Some(track) = engine.project.lock().insert_numbered(number) {
-        return Ok(track.id.clone());
+    let name = name.map(str::trim).filter(|n| !n.is_empty());
+    let there = engine
+        .project
+        .lock()
+        .insert_numbered(number)
+        .map(|t| (t.id.clone(), t.name.clone()));
+    if let Some((id, current)) = there {
+        // A name for a number that is already an insert renames it. The
+        // name used to be dropped with no undo step, so the next undo took
+        // back the edit before it instead.
+        if let Some(name) = name.filter(|n| *n != current) {
+            engine.snapshot_before_mutation();
+            if let Some(track) = engine.project.lock().track_mut(&id) {
+                track.name = name.to_string();
+            }
+        }
+        return Ok(id);
     }
     engine.snapshot_before_mutation();
     let (id, _) = engine.project.lock().make_insert(number, name)?;
@@ -117,6 +134,32 @@ mod tests {
         assert!(engine.undo());
         assert_eq!(engine.project.lock().tracks.len(), tracks);
         assert!(engine.project.lock().insert_numbered(600).is_none());
+    }
+
+    #[test]
+    fn naming_an_insert_that_is_there_renames_it_in_one_undo_step() {
+        let (engine, _, _) = engine();
+        let name = |e: &DawEngine| e.project.lock().insert_numbered(130).unwrap().name.clone();
+        assert_eq!(name(&engine), "Insert 130", "a new song has it already");
+        let id = engine
+            .project
+            .lock()
+            .insert_numbered(130)
+            .unwrap()
+            .id
+            .clone();
+        let before = steps(&engine);
+        assert_eq!(make_insert_in(&engine, 130, Some(" Verb ")).unwrap(), id);
+        assert_eq!(name(&engine), "Verb");
+        assert_eq!(steps(&engine), before + 1);
+        // The same name again, or none: nothing changes and no step.
+        make_insert_in(&engine, 130, Some("Verb")).unwrap();
+        make_insert_in(&engine, 130, None).unwrap();
+        make_insert_in(&engine, 130, Some("  ")).unwrap();
+        assert_eq!(steps(&engine), before + 1);
+        assert_eq!(name(&engine), "Verb");
+        assert!(engine.undo());
+        assert_eq!(name(&engine), "Insert 130", "undo takes the name back");
     }
 
     #[test]

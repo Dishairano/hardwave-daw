@@ -181,11 +181,44 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace -- --include-ignored
 
+  # The same checks as the Security run, again on the tag itself: a new
+  # advisory published since that run still stops this release. Nothing
+  # is built until every one of them is green.
+  #
+  # The release report must be signed, and the evidence job only runs
+  # after the installers are public. So the key is checked here too
+  # (require-signing-key), before anything is built: a missing or wrong
+  # key stops the release while there is still nothing to take back.
+  secure-code-check:
+    name: Secure Code Check
+    uses: ./.github/workflows/secure-code-check.yml
+    with:
+      tools-ref: ${{ github.sha }}
+      cargo-manifests: |
+        Cargo.toml
+        installer/src-tauri/Cargo.toml
+      # The interface with its build tools; the launcher's shipped packages
+      # only (its vite 5 and tailwind 3 need major upgrades to clear their
+      # advisories and are audited once those are done).
+      npm-audit: |
+        packages/daw-ui
+        installer --omit=dev
+      semgrep-languages: rust typescript javascript
+      fuzz: true
+      # The audio crates link ALSA through alsa-sys.
+      fuzz-apt-packages: libasound2-dev pkg-config
+      content-policy-dir: packages/daw-ui
+      # The full run: ten minutes per target, side by side.
+      fuzz-seconds: 600
+      require-signing-key: true
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+
   build:
     # Publishes the release, so it alone may write.
     permissions:
       contents: write
-    needs: [frontend, changelog, lint-and-test, ui-tests]
+    needs: [frontend, changelog, lint-and-test, ui-tests, secure-code-check]
     strategy:
       fail-fast: false
       matrix:
@@ -490,6 +523,40 @@ jobs:
           files: |
             HardwaveDAW-Setup.exe
 
+      # For the Secure Code Check report: the Windows signature of every
+      # installer this leg published, read on the machine that signed
+      # them. Matched to the release files by SHA-256. It never fails the
+      # build; a file it could not read shows as "not verified".
+      - name: Record the Windows signatures (Windows)
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          $files = @(Get-Item HardwaveDAW-Setup.exe)
+          $files += Get-ChildItem -Path "target/$env:RUST_TARGET/release/bundle/nsis", "src-tauri/target/$env:RUST_TARGET/release/bundle/nsis" -Filter "*-setup.exe" -File -ErrorAction SilentlyContinue
+          $records = foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            [pscustomobject]@{
+              file   = $f.Name
+              sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+              status = [string]$sig.Status
+              signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "" }
+            }
+          }
+          ConvertTo-Json -InputObject @($records) | Set-Content -Encoding utf8 authenticode.json
+          Get-Content authenticode.json
+
+      - name: Keep the signature record (Windows)
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: authenticode
+          path: authenticode.json
+          retention-days: 90
+
       - name: Build Tauri app (macOS)
         if: matrix.platform == 'macos-latest'
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
@@ -511,6 +578,25 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.tauri-bundles }}
+
+  # Secure Code Check evidence for this release: the report (HTML and
+  # JSON) built from this run's results, signed with our key, the SBOMs,
+  # and the public page as files ready to publish. All attached to the
+  # GitHub release. Runs after the build, because the report lists the
+  # SHA-256 of every file the release carries.
+  evidence:
+    name: Secure Code Check evidence
+    needs: [secure-code-check, lint-and-test, ui-tests, build]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-evidence.yml
+    with:
+      tools-ref: ${{ github.sha }}
+      tag: ${{ github.ref_name }}
+      needs-json: ${{ toJSON(needs) }}
+      authenticode-artifact: authenticode
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
 
   discord-changelog:
     needs: [build]

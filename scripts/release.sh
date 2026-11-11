@@ -613,3 +613,4 @@ git push origin "$TAG_NAME"
 
 echo "Released $TAG_NAME ($BUMP_TYPE, full build) — CI at https://github.com/Dishairano/hardwave-daw/actions"
 echo "Users update via Help → Check for updates… once Windows / Mac / Linux artifacts are ready."
+echo "Secure Code Check: release.yml runs the checks again on the tag, builds only when they pass, and attaches the signed report, the SBOMs and the public page files (hardwave-daw-${NEW_VERSION}-security-page.tar.gz) to the release."

@@ -25,7 +25,7 @@ members = [
 # `env!("CARGO_PKG_VERSION")` and reports it as `API_VERSION` to the
 # resolver — drift here disables hot-swap for every running binary on
 # the next manifest publish.
-version = "0.266.11"
+version = "0.266.42"
 edition = "2021"
 license = "MIT"
 authors = ["Hardwave Studios"]
@@ -63,7 +63,9 @@ rubato = "0.15"
 symphonia = { version = "0.5", features = ["all"] }
 hound = "3.5"
 flacenc = "0.5"
-shine-rs = "0.1"
+# MP3 export. Pure Rust and Apache-2.0, so it can be built into a closed
+# program; shine-rs (LGPL) did MP3 before 9 Nov 2026.
+rusty_mp3 = "1.0.5"
 vorbis_rs = "0.5"
 
 # Plugin hosting

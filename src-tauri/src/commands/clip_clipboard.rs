@@ -13,7 +13,6 @@
 //! sound of the copy.
 
 use hardwave_project::clip::{ClipContent, ClipPlacement};
-use hardwave_project::track::TrackKind;
 use hardwave_project::Project;
 use tauri::State;
 
@@ -46,26 +45,18 @@ fn id_of(placement: &ClipPlacement) -> &str {
     }
 }
 
-/// The row a clip sits on: its own, or for a clip made before rows were
-/// kept, its track's place in the playlist, where it was drawn.
-fn shown_row(project: &Project, track_index: usize, placement: &ClipPlacement) -> u32 {
-    placement.row.unwrap_or_else(|| {
-        project.tracks[..track_index]
-            .iter()
-            .filter(|t| !matches!(t.kind, TrackKind::Master))
-            .count() as u32
-    })
-}
-
 fn copy_from(project: &Project, clip_ids: &[String]) -> Vec<Copied> {
+    // Each copy remembers the row it is drawn on, its own or, for a clip
+    // that has none, the one the playlist shows it on.
+    let rows = hardwave_project::layout::shown_rows(&project.tracks);
     let mut out = Vec::new();
-    for (index, track) in project.tracks.iter().enumerate() {
-        for placement in &track.clips {
+    for (track, rows) in project.tracks.iter().zip(&rows) {
+        for (placement, row) in track.clips.iter().zip(&rows.clips) {
             if clip_ids.iter().any(|id| id == id_of(placement)) {
                 let mut placement = placement.clone();
                 placement.track_id = track.id.clone();
                 out.push(Copied {
-                    row: shown_row(project, index, &placement),
+                    row: *row,
                     placement,
                 });
             }

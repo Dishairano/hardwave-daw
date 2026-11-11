@@ -1277,6 +1277,11 @@ impl DawEngine {
         }
         // The song, then the history: the order every caller takes them in.
         let mut song = self.project.lock();
+        // What the last edit made without a row (a new, imported, recorded
+        // or bounced clip) is written down on the row it is drawn on before
+        // this edit and its undo step see the song, so a row edit, a row's
+        // mute or solo and undo all treat it as it looks. Nothing moves.
+        song.settle_rows();
         self.history.lock().push(&mut song);
     }
 

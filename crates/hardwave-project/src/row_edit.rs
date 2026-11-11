@@ -6,7 +6,6 @@
 //! Only a row's mute and solo change the sound: the engine leaves the
 //! clips on a silent row out when it builds its graph.
 
-use crate::automation_clip::AutomationClip;
 use crate::clip::{ClipContent, ClipPlacement};
 use crate::layout::PlaylistRow;
 use crate::sanitize::MAX_ROWS;
@@ -66,21 +65,19 @@ impl Project {
         used
     }
 
-    /// The first row with nothing on it (clips, automation clips or lanes),
-    /// for a new automation clip or lane that was given no row.
+    /// The first row with nothing drawn on it (clips, automation clips or
+    /// lanes), for a new automation clip or lane that was given no row. A
+    /// clip with no row of its own takes the row the playlist draws it on.
     pub fn first_empty_row(&self) -> u32 {
-        let mut taken = vec![false; self.rows_in_use()];
-        let mut mark = |row: Option<u32>| {
-            if let Some(slot) = row.and_then(|r| taken.get_mut(r as usize)) {
-                *slot = true;
-            }
-        };
-        for track in &self.tracks {
-            track.clips.iter().for_each(|c| mark(c.row));
-            track.automation_clips.iter().for_each(|c| mark(c.row));
-            track.automation_lanes.iter().for_each(|l| mark(l.row));
+        let taken: std::collections::HashSet<u32> = crate::layout::shown_rows(&self.tracks)
+            .into_iter()
+            .flat_map(|r| r.clips.into_iter().chain(r.automation_clips).chain(r.lanes))
+            .collect();
+        let mut row = 0;
+        while taken.contains(&row) {
+            row += 1;
         }
-        taken.iter().position(|t| !t).unwrap_or(taken.len()) as u32
+        row
     }
 
     /// Move clips to other rows: `(track, clip, row)` each. They stay on
@@ -396,23 +393,20 @@ impl Project {
     }
 
     /// The automation clips on the open arrangement's tracks that have no
-    /// row yet get the first empty one each, so two of them never share a
-    /// row by accident. Returns how many got one.
+    /// row yet get the empty row each is drawn on, so two of them never
+    /// share a row by accident. Returns how many got one.
     pub fn row_new_automation_clips(&mut self) -> usize {
+        let shown = crate::layout::shown_rows(&self.tracks);
         let mut n = 0;
-        loop {
-            let next = self.first_empty_row();
-            let Some(clip) = self
-                .tracks
-                .iter_mut()
-                .flat_map(|t| t.automation_clips.iter_mut())
-                .find(|c: &&mut AutomationClip| c.row.is_none())
-            else {
-                return n;
-            };
-            clip.row = Some(next);
-            n += 1;
+        for (track, rows) in self.tracks.iter_mut().zip(shown) {
+            for (clip, row) in track.automation_clips.iter_mut().zip(rows.automation_clips) {
+                if clip.row.is_none() {
+                    clip.row = Some(row);
+                    n += 1;
+                }
+            }
         }
+        n
     }
 }
 
@@ -420,6 +414,7 @@ impl Project {
 mod tests {
     use super::*;
     use crate::automation::AutomationTarget;
+    use crate::automation_clip::AutomationClip;
     use crate::clip::MidiClipRef;
 
     fn midi(track: &str, id: &str, at: u64, row: Option<u32>) -> ClipPlacement {
@@ -588,6 +583,21 @@ mod tests {
         assert_eq!(p.first_empty_row(), 3);
         p.set_clip_rows(&[("bass".into(), "c".into(), 0)]).unwrap();
         assert_eq!(p.first_empty_row(), 1);
+        // A clip with no row is drawn with its channel's other clips (row 0
+        // here), and with none on its track's place (the bass's is row 1).
+        let bass = p.track_mut("bass").unwrap();
+        bass.clips.push(midi("bass", "d", 960, None));
+        assert_eq!(p.first_empty_row(), 1);
+        p.track_mut("bass").unwrap().clips.clear();
+        p.track_mut("bass")
+            .unwrap()
+            .clips
+            .push(midi("bass", "e", 0, None));
+        assert_eq!(
+            p.first_empty_row(),
+            3,
+            "the bass's clip is drawn on its place, row 1"
+        );
     }
 
     #[test]
