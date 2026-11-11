@@ -532,6 +532,16 @@ impl BiquadStereo {
         (yl, yr)
     }
 
+    /// Nothing in its memory: silence in is silence out, and the memory
+    /// stays as it is.
+    fn at_rest(&self) -> bool {
+        [
+            self.x1_l, self.x2_l, self.y1_l, self.y2_l, self.x1_r, self.x2_r, self.y1_r, self.y2_r,
+        ]
+        .iter()
+        .all(|v| *v == 0.0)
+    }
+
     /// Take the filter's memory from `old`, keeping this one's coefficients.
     fn carry_state_from(&mut self, old: &BiquadStereo) {
         self.x1_l = old.x1_l;
@@ -581,6 +591,9 @@ pub struct TrackNode {
     /// What the last block used, so the next ramps from it.
     width_applied: f32,
     gain_ramp: GainRamp,
+    /// The last block this node wrote was silence on every channel, so the
+    /// graph can leave it out of the sums it feeds (`output_is_silent`).
+    wrote_silence: bool,
     /// Cached Arc references to audio buffers, refreshed when clips change.
     cached_buffers: Vec<Option<Arc<AudioBuffer>>>,
     /// The clips in this track's row of the launcher grid, and the
@@ -758,6 +771,14 @@ impl ChannelUtility {
         }
     }
 
+    /// Whether silence in gives silence out with nothing changing: no delay
+    /// line, and the filter off or with nothing left ringing in it. Swap and
+    /// polarity on silence are silence.
+    fn at_rest(&self) -> bool {
+        let no_delay = self.delay_samples <= 0 || self.delay_buf_l.is_empty();
+        no_delay && (self.filter_kind == TrackFilterType::Off || self.filter.at_rest())
+    }
+
     /// The filter, after the width stage. `Off` skips the loop.
     pub fn process_filter(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
         if self.filter_kind == TrackFilterType::Off {
@@ -801,6 +822,7 @@ impl TrackNode {
             stereo_separation: 1.0,
             width_applied: 1.0,
             gain_ramp: GainRamp::default(),
+            wrote_silence: false,
             cached_buffers: Vec::new(),
             meter,
             rms_smooth: 0.0,
@@ -1053,6 +1075,42 @@ impl TrackNode {
     /// keyboard), and a bus has to carry that: a synth played with the
     /// song stopped reached no bus or reverb return, through its output or
     /// a send, until Play.
+    /// The left and right gains of the fader and pan this block.
+    fn fader_gains(&self) -> (f32, f32) {
+        let pan = (self.pan + self.mod_pan).clamp(-1.0, 1.0);
+        // An insert in a song with FL's inserts passes a centred sound at
+        // 0 dB (FL's law: the far side is turned down, nothing is boosted).
+        let law = if self.unity_centre {
+            crate::pan::PanLaw::Zero
+        } else {
+            self.prefs.pan_law()
+        };
+        let (pan_l, pan_r) = crate::pan::gains(pan, law);
+        let vol = self.volume * self.mod_gain;
+        (vol * pan_l, vol * pan_r)
+    }
+
+    /// A block of silence through the stages after the clips, without
+    /// running them over it: the width and the fader ramp move on to where
+    /// they would be, and the meters read what the block would have given.
+    fn pass_silence(&mut self, buf_size: usize) {
+        if !self.frozen {
+            self.width_applied = self.stereo_separation;
+        }
+        self.gain_ramp.step(self.fader_gains());
+        let silence = linear_to_db(0.0);
+        self.meter
+            .pre_fader_peak_db
+            .store(silence, Ordering::Relaxed);
+        self.meter.peak_db_l.store(silence, Ordering::Relaxed);
+        self.meter.peak_db_r.store(silence, Ordering::Relaxed);
+        let rms_lin = (0.0_f64 / buf_size.max(1) as f64).sqrt() as f32;
+        self.rms_smooth = self.rms_smooth * 0.85 + rms_lin * 0.15;
+        self.meter
+            .rms_db
+            .store(linear_to_db(self.rms_smooth), Ordering::Relaxed);
+    }
+
     fn runs_stopped(&self) -> bool {
         self.live_input || self.receives_input
     }
@@ -1110,6 +1168,10 @@ impl AudioNode for TrackNode {
 
     fn report_cpu(&self, nanos: u64) {
         report_cpu(&self.meter, nanos);
+    }
+
+    fn output_is_silent(&self) -> bool {
+        self.wrote_silence
     }
 
     /// Report the insert chain's latency so the graph can compensate it.
@@ -1275,6 +1337,7 @@ impl AudioNode for TrackNode {
             self.stereo_separation = width;
         }
         let buf_size = ctx.buffer_size as usize;
+        self.wrote_silence = false;
 
         // Ensure outputs are sized. Channels 0/1 carry post-fader L/R; 2/3
         // carry the pre-fader tap used by pre-fader sends. Downstream nodes
@@ -1286,6 +1349,9 @@ impl AudioNode for TrackNode {
             ch.resize(buf_size, 0.0);
             ch.fill(0.0);
         }
+        // Every way out below that leaves the outputs as they are now says
+        // so; the rest write sound.
+        self.wrote_silence = true;
 
         if self.muted || (!ctx.playing && !self.runs_stopped()) {
             // Silence on the meter as well. A track muted (or silenced by
@@ -1376,6 +1442,13 @@ impl AudioNode for TrackNode {
             }
         }
 
+        // Whether anything reaches this track from others this block. A bus
+        // fed by tracks that are all silent hears nothing.
+        let input_heard = inputs
+            .iter()
+            .take(2)
+            .any(|ch| ch.iter().take(buf_size).any(|s| *s != 0.0));
+
         // Mix in send inputs arriving at this track (return routing). Sends
         // arrive at ports 0/1 and are treated as channel input — summed with
         // the clip output before the pre-fader chain so the return track's
@@ -1406,6 +1479,7 @@ impl AudioNode for TrackNode {
         // Sum all clips that overlap the current buffer window. Stopped, a
         // track runs only for its live input, and its clips stay silent: the
         // playhead is not moving, so they would repeat one block.
+        let mut clip_heard = false;
         for (clip_idx, clip) in self.clips.iter().enumerate() {
             if session_playing || !ctx.playing {
                 break;
@@ -1430,6 +1504,7 @@ impl AudioNode for TrackNode {
             if num_channels == 0 {
                 continue;
             }
+            clip_heard = true;
 
             let (out_left, out_rest) = outputs.split_at_mut(1);
             let out_l = &mut out_left[0];
@@ -1526,6 +1601,23 @@ impl AudioNode for TrackNode {
                 out_r[frame] += r * scaled_gain * t.gain_r * fr;
             }
         }
+
+        // Nothing to hear and nothing ringing on: the block is the silence
+        // already in the outputs. Most tracks of a big song are like this
+        // most of the time, between their clips, and each one ran its
+        // utility, filter, fader and meters over a block of zeros: three
+        // quarters of the audio thread's time on a 127-track FL song. What
+        // those stages remember moves on as it would have.
+        if !input_heard
+            && !session_playing
+            && !clip_heard
+            && self.chain.slots.is_empty()
+            && (self.frozen || self.utility.at_rest())
+        {
+            self.pass_silence(buf_size);
+            return;
+        }
+        self.wrote_silence = false;
 
         // --- Pre-fader utility chain: delay → swap → phase → stereo separation.
         // Order is deliberate: delay first so the shifted signal feeds the rest of
@@ -1625,19 +1717,8 @@ impl AudioNode for TrackNode {
         }
 
         // Apply track volume and pan, and measure post-fader peak/RMS.
-        let pan = (self.pan + self.mod_pan).clamp(-1.0, 1.0);
-        // An insert in a song with FL's inserts passes a centred sound at
-        // 0 dB (FL's law: the far side is turned down, nothing is boosted).
-        let law = if self.unity_centre {
-            crate::pan::PanLaw::Zero
-        } else {
-            self.prefs.pan_law()
-        };
-        let (pan_l, pan_r) = crate::pan::gains(pan, law);
-        let vol = self.volume * self.mod_gain;
-
         let (out_left, out_rest) = outputs.split_at_mut(1);
-        let (start, end) = self.gain_ramp.step((vol * pan_l, vol * pan_r));
+        let (start, end) = self.gain_ramp.step(self.fader_gains());
         apply_ramped(
             &mut out_left[0][..buf_size],
             &mut out_rest[0][..buf_size],
@@ -2387,5 +2468,126 @@ mod warp_tests {
         let segs = build_warp_segments(&[(2000, 5000.0), (1000, 4000.0), (1000, 9999.0)], 1.0, 0.0);
         // Sorted, dupes on the same tick collapsed (first kept after sort).
         assert_eq!(warp_source_pos(&segs, 1500), 4500.0);
+    }
+}
+
+#[cfg(test)]
+mod silence_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A track with a steady clip (0.5 on both sides) on each of `spans`.
+    fn steady_clips(spans: &[(u64, u64)]) -> TrackNode {
+        let pool = AudioPool::new();
+        pool.insert(
+            "s".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![vec![0.5; 48_000], vec![0.5; 48_000]],
+                sample_rate: 48_000,
+                num_frames: 48_000,
+            },
+        );
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool, meter);
+        node.set_clips(
+            spans
+                .iter()
+                .map(|&(start, end)| ClipRegion {
+                    source_id: "s".into(),
+                    timeline_start: start,
+                    timeline_end: end,
+                    source_offset: 0,
+                    gain: 1.0,
+                    muted: false,
+                    fade_in_samples: 0,
+                    fade_out_samples: 0,
+                    fade_in_curve: Default::default(),
+                    fade_out_curve: Default::default(),
+                    reversed: false,
+                    source_step: 1.0,
+                    warp: Vec::new(),
+                    treat: ClipTreat::default(),
+                })
+                .collect(),
+        );
+        node
+    }
+
+    /// One block at `position` with `input` arriving on both sides: the
+    /// left side, and whether the node said the block was silent.
+    fn heard(node: &mut TrackNode, position: u64, input: f32) -> (Vec<f32>, bool) {
+        let ctx = ProcessContext {
+            sample_rate: 48_000.0,
+            position_ticks: 0,
+            buffer_size: 512,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: position,
+            playing: true,
+        };
+        let input = vec![input; 512];
+        let inputs: Vec<&[f32]> = vec![&input, &input, &[], &[]];
+        let mut outputs = vec![vec![0.0f32; 512]; 4];
+        node.process(&inputs[..2], &mut outputs, &[], &mut Vec::new(), &ctx);
+        (outputs.remove(0), node.output_is_silent())
+    }
+
+    /// Between its clips a track writes silence and says so, so the graph
+    /// leaves it out of the sums; with a clip under the playhead it plays.
+    #[test]
+    fn a_track_between_its_clips_writes_silence_and_says_so() {
+        let mut node = steady_clips(&[(4096, 8192)]);
+        let (left, silent) = heard(&mut node, 0, 0.0);
+        assert!(silent);
+        assert!(left.iter().all(|s| *s == 0.0));
+        let (left, silent) = heard(&mut node, 4096, 0.0);
+        assert!(!silent);
+        assert!(left.iter().all(|s| *s != 0.0));
+    }
+
+    /// A bus with nothing of its own plays what reaches it, and is silent
+    /// when nothing does.
+    #[test]
+    fn a_bus_is_silent_only_when_nothing_reaches_it() {
+        let mut node = steady_clips(&[]);
+        node.set_receives_input(true);
+        let (left, silent) = heard(&mut node, 0, 0.25);
+        assert!(!silent);
+        assert!(left.iter().all(|s| *s != 0.0));
+        let (left, silent) = heard(&mut node, 512, 0.0);
+        assert!(silent);
+        assert!(left.iter().all(|s| *s == 0.0));
+    }
+
+    /// The fader moved while the track was silent between two clips: the
+    /// second clip starts at the new level, as it did when the silence ran
+    /// through the fader, and does not fade over from the old one.
+    #[test]
+    fn a_fader_moved_between_clips_is_where_it_was_put_when_the_next_starts() {
+        let mut node = steady_clips(&[(0, 512), (2048, 8192)]);
+        let (first, _) = heard(&mut node, 0, 0.0);
+        assert!(first.iter().all(|s| *s == first[0]));
+        node.set_volume_db(-6.0);
+        for at in [512, 1024, 1536] {
+            assert!(heard(&mut node, at, 0.0).1);
+        }
+        let (second, _) = heard(&mut node, 2048, 0.0);
+        assert!(second[0] < first[0]);
+        assert!(
+            second.iter().all(|s| *s == second[0]),
+            "no fade from the old level"
+        );
+    }
+
+    /// A filter still ringing after its clip ended is heard to the end of
+    /// its tail; the track is silent only once nothing is left in it.
+    #[test]
+    fn a_filter_still_ringing_after_a_clip_is_heard() {
+        let mut node = steady_clips(&[(0, 512)]);
+        node.set_filter(TrackFilterType::LowPass, 200.0, 0.9, 48_000.0);
+        heard(&mut node, 0, 0.0);
+        let (tail, silent) = heard(&mut node, 512, 0.0);
+        assert!(!silent);
+        assert!(tail.iter().any(|s| *s != 0.0), "the tail is heard");
     }
 }

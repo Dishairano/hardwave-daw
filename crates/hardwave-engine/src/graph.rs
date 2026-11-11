@@ -144,6 +144,13 @@ pub trait AudioNode: Send {
         let _ = nanos;
     }
 
+    /// Whether the block just processed left every output channel silent.
+    /// The graph then leaves the node out of the sums it feeds, as it does
+    /// an idle one. Default: never said.
+    fn output_is_silent(&self) -> bool {
+        false
+    }
+
     /// How many plug-ins the node's chain holds.
     fn chain_len(&self) -> usize {
         0
@@ -864,8 +871,9 @@ impl AudioGraph {
             // Zero copy — the persistent buffer becomes the next-block
             // scratch.outputs, which we'll .fill(0.0) on next call.
             std::mem::swap(&mut scratch.outputs, &mut self.buffers[node_id]);
-            // An idle node wrote silence (the trait's promise).
-            self.silent[node_id] = idle;
+            // An idle node wrote silence (the trait's promise), and a node
+            // may say it did.
+            self.silent[node_id] = idle || self.nodes[node_id].output_is_silent();
             if let (Some(nanos), Some((gather, ran))) = (&mut self.node_nanos, gathered) {
                 if let Some(slot) = nanos.get_mut(node_id) {
                     slot[0] += gather.as_nanos() as u64;
@@ -1127,7 +1135,7 @@ impl NodeWork<'_> {
 
         let buffers = unsafe { &mut *self.buffers.add(node_id) };
         std::mem::swap(&mut scratch.outputs, buffers);
-        *silent = idle;
+        *silent = idle || node.output_is_silent();
     }
 }
 
@@ -1274,6 +1282,56 @@ mod tests {
         g.process(&ctx(), &[]);
         assert_eq!(quiet_runs.load(Relaxed), 3);
         assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+    }
+
+    /// A node that says it wrote silence, whatever it wrote.
+    struct SaysSilent;
+
+    impl AudioNode for SaysSilent {
+        fn name(&self) -> &str {
+            "says silent"
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+            outputs[0].fill(0.25);
+        }
+        fn output_is_silent(&self) -> bool {
+            true
+        }
+    }
+
+    /// A node that says its block was silent is left out of the sums it
+    /// feeds, on one thread and on several, and is still run every block.
+    #[test]
+    fn a_node_that_says_it_wrote_silence_is_left_out_of_the_sums() {
+        for threads in [0, 2] {
+            let mut g = AudioGraph::new(16);
+            if threads > 0 {
+                g.set_worker_pool(Some(std::sync::Arc::new(crate::parallel::WorkerPool::new(
+                    threads,
+                ))));
+            }
+            let quiet = g.add_node(Box::new(SaysSilent));
+            let loud = g.add_node(Box::new(Source {
+                level: 0.5,
+                idle: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                runs: Default::default(),
+            }));
+            let sink = g.add_node(Box::new(Sum));
+            g.connect(quiet, 0, sink, 0);
+            g.connect(loud, 0, sink, 0);
+            g.finalize_pdc(true);
+            for _ in 0..3 {
+                g.process(&ctx(), &[]);
+                assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+            }
+        }
     }
 
     /// A node that counts the times it was timed for its load read-out.
