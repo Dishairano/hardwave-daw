@@ -11,9 +11,14 @@
 //! `HW_DEVICE_FRAMES` sets the device block, `HW_PLAY_SECONDS` plays only
 //! the start of the song, `HW_PLAY_DUMP=<file>` writes the sound played
 //! (raw little-endian f32 stereo) and `HW_PLAY_COMPARE=<file>` compares
-//! the sound with one written before, sample for sample. The song is never
-//! part of the repository.
+//! the sound with one written before, sample for sample. A second test
+//! plays the song and counts every allocation and free made on the thread
+//! playing it, after the first blocks (which build the graph). The song is
+//! never part of the repository.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use hardwave_engine::engine::{OfflineInsertFactory, LIVE_PROFILE_KINDS};
@@ -21,6 +26,44 @@ use hardwave_engine::DawEngine;
 use hardwave_native_plugins::sampler::{self as hs, NativeSampler};
 use hardwave_project::clip::ClipContent;
 use hardwave_project::track::PluginSlot;
+
+/// Counts allocations and frees on a thread while it is watched.
+struct Counting;
+
+thread_local! {
+    static WATCHING: Cell<bool> = const { Cell::new(false) };
+}
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static LARGEST: AtomicUsize = AtomicUsize::new(0);
+
+fn note(size: usize) {
+    if WATCHING.try_with(|w| w.get()).unwrap_or(false) {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        LARGEST.fetch_max(size, Ordering::Relaxed);
+    }
+}
+
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        note(layout.size());
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        note(layout.size());
+        unsafe { System.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        note(new_size);
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        note(layout.size());
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
 
 /// The song `HW_FL_SONG` names, opened as this build opens it, and the
 /// engine that loaded its samples. `None` when the variable is not set.
@@ -289,4 +332,42 @@ fn an_fl_songs_playback_block_by_block() {
             20.0 * (worst.max(1e-30) / peak.max(1e-30)).log10()
         );
     }
+}
+
+/// Playing the song allocates nothing on the thread that plays it, once
+/// the first blocks have built the graph: an allocation there can wait on
+/// the system allocator, which is heard as a dropout.
+#[test]
+#[ignore = "a check with a song from outside the repository"]
+fn an_fl_songs_playback_allocates_nothing() {
+    let Some((engine, song)) = open_song() else {
+        return;
+    };
+    let rate = 48_000u32;
+    let device_frames = env_num("HW_DEVICE_FRAMES", 512.0) as usize;
+    let seconds = env_num("HW_PLAY_SECONDS", 120.0);
+    *engine.project.lock() = song;
+    let factory = hardwave_native_plugins::create_native;
+    let factory: OfflineInsertFactory<'_> = &factory;
+    const WARM_UP_BLOCKS: usize = 32;
+    let samples = (seconds * rate as f64) as u64;
+    // Watched from the end of the warm-up to the last block: what follows
+    // that is the playing being taken down, not playing.
+    let total = samples.div_ceil(device_frames as u64) as usize;
+    let mut blocks = 0usize;
+    engine
+        .play_live_in_device_blocks(rate, samples, device_frames, Some(factory), |_| {
+            blocks += 1;
+            WATCHING.with(|w| w.set(blocks >= WARM_UP_BLOCKS && blocks < total));
+            true
+        })
+        .unwrap();
+    WATCHING.with(|w| w.set(false));
+    let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+    eprintln!(
+        "{allocations} allocations or frees over {} blocks of playing, the largest {} bytes",
+        blocks - WARM_UP_BLOCKS,
+        LARGEST.load(Ordering::Relaxed)
+    );
+    assert_eq!(allocations, 0);
 }
