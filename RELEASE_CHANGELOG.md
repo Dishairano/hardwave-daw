@@ -1,11 +1,72 @@
+### New features
+- feat: FL Studio projects open the way FL shows them: every channel in the channel rack in FL's groups, every clip on its FL playlist row, and the mixer's inserts numbered and named as in FL (no more 500 placeholder tracks)
+- feat: a channel's volume and pan from FL are on the channel, so FL's channel volume automation works
+- feat: automation clips from FL sit on their own automation channels, on the row FL had them
+- feat: the channel rack filters by the song's groups (All, then each group with its count), as in FL
+- feat: the playlist shows rows like FL Studio: each row has a name, a colour and its own Mute and Solo; double-click a name or press F2 to rename; right-click a row for colour, mute, solo, insert or delete
+- feat: dragging a clip up or down moves it to another row without changing how it sounds; any row can hold clips from any channel
+- feat: muting a row silences the clips on it; soloing a row plays only the soloed rows
+- feat: a sample dropped on the playlist gets its own channel, playing into the next free mixer insert, and lands on the row you dropped it on
+- feat: automation clips sit on the playlist like other clips: move them to any row, resize them, double-click to add a point, right-click a point to remove it
+- feat: hovering a clip shows which insert it plays through
+- feat: the mixer shows your inserts by number and name, like FL; empty numbers are drawn up to 125, and a channel without its own insert no longer takes a strip
+- feat: rename an insert by double-clicking its name, pressing F2, or right-clicking it (Rename, Colour)
+- feat: put an effect on an empty insert, or route something to it, and it becomes an insert, as one undo step
+- feat: the channel rack's insert box shows the insert each channel plays into; click it to pick from the list, or drag or scroll on it to step through numbers
+- feat: the Output and Send lists in the mixer show inserts by number, including the empty ones
+- feat: in new songs and FL imports, mixer inserts sit at 0 dB with their pan centred, as in FL, so routing a channel into an insert no longer makes it 3 dB quieter; songs you made before keep sounding exactly as they did
+- feat: naming an insert that already exists renames it, as one undo step
+- feat: the channel rack's insert box takes any insert number you type up to 2000, and says so when what you typed is not one
+
 ### Bug fixes
-- fix: editing a big song while it plays no longer makes the audio drop out: the DAW rebuilds the song in the background and switches over between two blocks
-- fix: notes, kick tails, filters and delays keep sounding when you edit while the song plays; before, every edit cut whatever was ringing
-- fix: a note held by an instrument plug-in is released when you delete it while it plays, instead of hanging
+- fix: pasted clips stay on the channel they came from
+- fix: a new, imported or recorded clip stays on its playlist row when you move its channel's other clips, and moves with its row when rows are inserted or deleted
+- fix: the sample window's Track box shows the same insert number as the mixer and the channel rack
+- fix: a track you add shows in the mixer and the rack right away, with the next free number
+- fix: Hardwave Reverb now makes reverb: a real tail whose length follows Decay, Size and Damping that work, and a Mix that blends from dry to reverb only at a steady level
+- fix: Conv Reverb no longer makes a track 20 dB louder; at its default settings and at 100% wet it plays about as loud as the dry sound
+- fix: freezing, bouncing or consolidating a part that runs above 0 dBFS no longer flattens it; the frozen track sounds exactly as it did live
+- fix: a clip placed on top of a longer one on the same track no longer fades the longer one out; both play at full level, so consolidating such a range no longer changes the sound
+- fix: synths on a MIDI track (3xOSC, Wavetable, FM and the built-in synth) now hold their notes for the full length during playback; before, a note could fade out after a fraction of a second on many Windows sound cards, even though the export played it in full; kick notes also land exactly on the beat again
+- fix: a plug-in setting changed while the song is stopped now takes effect straight away and shows its new value, instead of only once you press play
+- fix: loading a preset right after turning a knob no longer brings the old knob value back
+- fix: Stutter's Sync setting is now saved with the song and stays as you set it
 
 ### Improvements
-- Each audio clip looked its sample up in the pool up to four times
-- Compensation looked up the slowest branch into an edge's destination
-- Walking a chain of buses to find loops searched the whole track list
-- fix(engine): an edit no longer builds the audio graph on the audio thread
-- fix(merge): the bounce test's automation lane says it has no row yet
+- fix(rack): the insert box takes any insert number you type, up to 2000
+- fix(mixer): naming an insert that is already there renames it
+- fix(playlist): a row's mute and solo silence every clip drawn on it
+- chore(permissions): the generated schemas from the merged tree
+- fix(stutter): the Sync setting is kept in a saved song and reads back
+- fix(plugins): a preset loaded right after a knob move is not undone by it
+- fix(plugins): a knob set with the song stopped takes effect and reads back at once
+- test(playback): every built-in instrument holds a note in playback as in an export
+- fix(playback): a synth on a MIDI track holds its notes in playback, not only in an export
+- fix(tests): live MIDI smoke tests play through the live path again
+- test(consolidate): gluing a part on top of a long clip keeps the sound
+- fix(export): freeze, bounce and consolidate keep sound above 0 dBFS
+- fix(engine): overlapping clips on one track both play at full level
+- feat(mixer): inserts are at 0 dB at centre in new songs and FL imports, as in FL
+- fix(reverb): Conv Reverb is about as loud as the dry sound
+- fix(rooms): a newer DAW stops a room with an older one before taking or sending anything
+- fix(history): Undo, Redo and the History panel no longer freeze the window on a big song
+- fix(reverb): Hardwave Reverb rings out with a real tail
+- perf(engine): the history list is worked out once per change, each step described once
+- perf(project): an undo step is described from its two snapshots, not two whole songs
+- fix(engine): one channel's clips on different rows play over each other
+- feat(channel-rack): the window can read the song's channel rack groups
+- feat(playlist): the playlist shows rows, with clips of any channel on any row
+- fix(paste): a pasted clip stays on its channel and lands on a row
+- feat(rows): commands for the playlist's rows, each one undo step
+- feat(project): playlist rows can be named, coloured, switched, added and taken out
+- feat(channel-rack): the rack filters by the song's own groups, as FL does
+- feat(flp): an FL song opens in FL's shape: its channels, rows and numbered inserts
+- chore(channel rack): the insert box's stylesheet is named apart from InsertBox.tsx
+- feat(i18n): Dutch for the mixer by number and the rack's insert box
+- fix(sample window): the Track box shows the same insert number as the mixer and the rack
+- feat(channel rack): the rack lists the song's channels and each shows the insert it plays into
+- feat(mixer): the routing panel lists inserts by number, and an empty one can be picked
+- feat(mixer): the mixer shows inserts by their number, with the empty numbers drawn
+- feat(mixer): make an insert and route channels to it by number, one undo step each
+- feat(project): an empty mixer number becomes an insert when something is routed to it
+- change: songs are saved in format 4; older DAW versions say the song was made by a newer version
