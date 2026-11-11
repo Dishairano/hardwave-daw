@@ -321,6 +321,10 @@ pub struct AudioGraph {
     /// The critical-path latency `finalize_pdc` worked out, with the chain
     /// delays it was told.
     planned_latency: u32,
+    /// Per node, the nanoseconds spent gathering its inputs and running
+    /// it, added up over the blocks since timing was switched on. `None`
+    /// (the default) times nothing. For measurements only.
+    node_nanos: Option<Vec<[u64; 2]>>,
 }
 
 impl AudioGraph {
@@ -341,7 +345,38 @@ impl AudioGraph {
             pool: None,
             delay_keys: Vec::new(),
             planned_latency: 0,
+            node_nanos: None,
         }
+    }
+
+    /// Start timing each node on the one-thread path (see
+    /// [`Self::node_nanos`]), from zero, or stop. For measurements only.
+    #[doc(hidden)]
+    pub fn time_nodes(&mut self, on: bool) {
+        self.node_nanos = on.then(|| vec![[0, 0]; self.nodes.len()]);
+    }
+
+    /// Per node, the nanoseconds spent gathering its inputs (sums and
+    /// compensation lines) and running it since [`Self::time_nodes`],
+    /// when timing is on.
+    #[doc(hidden)]
+    pub fn node_nanos(&mut self) -> Option<&mut [[u64; 2]]> {
+        self.node_nanos.as_deref_mut()
+    }
+
+    /// The name of a node, and whether it is an audio track, an
+    /// instrument track or the master. For measurements.
+    #[doc(hidden)]
+    pub fn node_label(&mut self, node_id: NodeId) -> Option<(String, &'static str)> {
+        let node = self.nodes.get_mut(node_id)?;
+        let name = node.name().to_string();
+        let kind = match node.as_any_mut() {
+            Some(any) if any.is::<crate::track_node::TrackNode>() => "track",
+            Some(any) if any.is::<crate::midi_track_node::MidiTrackNode>() => "instrument",
+            _ if name == "Master" => "master",
+            _ => "other",
+        };
+        Some((name, kind))
     }
 
     /// Mark a node as accepting external/live MIDI for the next call to
@@ -716,6 +751,7 @@ impl AudioGraph {
             if idle && self.silent[node_id] {
                 continue;
             }
+            let timed = self.node_nanos.is_some().then(std::time::Instant::now);
 
             // Zero the scratch's input buffers in place — no realloc.
             for ch in &mut self.scratch[node_id].ch_bufs {
@@ -769,6 +805,8 @@ impl AudioGraph {
                 }
             }
 
+            let gathered = timed.map(|t| (t.elapsed(), std::time::Instant::now()));
+
             // Run the node. Stack-allocated input_refs avoids a
             // per-iteration `Vec::collect`. NODE_CHANNELS is small + const
             // so the array stays cheap.
@@ -804,6 +842,12 @@ impl AudioGraph {
             std::mem::swap(&mut scratch.outputs, &mut self.buffers[node_id]);
             // An idle node wrote silence (the trait's promise).
             self.silent[node_id] = idle;
+            if let (Some(nanos), Some((gather, ran))) = (&mut self.node_nanos, gathered) {
+                if let Some(slot) = nanos.get_mut(node_id) {
+                    slot[0] += gather.as_nanos() as u64;
+                    slot[1] += ran.elapsed().as_nanos() as u64;
+                }
+            }
         }
     }
 
