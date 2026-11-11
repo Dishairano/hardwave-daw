@@ -1316,6 +1316,11 @@ impl HostedPlugin for Vst3PluginInstance {
         if res != kResultOk {
             return Err(format!("setState failed ({res})"));
         }
+        // Values the host set before this state are older than it: handed
+        // over after it, they put the old knobs back over a loaded preset.
+        // (The window's queue may be shared with a copy for the window,
+        // so it is left alone.)
+        inner.host_param_changes.clear();
         // A controller of its own does not see the component's state: told
         // nothing, its window showed its defaults over the loaded sound, and
         // the first knob touched sent those defaults to the audio.
