@@ -200,6 +200,8 @@ impl GraphBuilder {
         meters: &mut HashMap<String, Arc<TrackMeterState>>,
         seq: u64,
     ) -> Box<PreparedGraph> {
+        #[cfg(test)]
+        BUILDS_HERE.with(|n| n.set(n.get() + 1));
         let mut p = Box::new(PreparedGraph::new(seq, self.buffer_size));
         // Whether the work is shared across cores is a setting, and a
         // rebuild is where it is picked up. A busy lock keeps the pool the
@@ -1534,6 +1536,19 @@ pub(crate) enum BuildMode {
     Inline(Box<GraphBuilder>),
     /// Built on the builder thread and swapped in when ready.
     Thread(BuilderLink),
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many graphs were built on this thread, so a test can tell the
+    /// audio thread built none.
+    static BUILDS_HERE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many graphs were built on the calling thread.
+#[cfg(test)]
+pub(crate) fn builds_on_this_thread() -> usize {
+    BUILDS_HERE.with(|n| n.get())
 }
 
 /// The audio thread's end of the builder thread.
