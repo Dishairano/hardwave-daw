@@ -1,23 +1,35 @@
-//! Algorithmic reverb — Schroeder / Freeverb-style design with
-//! parallel comb filters and series allpass diffusion. Produces a
-//! smooth, dense tail suitable as the core of the Reverb plugin.
+//! Algorithmic reverb: a Schroeder / Freeverb-style design with eight
+//! parallel damped comb filters and four series allpass diffusers per
+//! channel. Produces a smooth, dense tail; the core of the Reverb plug-in.
 //!
-//! Design: 4 parallel damped combs → 2 series allpass diffusers, per
-//! channel. Decay comes from comb feedback; "room size" controls the
-//! comb delay lengths; "damping" attenuates high frequencies inside
-//! the comb feedback loop.
+//! "Size" sets the comb delay lengths (a bigger room has its echoes
+//! further apart), "decay" sets each comb's feedback so the tail falls
+//! 60 dB in that many seconds whatever the size, and "damping" rolls off
+//! high frequencies inside the comb feedback, so highs die away sooner.
+//! The wet signal is scaled so steady noise comes out about as loud as it
+//! went in, at any size, decay and damping, and the mix is an equal-power
+//! blend.
 
 use crate::biquad::{Biquad, BiquadKind};
 
-/// Max reverb delay across any comb line, in samples. Sized for
-/// long-tail halls at 48 kHz — 6000 samples ≈ 125 ms per comb.
-const MAX_COMB_SAMPLES: usize = 6000;
-const MAX_ALLPASS_SAMPLES: usize = 1000;
-
-/// Classic comb delay prime-length table (scaled by `room_size`).
-/// These prime lengths produce minimal mode overlap at any room size.
-const COMB_LENGTHS: [usize; 4] = [1687, 1601, 2053, 2251];
-const ALLPASS_LENGTHS: [usize; 2] = [389, 307];
+/// Freeverb's comb and allpass lengths, in samples at 44.1 kHz. They are
+/// scaled to the sample rate and, for the combs, to the room size.
+const COMB_TUNING: [f32; 8] = [
+    1116.0, 1188.0, 1277.0, 1356.0, 1422.0, 1491.0, 1557.0, 1617.0,
+];
+const ALLPASS_TUNING: [f32; 4] = [556.0, 441.0, 341.0, 225.0];
+/// The right channel's lines are this much longer, for a wide image.
+const STEREO_SPREAD: f32 = 23.0;
+const TUNING_RATE: f32 = 44_100.0;
+/// Room size 0..1 scales the comb lengths from half to one and a half.
+const SIZE_SCALE_MIN: f32 = 0.5;
+const SIZE_SCALE_RANGE: f32 = 1.0;
+/// The allpass diffusers' coefficient.
+const ALLPASS_GAIN: f32 = 0.5;
+/// Damping 0..1 sets the feedback low-pass coefficient up to this.
+const DAMP_SCALE: f32 = 0.4;
+/// Frequencies the wet level is averaged over, from 0 to half the rate.
+const LEVEL_BANDS: usize = 32;
 
 struct Comb {
     buffer: Vec<f32>,
@@ -29,94 +41,93 @@ struct Comb {
 }
 
 impl Comb {
-    fn new(length: usize) -> Self {
+    /// A comb that can be up to `capacity` samples long.
+    fn new(capacity: usize) -> Self {
         Self {
-            buffer: vec![0.0; MAX_COMB_SAMPLES],
+            buffer: vec![0.0; capacity.max(2)],
             write_pos: 0,
-            length: length.clamp(1, MAX_COMB_SAMPLES),
+            length: 1,
             feedback: 0.5,
             damp_lp_state: 0.0,
-            damp: 0.5,
+            damp: 0.0,
         }
     }
 
-    fn set_feedback(&mut self, fb: f32) {
-        self.feedback = fb.clamp(0.0, 0.98);
-    }
-
-    fn set_damping(&mut self, damp: f32) {
-        self.damp = damp.clamp(0.0, 0.99);
+    fn set_length(&mut self, length: usize) {
+        self.length = length.clamp(1, self.buffer.len() - 1);
     }
 
     fn reset(&mut self) {
-        for s in self.buffer.iter_mut() {
-            *s = 0.0;
-        }
+        self.buffer.fill(0.0);
         self.damp_lp_state = 0.0;
         self.write_pos = 0;
     }
 
     fn process(&mut self, input: f32) -> f32 {
-        let read_pos = (self.write_pos + MAX_COMB_SAMPLES - self.length) % MAX_COMB_SAMPLES;
+        let cap = self.buffer.len();
+        let read_pos = (self.write_pos + cap - self.length) % cap;
         let out = self.buffer[read_pos];
         // 1-pole LP on the feedback path for damping.
         self.damp_lp_state = out * (1.0 - self.damp) + self.damp_lp_state * self.damp;
-        let write_val = input + self.damp_lp_state * self.feedback;
-        self.buffer[self.write_pos] = write_val;
-        self.write_pos = (self.write_pos + 1) % MAX_COMB_SAMPLES;
+        self.buffer[self.write_pos] = input + self.damp_lp_state * self.feedback;
+        self.write_pos = (self.write_pos + 1) % cap;
         out
     }
 }
 
+/// A Schroeder allpass: every frequency comes out at the level it went
+/// in, only smeared in time. Freeverb's own "allpass" is not one (it
+/// lifts some frequencies by up to 4.4 dB), which made the wet level
+/// hard to predict.
 struct Allpass {
     buffer: Vec<f32>,
     write_pos: usize,
-    length: usize,
-    feedback: f32,
 }
 
 impl Allpass {
     fn new(length: usize) -> Self {
         Self {
-            buffer: vec![0.0; MAX_ALLPASS_SAMPLES],
+            buffer: vec![0.0; length.max(1)],
             write_pos: 0,
-            length: length.clamp(1, MAX_ALLPASS_SAMPLES),
-            feedback: 0.5,
         }
     }
 
     fn reset(&mut self) {
-        for s in self.buffer.iter_mut() {
-            *s = 0.0;
-        }
+        self.buffer.fill(0.0);
         self.write_pos = 0;
     }
 
     fn process(&mut self, input: f32) -> f32 {
-        let read_pos = (self.write_pos + MAX_ALLPASS_SAMPLES - self.length) % MAX_ALLPASS_SAMPLES;
-        let delayed = self.buffer[read_pos];
-        let out = -input + delayed;
-        self.buffer[self.write_pos] = input + delayed * self.feedback;
-        self.write_pos = (self.write_pos + 1) % MAX_ALLPASS_SAMPLES;
-        out
+        let delayed = self.buffer[self.write_pos];
+        let v = input + delayed * ALLPASS_GAIN;
+        self.buffer[self.write_pos] = v;
+        self.write_pos = (self.write_pos + 1) % self.buffer.len();
+        delayed - v * ALLPASS_GAIN
     }
 }
 
 /// Algorithmic reverb tail with parallel comb + series allpass.
-/// Stereo is built by spreading one set of comb lengths for L and a
-/// slightly-offset set for R to create a natural stereo image.
+/// Stereo is built by spreading one set of line lengths for L and a
+/// slightly longer set for R to create a natural stereo image.
 pub struct AlgorithmicReverb {
     combs_l: Vec<Comb>,
     combs_r: Vec<Comb>,
     allpass_l: Vec<Allpass>,
     allpass_r: Vec<Allpass>,
     room_size: f32,
-    damping: f32,
+    decay_secs: f32,
+    /// The combs' feedback low-pass coefficient.
+    damp: f32,
     pre_delay_l: Vec<f32>,
     pre_delay_r: Vec<f32>,
     pre_delay_pos: usize,
     pre_delay_samples: usize,
-    wet_mix: f32,
+    dry_gain: f32,
+    wet_gain: f32,
+    /// What the combs' sum is scaled by so the tail is as loud as the
+    /// input, worked out from the feedback whenever size or decay move.
+    level: f32,
+    tail_eq: bool,
     tail_filter_hp_l: Biquad,
     tail_filter_hp_r: Biquad,
     tail_filter_lp_l: Biquad,
@@ -126,66 +137,100 @@ pub struct AlgorithmicReverb {
 
 impl AlgorithmicReverb {
     pub fn new(sample_rate: f32) -> Self {
-        let mut combs_l = Vec::with_capacity(4);
-        let mut combs_r = Vec::with_capacity(4);
-        for &len in &COMB_LENGTHS {
-            combs_l.push(Comb::new(len));
-            combs_r.push(Comb::new(len + 23)); // stereo offset
-        }
-        let mut allpass_l = Vec::with_capacity(2);
-        let mut allpass_r = Vec::with_capacity(2);
-        for &len in &ALLPASS_LENGTHS {
-            allpass_l.push(Allpass::new(len));
-            allpass_r.push(Allpass::new(len + 17));
-        }
-        Self {
-            combs_l,
-            combs_r,
-            allpass_l,
-            allpass_r,
+        let sample_rate = sample_rate.max(1.0);
+        let rate = sample_rate / TUNING_RATE;
+        let longest = (COMB_TUNING[7] + STEREO_SPREAD) * rate * (SIZE_SCALE_MIN + SIZE_SCALE_RANGE);
+        let comb_capacity = longest.ceil() as usize + 2;
+        let combs = || {
+            (0..COMB_TUNING.len())
+                .map(|_| Comb::new(comb_capacity))
+                .collect()
+        };
+        let allpasses = |spread: f32| {
+            ALLPASS_TUNING
+                .iter()
+                .map(|&len| Allpass::new(((len + spread) * rate).round() as usize))
+                .collect()
+        };
+        let mut r = Self {
+            combs_l: combs(),
+            combs_r: combs(),
+            allpass_l: allpasses(0.0),
+            allpass_r: allpasses(STEREO_SPREAD),
             room_size: 0.5,
-            damping: 0.5,
+            decay_secs: 2.0,
+            damp: 0.0,
             pre_delay_l: vec![0.0; sample_rate as usize],
             pre_delay_r: vec![0.0; sample_rate as usize],
             pre_delay_pos: 0,
             pre_delay_samples: 0,
-            wet_mix: 0.3,
+            dry_gain: 1.0,
+            wet_gain: 0.0,
+            level: 1.0,
+            tail_eq: false,
             tail_filter_hp_l: Biquad::default(),
             tail_filter_hp_r: Biquad::default(),
             tail_filter_lp_l: Biquad::default(),
             tail_filter_lp_r: Biquad::default(),
-            sample_rate: sample_rate.max(1.0),
-        }
+            sample_rate,
+        };
+        r.set_mix(0.3);
+        r.set_damping(0.5);
+        r
     }
 
-    /// Room size in `[0, 1]`. Larger values push the comb feedback
-    /// toward longer decays.
-    pub fn set_room_size(&mut self, room_size: f32) {
-        let rs = room_size.clamp(0.0, 1.0);
-        self.room_size = rs;
-        let fb = 0.7 + rs * 0.28; // 0.70..0.98
-        for c in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
-            c.set_feedback(fb);
+    /// The combs' lengths for the room size, their damping, and their
+    /// feedback for the decay: a comb `len` samples long loses 60 dB over
+    /// the decay time when each pass takes `-60 * len / (rate * decay)` dB
+    /// off. Then the wet level that keeps steady noise at the level it
+    /// came in: at a frequency where a pass through the comb keeps `a` of
+    /// the level, the comb has `1 / (1 - a^2)` times its input's energy,
+    /// averaged here over the band, since damping lowers `a` in the highs.
+    fn retune(&mut self) {
+        let scale =
+            (SIZE_SCALE_MIN + SIZE_SCALE_RANGE * self.room_size) * self.sample_rate / TUNING_RATE;
+        let decay = self.decay_secs.max(0.01);
+        let d = self.damp;
+        // The damping low-pass's power gain in each band.
+        let mut lowpass = [0.0_f32; LEVEL_BANDS];
+        for (k, h) in lowpass.iter_mut().enumerate() {
+            let w = std::f32::consts::PI * (k as f32 + 0.5) / LEVEL_BANDS as f32;
+            *h = (1.0 - d) * (1.0 - d) / (1.0 - 2.0 * d * w.cos() + d * d);
         }
+        let mut energy = 0.0_f32;
+        for (combs, spread) in [(&mut self.combs_l, 0.0), (&mut self.combs_r, STEREO_SPREAD)] {
+            for (c, &tuning) in combs.iter_mut().zip(COMB_TUNING.iter()) {
+                c.set_length(((tuning + spread) * scale).round() as usize);
+                let g = 10f32.powf(-3.0 * c.length as f32 / (self.sample_rate * decay));
+                c.feedback = g.min(0.9999);
+                c.damp = d;
+                let g2 = c.feedback * c.feedback;
+                energy +=
+                    lowpass.iter().map(|&h| 1.0 / (1.0 - g2 * h)).sum::<f32>() / LEVEL_BANDS as f32;
+            }
+        }
+        // Both channels were summed: half of it is one channel's.
+        self.level = (2.0 / energy).sqrt();
+    }
+
+    /// Room size in `[0, 1]`: how far apart the echoes are. The decay
+    /// time stays as set.
+    pub fn set_room_size(&mut self, room_size: f32) {
+        self.room_size = room_size.clamp(0.0, 1.0);
+        self.retune();
     }
 
     /// Damping in `[0, 1]`. Higher values roll off high frequencies
     /// faster in each comb's feedback, producing a warmer tail.
     pub fn set_damping(&mut self, damping: f32) {
-        let d = damping.clamp(0.0, 1.0);
-        self.damping = d;
-        for c in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
-            c.set_damping(d);
-        }
+        self.damp = damping.clamp(0.0, 1.0) * DAMP_SCALE;
+        self.retune();
     }
 
-    /// Decay time proxy — maps directly to room size. Longer decay
-    /// means more feedback, i.e. larger room.
+    /// How long the tail takes to fall by 60 dB, in seconds.
     pub fn set_decay_time(&mut self, decay_secs: f32) {
-        // Invert the physical rough-scale: decay_secs = -3 * len / sr / ln(|fb|).
-        // Approximate by mapping decay_secs through room_size.
-        let normalized = (decay_secs / 10.0).clamp(0.0, 1.0);
-        self.set_room_size(normalized);
+        self.decay_secs = decay_secs.clamp(0.05, 30.0);
+        self.retune();
     }
 
     /// Pre-delay in milliseconds before the reverb tail starts.
@@ -194,42 +239,26 @@ impl AlgorithmicReverb {
         self.pre_delay_samples = samples.min(self.pre_delay_l.len().saturating_sub(1));
     }
 
-    /// Dry/wet mix. 0 = all dry, 1 = all wet.
+    /// Dry/wet mix. 0 = all dry, 1 = all wet; an equal-power blend in
+    /// between, so a mix keeps about the dry signal's loudness.
     pub fn set_mix(&mut self, mix: f32) {
-        self.wet_mix = mix.clamp(0.0, 1.0);
+        let m = mix.clamp(0.0, 1.0);
+        let angle = m * std::f32::consts::FRAC_PI_2;
+        self.dry_gain = if m >= 1.0 { 0.0 } else { angle.cos() };
+        self.wet_gain = if m <= 0.0 { 0.0 } else { angle.sin() };
     }
 
     /// Tail EQ: low-cut (high-pass) and high-cut (low-pass) shaping
-    /// on the wet signal only.
+    /// on the wet signal only. Until it is set the tail is not filtered.
     pub fn set_tail_eq(&mut self, low_cut_hz: f32, high_cut_hz: f32) {
-        self.tail_filter_hp_l.set(
-            BiquadKind::HighPass,
-            self.sample_rate,
-            low_cut_hz,
-            0.707,
-            0.0,
-        );
-        self.tail_filter_hp_r.set(
-            BiquadKind::HighPass,
-            self.sample_rate,
-            low_cut_hz,
-            0.707,
-            0.0,
-        );
-        self.tail_filter_lp_l.set(
-            BiquadKind::LowPass,
-            self.sample_rate,
-            high_cut_hz,
-            0.707,
-            0.0,
-        );
-        self.tail_filter_lp_r.set(
-            BiquadKind::LowPass,
-            self.sample_rate,
-            high_cut_hz,
-            0.707,
-            0.0,
-        );
+        let sr = self.sample_rate;
+        for f in [&mut self.tail_filter_hp_l, &mut self.tail_filter_hp_r] {
+            f.set(BiquadKind::HighPass, sr, low_cut_hz, 0.707, 0.0);
+        }
+        for f in [&mut self.tail_filter_lp_l, &mut self.tail_filter_lp_r] {
+            f.set(BiquadKind::LowPass, sr, high_cut_hz, 0.707, 0.0);
+        }
+        self.tail_eq = true;
     }
 
     pub fn reset(&mut self) {
@@ -239,12 +268,8 @@ impl AlgorithmicReverb {
         for a in self.allpass_l.iter_mut().chain(self.allpass_r.iter_mut()) {
             a.reset();
         }
-        for s in self.pre_delay_l.iter_mut() {
-            *s = 0.0;
-        }
-        for s in self.pre_delay_r.iter_mut() {
-            *s = 0.0;
-        }
+        self.pre_delay_l.fill(0.0);
+        self.pre_delay_r.fill(0.0);
         self.pre_delay_pos = 0;
         self.tail_filter_hp_l.reset();
         self.tail_filter_hp_r.reset();
@@ -280,26 +305,30 @@ impl AlgorithmicReverb {
         }
 
         // Series allpass diffusion.
-        let mut diff_l = comb_sum_l;
-        let mut diff_r = comb_sum_r;
+        let mut wet_l = comb_sum_l * self.level;
+        let mut wet_r = comb_sum_r * self.level;
         for a in self.allpass_l.iter_mut() {
-            diff_l = a.process(diff_l);
+            wet_l = a.process(wet_l);
         }
         for a in self.allpass_r.iter_mut() {
-            diff_r = a.process(diff_r);
+            wet_r = a.process(wet_r);
         }
 
-        // Tail EQ.
-        let wet_l = self
-            .tail_filter_lp_l
-            .process_mono(self.tail_filter_hp_l.process_mono(diff_l));
-        let wet_r = self
-            .tail_filter_lp_r
-            .process_mono(self.tail_filter_hp_r.process_mono(diff_r));
+        // Tail EQ. A filter that was never set has all-zero coefficients
+        // and silenced the whole wet signal: the plug-in never set it.
+        if self.tail_eq {
+            wet_l = self
+                .tail_filter_lp_l
+                .process_mono(self.tail_filter_hp_l.process_mono(wet_l));
+            wet_r = self
+                .tail_filter_lp_r
+                .process_mono(self.tail_filter_hp_r.process_mono(wet_r));
+        }
 
-        // Dry / wet mix.
-        let m = self.wet_mix;
-        (dry_l * (1.0 - m) + wet_l * m, dry_r * (1.0 - m) + wet_r * m)
+        (
+            dry_l * self.dry_gain + wet_l * self.wet_gain,
+            dry_r * self.dry_gain + wet_r * self.wet_gain,
+        )
     }
 }
 
@@ -314,17 +343,17 @@ mod tests {
         r.set_damping(0.3);
         r.set_mix(1.0);
         r.set_tail_eq(80.0, 10_000.0);
-        // Feed an impulse; expect a decaying tail over the next
-        // thousands of samples.
+        // Feed an impulse; expect a tail that is still there half a
+        // second later and quieter than its first tenth of a second.
         let mut energy_early = 0.0_f32;
         let mut energy_late = 0.0_f32;
         for t in 0..48_000 {
             let x = if t == 0 { 1.0 } else { 0.0 };
             let (l, _r) = r.process(x, x);
-            if (500..2000).contains(&t) {
+            if (0..4_800).contains(&t) {
                 energy_early += l * l;
             }
-            if (20_000..30_000).contains(&t) {
+            if (24_000..28_800).contains(&t) {
                 energy_late += l * l;
             }
         }
@@ -332,9 +361,11 @@ mod tests {
             energy_early > 0.0,
             "expected tail energy shortly after impulse"
         );
-        // Late energy should be less than early but still non-zero
-        // with room=0.7 (long decay).
-        assert!(energy_late > 0.0 && energy_late < energy_early * 2.0);
+        // The default 2 s decay: still ringing, and decaying.
+        assert!(
+            energy_late > 0.0 && energy_late < energy_early,
+            "late {energy_late} early {energy_early}"
+        );
     }
 
     #[test]
@@ -370,10 +401,10 @@ mod tests {
     }
 
     #[test]
-    fn reverb_decay_grows_with_room_size() {
-        fn tail_energy(room: f32) -> f32 {
+    fn reverb_tail_grows_with_decay_time() {
+        fn tail_energy(decay_secs: f32) -> f32 {
             let mut r = AlgorithmicReverb::new(48_000.0);
-            r.set_room_size(room);
+            r.set_decay_time(decay_secs);
             r.set_damping(0.2);
             r.set_mix(1.0);
             r.set_tail_eq(20.0, 20_000.0);
@@ -387,11 +418,11 @@ mod tests {
             }
             energy
         }
-        let small = tail_energy(0.2);
-        let large = tail_energy(0.9);
+        let small = tail_energy(0.5);
+        let large = tail_energy(4.0);
         assert!(
             large > small,
-            "larger room should have more tail: {large} vs {small}"
+            "a longer decay should have more tail: {large} vs {small}"
         );
     }
 

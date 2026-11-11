@@ -25,6 +25,21 @@ export const nlPlaylist: Record<string, string> = {
   'removed {name}': '{name} verwijderd',
   'Drop audio files here or add tracks from the toolbar': 'Sleep audiobestanden hierheen of voeg sporen toe via de werkbalk',
 
+  // Playlist rows (FL's playlist tracks)
+  'Row name': 'Naam van de rij',
+  'Mute this row: its clips go quiet': 'Rij dempen: de clips erop zwijgen',
+  'Unmute this row: its clips play again': 'Rij niet meer dempen: de clips spelen weer',
+  'Solo this row: only soloed rows play': 'Rij solo: alleen solo-rijen spelen',
+  'Unsolo this row': 'Solo van deze rij uit',
+  'Colour': 'Kleur',
+  'Mute row': 'Rij dempen',
+  'Unmute row': 'Rij niet meer dempen',
+  'Solo row': 'Rij solo',
+  'Unsolo row': 'Solo van rij uit',
+  'Insert row above': 'Rij erboven invoegen',
+  'Delete row': 'Rij verwijderen',
+  'Delete automation clip': 'Automatiseringsclip verwijderen',
+
   // Playlist: files and samples dropped on it
   'Could not add the sample: {error}': 'De sample kon niet worden toegevoegd: {error}',
   'Dropped file is not a supported audio format': 'Het neergezette bestand heeft geen ondersteund audioformaat',

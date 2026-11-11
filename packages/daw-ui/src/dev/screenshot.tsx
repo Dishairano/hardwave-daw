@@ -9,6 +9,7 @@
  * production bundle (index.html → main.tsx) never imports this.
  */
 import { MOCK_DRUM_FOLDER } from './tauri-mock' // must be first: installs window.__TAURI_INTERNALS__
+import { flSongTracks } from './flSongSeed'
 import '../fonts'
 import '../mockup.css' // the real top bar uses the fl-* classes from here
 import '../rework.css'
@@ -42,9 +43,12 @@ import { StemsDialog } from '../components/arrangement/StemsDialog'
 import { useCollabStore } from '../stores/collabStore'
 import { Arrangement } from '../components/arrangement/Arrangement'
 import { ChannelRack } from '../components/channelrack/ChannelRack'
+import { FL_SONG_CHANNELS, FL_SONG_GROUPS } from './flSongRack'
 import { PianoRoll } from '../components/piano-roll/PianoRoll'
 import { MixerPanel } from '../components/mixer/MixerPanel'
 import { useTrackStore, type TrackWithClips, type ClipInfo } from '../stores/trackStore'
+import { usePlaylistRowsStore } from '../stores/playlistRowsStore'
+import { useGeneralPrefsStore } from '../stores/generalPrefsStore'
 import { useTransportStore } from '../stores/transportStore'
 import { usePatternStore } from '../stores/patternStore'
 import { useTempoMapStore } from '../stores/tempoMapStore'
@@ -102,6 +106,30 @@ function RackShot() {
 /** A new song as it opens: Kick (the kick synth), Clap, Hat and Snare on the
  *  first rows, the samplers naming the drums installed with the app, and
  *  nothing open in the piano roll. */
+/** The channel rack with the founder's FL song as the FL import makes it:
+ *  106 channels in FL's groups, the group filter over them. */
+function FlRackShot() {
+  React.useState(() => {
+    const kinds: Record<string, string> = { Sampler: 'Midi', Instrument: 'Midi', AudioClip: 'Audio', Automation: 'Automation' }
+    const song = [
+      track('fl-master', 'Master', '#a1a1aa', [], 'Master'),
+      ...FL_SONG_CHANNELS.map(([name, color, group, kind], i) => ({
+        ...track(`fl-ch-${i}`, name, color, [], kinds[kind] ?? 'Audio'),
+        volume_db: 0,
+        muted: kind === 'Instrument',
+        rackGroup: group,
+        mixerNumber: null,
+      })),
+    ]
+    const w = window as unknown as { __hwMockTracks?: unknown[]; __hwMockRackGroups?: string[] }
+    w.__hwMockTracks = song
+    w.__hwMockRackGroups = FL_SONG_GROUPS
+    useTrackStore.setState({ tracks: song, tracksById: Object.fromEntries(song.map((t) => [t.id, t])) } as never)
+    return null
+  })
+  return <ChannelRack />
+}
+
 function seedNewSong() {
   const sampler = (id: string, file: string) => [{
     id: `slot-${id}`, pluginId: 'hardwave.native.sampler', pluginName: 'Hardwave Sampler',
@@ -115,6 +143,7 @@ function seedNewSong() {
     { ...track('insert-004', 'Snare', '#F59E0B', [], 'Midi'), inserts: sampler('snare', 'Snare 1.wav'), insert_count: 1, volume_db: -3 },
     ...Array.from({ length: 6 }, (_, i) => track(`insert-${String(i + 5).padStart(3, '0')}`, `Insert ${i + 5}`, '#52525b', [])),
   ]
+  numberAsBefore(song)
   useTrackStore.setState({
     tracks: song,
     tracksById: Object.fromEntries(song.map((t) => [t.id, t])),
@@ -207,6 +236,18 @@ function NewControllerShot() {
 
 // ---- seed sample data -----------------------------------------------------
 
+/** Number a seeded song the way a song made before FL's three lists opens
+ *  (step 1's migration): the master 0, then every track that is not
+ *  automation 1, 2, 3 in order; every track the rack listed before (not an
+ *  "insert-NNN" row, or a MIDI one) in rack group 0. */
+function numberAsBefore(song: TrackWithClips[]) {
+  let next = 1
+  for (const t of song) {
+    t.mixerNumber = t.kind === 'Master' ? 0 : t.kind === 'Automation' ? null : next++
+    t.rackGroup = t.kind !== 'Master' && t.kind !== 'Bus' && (!t.id.startsWith('insert-') || t.kind === 'Midi') ? 0 : null
+  }
+}
+
 let clipSeq = 0
 function clip(name: string, sourceId: string, posBars: number, lenBars: number, kind = 'Audio'): ClipInfo {
   const bar = 960 * 4
@@ -276,6 +317,91 @@ tracks[0].inserts = [
 ]
 tracks[0].insert_count = 2
 
+numberAsBefore(tracks)
+
+/** The rows a song made before FL's rows has: each track's own row with
+ *  its name and colour, then a row per automation lane and clip under it
+ *  (what `Project::lay_out_as_before` writes). */
+function rowsAsBefore(list: TrackWithClips[]) {
+  const rows: { name: string; color: string | null; muted: boolean; soloed: boolean }[] = []
+  for (const t of list) {
+    if (t.kind === 'Master') continue
+    rows.push({ name: t.name, color: t.color, muted: false, soloed: false })
+    const under = t.automationLanes.length + (t.automationClips?.length ?? 0)
+    for (let i = 0; i < under; i++) rows.push({ name: '', color: null, muted: false, soloed: false })
+  }
+  return rows
+}
+;(window as unknown as { __hwMockRows?: unknown[] }).__hwMockRows = rowsAsBefore(tracks)
+usePlaylistRowsStore.setState({ rows: rowsAsBefore(tracks) as never })
+
+/**
+ * An FL song in the playlist's rows, the shape of mockup M1: unnamed rows
+ * ("Track N") in FL's row colours, clips of several channels side by side
+ * on one row, automation clips on the grid on rows of their own, and row
+ * 11 switched off. &menu=N opens row N's menu, &tip=1 rests the pointer on
+ * a clip of row 19.
+ */
+function seedFlRows() {
+  const bar = 960 * 4
+  const on = (c: ClipInfo, row: number): ClipInfo => ({ ...c, row })
+  const seq = (name: string, src: string, row: number, from: number, to: number, len = 1, every = 1) =>
+    Array.from({ length: Math.floor((to - from) / every) }, (_, i) => on(clip(name, src, from + i * every, len), row))
+  const auto = (id: string, row: number, from: number, len: number, points: [number, number][], color: number) => ({
+    id, target: { kind: 'track_volume' as const }, startTick: from * bar, lengthTicks: len * bar,
+    colorArgb: color, row,
+    points: points.map(([b, v]) => ({ tick: b * bar, value: v, curve: 'Linear', tension: 0 })),
+  })
+  const snare = track('ch-909', '909 Snare', '#e05a6d', [
+    ...seq('909 Snare', 'src-kick', 18, 0, 16, 0.25, 0.5),
+  ])
+  snare.automationClips = [
+    auto('ac-snare-vol', 3, 0, 7, [[0, 0.2], [7, 0.9]], 0xffb06a5a),
+    auto('ac-snare-pitch', 2, 0, 8, [[0, 0.5], [6, 0.5], [8, 1]], 0xffa0609a),
+  ]
+  const kick = track('ch-kick', 'KIT_01_Kick_02', '#d6334f', [
+    ...seq('KIT_01_Kick_02', 'src-kick', 18, 0.25, 16, 0.25, 0.5),
+    ...seq('KIT_01_Kick_02', 'src-kick', 4, 8, 16, 1, 1),
+  ])
+  const melodic = track('ch-mel', 'TKNVLT_HGE1_MELODIC_LOOP_9', '#b8336a', [
+    on(clip('TKNVLT_HGE1_MELODIC_LOOP_9', 'src-crash', 9, 4), 18),
+    on(clip('TKNVLT_HGE1_MELODIC_LOOP_9', 'src-crash', 13, 3), 18),
+  ])
+  const drums = track('ch-drum', 'IT_Drum_Loop_15_Kick_Loop_135', '#c2185b', [
+    ...seq('IT_Drum_Loop_15_Kick_Loop_135', 'src-kick', 5, 0, 16, 4, 4),
+    on(clip('IT_Drum_Loop_15_Kick_Loop_135', 'src-kick', 0, 4), 1),
+  ])
+  const top = track('ch-top', 'TOP_LOOP_135BPM', '#7b1fa2', seq('TOP_LOOP_135BPM (2)', 'src-crash', 7, 4, 16, 4, 4))
+  const attitude = track('ch-att', 'THM - Attitude - Push', '#ad1457', [
+    on(clip('THM - Attitude - Push', 'src-vox-1', 4, 4), 9),
+    on(clip('THM - Downlifter 14', 'src-vox-2', 8, 2), 10),
+    on(clip('THM - White Noise Up', 'src-vox-3', 4, 3), 12),
+  ])
+  const bass = track('ch-bass', 'KIT_02_Bass_02_128BPM', '#c62828', [
+    ...seq('KIT_02_Bass_02_128BPM', 'src-bass', 3, 8, 16, 2, 2),
+    ...seq('KIT_02_Bass_02_128BPM', 'src-bass', 0, 0, 16, 1, 1),
+  ])
+  const master = track('master', 'Master', '#a1a1aa', [], 'Master')
+  master.automationClips = [auto('ac-master-vol', 20, 12, 4, [[0, 1], [3, 1], [4, 0.6]], 0xff3f8a6a)]
+  // A fader of its own for each channel, playing into numbered inserts.
+  const song = [master, snare, kick, melodic, drums, top, attitude, bass].map((t, i) => (
+    i === 0 ? { ...t, mixerNumber: 0 } : { ...t, rackGroup: 0, mixerNumber: [0, 18, 4, 7, 2, 9, 11, 3][i] }
+  ))
+  const colours = ['#a83c5a', '#a04060', '#8e3a6e', '#7c3a7a', '#a83c5a', '#9a3a5e', '#863a72', '#a83c5a', '#7c3a7a', '#9a3a5e', '#a83c5a',
+    '#8e3a6e', '#a04060', '#7c3a7a', '#a83c5a', '#9a3a5e', '#863a72', '#a83c5a', '#a04060', '#7c3a7a', '#8e3a6e', '#a83c5a']
+  const rows = colours.map((color, i) => ({ name: '', color, muted: i === 10, soloed: false }))
+  useTrackStore.setState({
+    tracks: song, tracksById: Object.fromEntries(song.map((t) => [t.id, t])),
+    selectedClipId: null, selectedClipIds: new Set(),
+  } as never)
+  useTransportStore.setState({ bpm: 130, horizontalZoom: 0.55, trackHeight: 28 } as never)
+  useGeneralPrefsStore.setState({ tempoLaneShown: false } as never)
+  usePlaylistRowsStore.setState({ rows: rows as never, selectedRow: null })
+  const w = window as unknown as { __hwMockTracks?: unknown[]; __hwMockRows?: unknown[] }
+  w.__hwMockTracks = JSON.parse(JSON.stringify(song))
+  w.__hwMockRows = rows
+}
+
 const selected = tracks[2].clips[0].id // Crash — red selection header stands out
 useTrackStore.setState({
   tracks,
@@ -324,6 +450,19 @@ const panel = new URLSearchParams(location.search).get('panel') || 'playlist'
 // ?timesigat=16:7/8 adds a change at beat 16, so a mid-song signature change
 // can be seen rather than taken on trust.
 const params = new URLSearchParams(location.search)
+
+// ?song=fl: the founder's FL song in FL's shape (mockups M2 and M3), for the
+// mixer and channel rack shots.
+if (params.get('song') === 'fl') {
+  const song = flSongTracks()
+  useTrackStore.setState({
+    tracks: song,
+    tracksById: Object.fromEntries(song.map((t) => [t.id, t])),
+    selectedTrackId: null, selectedClipId: null, selectedClipIds: new Set(),
+    activeMidiTrackId: null, activeMidiClipId: null,
+  } as never)
+  ;(window as unknown as { __hwMockTracks?: unknown[] }).__hwMockTracks = JSON.parse(JSON.stringify(song))
+}
 
 function parseSignature(text: string | null): { num: number; den: number } | null {
   if (!text) return null
@@ -417,6 +556,9 @@ function Harness() {
       return <Full><MixerPanel /></Full>
     case 'channelrack':
       return <Full><RackShot /></Full>
+    case 'flrack':
+    case 'flrackauto':
+      return <Full><FlRackShot /></Full>
     case 'newsong':
       seedNewSong()
       return <NewSongShot />
@@ -790,6 +932,47 @@ function Harness() {
           <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <HwPlaylistTools />
             <div className="fl-pl-body" style={{ ['--row-h' as never]: '56px' }}>
+              <HwPlaylistTracks />
+              <div className="fl-pl-grid">
+                <div className="fl-pl-canvas">
+                  <Arrangement onSetHint={noop} />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    case 'flrows': {
+      // Mockup M1: an FL song's rows. &menu=N opens row N's menu (1-based)
+      // and &tip=1 rests the pointer on a clip of row 19.
+      seedFlRows()
+      const q = new URLSearchParams(location.search)
+      const menuRow = Number(q.get('menu') || 0)
+      setTimeout(() => {
+        if (menuRow > 0) {
+          const el = document.querySelector(`[data-row="${menuRow - 1}"]`) as HTMLElement | null
+          const r = el?.getBoundingClientRect()
+          if (el && r) el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.left + 40, clientY: r.top + r.height / 2 }))
+        }
+        if (q.get('tip')) {
+          const canvas = document.querySelector('[data-testid="arrangement-canvas"]') as HTMLElement | null
+          const r = canvas?.getBoundingClientRect()
+          const h = useTransportStore.getState().trackHeight
+          if (canvas && r) {
+            const at = { bubbles: true, clientX: r.left + 230, clientY: r.top + 22 + 18 * h + h / 2 }
+            canvas.dispatchEvent(new MouseEvent('mousemove', at))
+          }
+        }
+      }, 900)
+      return (
+        <div className="fl-app" style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#08080c' }}>
+          <HwTopbar showPlaylist showChannelRack={false} showPianoRoll={false} showMixer={false} projectName="RyZe Take U TIme">
+            <HwSecondRow />
+          </HwTopbar>
+          <div className="fl-playlist" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <HwPlaylistTools />
+            <div className="fl-pl-body" style={{ ['--row-h' as never]: '28px' }}>
               <HwPlaylistTracks />
               <div className="fl-pl-grid">
                 <div className="fl-pl-canvas">

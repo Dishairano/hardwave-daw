@@ -13,7 +13,9 @@ import type { TrackInfo } from '../../stores/trackStore'
 import { isBuiltIn, openPluginWindow } from '../plugins/openPluginWindow'
 import { useNotificationStore } from '../../stores/notificationStore'
 import { mixHex } from '../../lib/color'
-import { channelKindShown, type ChannelKindFilter } from '../../lib/channelKindFilter'
+import { inRackGroup, keptRackGroupFilter, rackGroupButtons, type RackGroupFilter as GroupFilter } from '../../lib/rackGroupFilter'
+import { useRackGroupStore } from '../../stores/rackGroupStore'
+import { RackGroupButtons } from './RackGroupButtons'
 import { t, tf, useLanguage } from '../../i18n'
 import { addInstrumentChannel as addInstrumentChannelTo, channelSound } from '../../stores/instrumentChannels'
 import { useTransportStore } from '../../stores/transportStore'
@@ -22,6 +24,8 @@ import { useDropTarget } from '../../lib/pointerDrag'
 import { sendToChannel } from '../browser/fileActions'
 import { KickSynthEditor } from '../KickSynthEditor'
 import { ChannelNameTip, channelTip } from './ChannelNameTip'
+import { InsertBox } from './InsertBox'
+import { rackChannels } from '../../lib/mixerNumbers'
 
 const STEPS = STEPS_PER_PATTERN
 const DEFAULT_VEL = 0.85
@@ -74,7 +78,15 @@ export function ChannelRack() {
     [allPlugins],
   )
   const [instPickerOpen, setInstPickerOpen] = useState(false)
-  const [kindFilter, setKindFilter] = useState<ChannelKindFilter>('All')
+  // FL's group filter: All, or one of the song's groups.
+  const [groupFilter, setGroupFilter] = useState<GroupFilter>('all')
+  const rackGroups = useRackGroupStore(s => s.groups)
+  const fetchRackGroups = useRackGroupStore(s => s.fetchGroups)
+  // The song's groups are read again whenever a channel's group could have
+  // changed: another song, or channels added or moved.
+  const groupKey = tracks.map(t => t.rackGroup ?? '-').join(',')
+  useEffect(() => { void fetchRackGroups() }, [groupKey, fetchRackGroups])
+  useEffect(() => { setGroupFilter(f => keptRackGroupFilter(f, rackGroups)) }, [rackGroups])
 
   const addInstrumentChannel = useCallback(async (pluginId: string, pluginName: string) => {
     setInstPickerOpen(false)
@@ -140,19 +152,12 @@ export function ChannelRack() {
         .catch(report('The sample did not load'))
     },
   })
-  // Channels are decoupled from playlist inserts. The 500 pre-allocated
-  // `insert-NNN` tracks are mixer/playlist slots, not channels — they
-  // don't belong in the Channel Rack. Channels start empty; the user
-  // creates them via the [+] button.
-  // Instrument tracks are channels wherever they sit: a starter song puts
-  // its instruments on the first playlist rows, and they belong here too.
-  const allChannels = tracks.filter(t =>
-    t.kind !== 'Master' && (!t.id.startsWith('insert-') || (t.kind || '').toLowerCase() === 'midi'))
-  // Each track's number in the mixer, counted the way the mixer counts its
-  // strips, for the column saying where a channel's sound goes.
-  const stripNumber = useMemo(() => new Map(
-    tracks.filter((t) => t.kind !== 'Master' && t.kind !== 'Automation').map((t, i) => [t.id, i + 1]),
-  ), [tracks])
+  // The rack lists the song's channels: every track in a rack group, in
+  // the song's order, as FL lists its channels. It guessed from ids before
+  // (not an "insert-NNN" track, or a MIDI one), so an FL song's audio clip
+  // channels never showed. A song made before opens with the same tracks
+  // in its one group, Unsorted.
+  const allChannels = rackChannels(tracks)
   // Channels picked with Ctrl-click (one more) or Shift-click (a range) on
   // their names, for the Channels menu. With none picked the selected
   // channel is what "selected" means, as in FL.
@@ -296,13 +301,13 @@ export function ChannelRack() {
   for (const f of folders) for (const tid of f.trackIds) folderByTrack.set(tid, f)
   const channels = allChannels.filter(t => {
     const f = folderByTrack.get(t.id)
-    return !(f && f.collapsed) && channelKindShown(kindFilter, t.kind)
+    return !(f && f.collapsed) && inRackGroup(groupFilter, t.rackGroup)
   })
   const shownFolderHeaders = new Set<string>()
   const channelRows: Array<{ kind: 'folderHeader'; folder: TrackFolder } | { kind: 'channel'; channelIdx: number }> = []
   let visibleIdx = 0
   allChannels.forEach(t => {
-    if (!channelKindShown(kindFilter, t.kind)) return
+    if (!inRackGroup(groupFilter, t.rackGroup)) return
     const f = folderByTrack.get(t.id)
     if (f && !shownFolderHeaders.has(f.id)) {
       channelRows.push({ kind: 'folderHeader', folder: f })
@@ -554,18 +559,7 @@ export function ChannelRack() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 1 }}>
-          {(['All', 'Audio', 'MIDI'] as const).map(g => (
-            <button key={g} onClick={() => setKindFilter(g)} style={{
-              ...topBtn, width: 'auto', padding: '0 9px',
-              fontSize: 11, color: g === kindFilter ? hw.textBright : hw.textMuted,
-              background: g === kindFilter ? hw.accentDim : 'transparent',
-              border: `1px solid ${g === kindFilter ? hw.accentGlow : 'transparent'}`,
-            }}>
-              {t(g)}
-            </button>
-          ))}
-        </div>
+        <RackGroupButtons buttons={rackGroupButtons(rackGroups, allChannels)} filter={groupFilter} onPick={setGroupFilter} />
 
         <TbSep />
 
@@ -959,19 +953,10 @@ export function ChannelRack() {
                 />
               </div>
 
-              {/* 4. Mixer track #: the strip its sound goes to, as FL shows
-                  the insert. It showed the channel's place in the rack. */}
-              <div
-                title={ch.outputBus
-                  ? tf('Plays into mixer track {n}', { n: stripNumber.get(ch.outputBus) ?? '?' })
-                  : tf('Plays through its own mixer track ({n}) into the master', { n: stripNumber.get(ch.id) ?? '?' })}
-                style={{
-                  width: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 11, color: ch.outputBus ? hw.textSecondary : hw.textMuted,
-                  fontFamily: "'JetBrains Mono', Consolas, monospace",
-                }}
-              >
-                {stripNumber.get(ch.outputBus ?? ch.id) ?? '-'}
+              {/* 4. The insert it plays into, by the mixer's number (M for the
+                  master); click, drag or scroll on it to route the channel. */}
+              <div style={{ width: 34, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <InsertBox trackId={ch.id} name={ch.name} />
               </div>
 
               {/* 5. Channel name, with what it plays on the right */}

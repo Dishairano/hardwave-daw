@@ -32,8 +32,21 @@ fn with_clips<T>(
     result
 }
 
-/// Create an automation clip on a track targeting a parameter. Returns
-/// the new clip id.
+/// The row a new automation clip goes on: the one asked for, else the
+/// first row with nothing on it, so it is on the grid where it can be seen
+/// and never on top of another clip.
+fn row_for_new_clip(state: &State<AppState>, row: Option<u32>) -> Result<u32, String> {
+    match row {
+        Some(r) => {
+            hardwave_project::row_edit::check_row_number(r)?;
+            Ok(r)
+        }
+        None => Ok(state.engine.lock().project.lock().first_empty_row()),
+    }
+}
+
+/// Create an automation clip on a track targeting a parameter, on `row`
+/// (or the first empty row). Returns the new clip id.
 #[tauri::command]
 pub fn create_automation_clip(
     state: State<AppState>,
@@ -41,16 +54,15 @@ pub fn create_automation_clip(
     target: LaneTargetSpec,
     start_tick: u64,
     length_ticks: u64,
+    row: Option<u32>,
 ) -> Result<String, String> {
+    let row = row_for_new_clip(&state, row)?;
     let id = Uuid::new_v4().to_string();
     let id_out = id.clone();
     with_clips(&state, &track_id, |clips| {
-        clips.push(AutomationClip::new(
-            id,
-            target.into(),
-            start_tick,
-            length_ticks.max(1),
-        ));
+        let mut clip = AutomationClip::new(id, target.into(), start_tick, length_ticks.max(1));
+        clip.row = Some(row);
+        clips.push(clip);
         Ok(())
     })?;
     Ok(id_out)
@@ -206,6 +218,7 @@ pub fn create_param_automation_clip(
 ) -> Result<String, String> {
     let (start, per_bar) = playhead_bar(&state);
     let length = per_bar * 8;
+    let row = row_for_new_clip(&state, None)?;
     let id = Uuid::new_v4().to_string();
     let id_out = id.clone();
     with_clips(&state, &track_id, |clips| {
@@ -215,6 +228,7 @@ pub fn create_param_automation_clip(
             start,
             length,
         );
+        clip.row = Some(row);
         clip.insert_point(0, value, CurveMode::Linear);
         clip.insert_point(length, value, CurveMode::Linear);
         clips.push(clip);

@@ -1186,7 +1186,20 @@ impl AudioNode for MidiTrackNode {
         if self.release_live {
             self.live_fx.forget();
         }
-        let block_len = outputs.first().map_or(ctx.buffer_size as usize, Vec::len);
+        // The frames this block plays: the ones the context names, not the
+        // length of the buffers. The graph makes its buffers as long as the
+        // block it was built for, and a sound card can ask for fewer (on
+        // Windows a 480-frame block to a graph built for 512 is common).
+        // Reading the buffers' length put the playhead's end of the block
+        // past where the next block started, so every block looked like a
+        // jump: a note held by a plug-in instrument was let go a few
+        // milliseconds after it started, the built-in synth's voices were
+        // released with it, and only an export (whose blocks always fill the
+        // buffers) played the note to its end.
+        let block_len = outputs
+            .first()
+            .map_or(0, Vec::len)
+            .min(ctx.buffer_size as usize);
         let tempo = if ctx.tempo > 0.0 { ctx.tempo } else { 120.0 };
         let samples_per_tick = ctx.sample_rate * 60.0 / (tempo * hardwave_midi::PPQ as f64);
         self.live_fx
@@ -1319,7 +1332,7 @@ impl AudioNode for MidiTrackNode {
         }
 
         let sr = ctx.sample_rate as f32;
-        let block_size = outputs.first().map(|b| b.len()).unwrap_or(0);
+        let block_size = block_len;
         if block_size == 0 {
             return;
         }
@@ -2059,6 +2072,10 @@ impl AudioNode for MidiTrackNode {
         self.next_note_idx = 0;
         self.last_block_end = 0;
         self.rms_smooth = 0.0;
+    }
+
+    fn flush_plugin_parameters(&mut self) {
+        self.chain.flush_parameters();
     }
 
     fn snapshot_plugin_states(&self) -> Vec<(String, Vec<u8>)> {
@@ -3083,6 +3100,113 @@ mod tests {
                 .any(|e| matches!(e, MidiEvent::NoteOff { note: 60, .. })),
             "the held note must be let go, got {got:?}"
         );
+    }
+
+    /// Plays `node` from the top for `frames` frames, `device` frames a
+    /// block into buffers `buffers` long, as a sound card that asks for
+    /// fewer frames than the graph was built for does. Returns the left
+    /// side as heard, and where each event the plug-in got lands in the
+    /// song.
+    fn play_in_device_blocks(
+        node: &mut MidiTrackNode,
+        received: Option<&std::sync::Mutex<Vec<MidiEvent>>>,
+        device: usize,
+        buffers: usize,
+        frames: usize,
+    ) -> (Vec<f32>, Vec<(u64, MidiEvent)>) {
+        let inputs: [&[f32]; 0] = [];
+        let mut heard = Vec::with_capacity(frames);
+        let mut events = Vec::new();
+        let mut pos = 0usize;
+        while pos < frames {
+            let n = device.min(frames - pos);
+            let mut out = block_outputs(buffers);
+            let ctx = ctx_at(48_000.0, n as u32, pos as u64, true);
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+            heard.extend_from_slice(&out[0][..n]);
+            if let Some(received) = received {
+                for e in received.lock().unwrap().drain(..) {
+                    let at = match e {
+                        MidiEvent::NoteOn { timing, .. } | MidiEvent::NoteOff { timing, .. } => {
+                            timing as u64
+                        }
+                        _ => 0,
+                    };
+                    events.push((pos as u64 + at, e));
+                }
+            }
+            pos += n;
+        }
+        (heard, events)
+    }
+
+    /// A plug-in instrument holds a clip's note for its whole length when
+    /// the sound card asks for 480 frames from a graph built for 512, as
+    /// Windows does. Every block used to read as a jump of the playhead, so
+    /// the plug-in was told to let go one block after the note began and
+    /// the note died away in a fifth of a second while an export held it.
+    #[test]
+    fn a_plug_in_holds_a_note_its_whole_length_when_the_device_asks_for_fewer_frames() {
+        let (mut node, received) = spied_node(0, 48_000, false);
+        let (_, events) = play_in_device_blocks(&mut node, Some(&received), 480, 512, 60_000);
+        let got: Vec<(u64, bool)> = events
+            .iter()
+            .filter_map(|(at, e)| match e {
+                MidiEvent::NoteOn { note: 60, .. } => Some((*at, true)),
+                MidiEvent::NoteOff { note: 60, .. } => Some((*at, false)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![(0, true), (48_000, false)],
+            "one note-on at the start and one note-off at the note's end"
+        );
+    }
+
+    /// The built-in synth and the kick sound the same whether the device's
+    /// block fills the graph's buffers or not: the voices were released one
+    /// block in, and every block skipped ahead by the frames it was not
+    /// asked for.
+    #[test]
+    fn the_built_in_instruments_play_the_same_when_the_device_asks_for_fewer_frames() {
+        for instrument in [Instrument::BuiltinSine, Instrument::KickSynth] {
+            let make = || {
+                let mut node = make_node();
+                node.set_instrument(instrument, 48_000.0);
+                node.set_notes(vec![
+                    MidiNoteRegion {
+                        note_on_sample: 0,
+                        note_off_sample: 24_000,
+                        pitch: 57,
+                        velocity: 0.8,
+                        ..Default::default()
+                    },
+                    MidiNoteRegion {
+                        note_on_sample: 30_500,
+                        note_off_sample: 40_000,
+                        pitch: 57,
+                        velocity: 0.8,
+                        ..Default::default()
+                    },
+                ]);
+                node
+            };
+            let (whole, _) = play_in_device_blocks(&mut make(), None, 480, 480, 48_000);
+            let (short, _) = play_in_device_blocks(&mut make(), None, 480, 512, 48_000);
+            let worst = whole
+                .iter()
+                .zip(&short)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 1e-6, "{instrument:?} differs by {worst}");
+            if instrument == Instrument::BuiltinSine {
+                let late = short[20_000..21_000]
+                    .iter()
+                    .fold(0.0f32, |m, s| m.max(s.abs()));
+                assert!(late > 0.05, "the note is still held at 0.42 s: {late}");
+            }
+        }
     }
 
     /// A loop in this track's row of the launcher: 1,000 samples long,

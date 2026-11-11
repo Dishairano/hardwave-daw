@@ -849,3 +849,116 @@
   justify-content: center;
 }
 .mx-detach:hover { color: var(--mx-text); background: rgba(255, 255, 255, 0.09); }
+
+/* ---- the mixer by number (FL layout step 3, mockup M2) ---- */
+
+.mx-v2-root:focus { outline: none; }
+
+/* An insert number with no track behind it: dimmed, its number and
+   "Insert N", the word "empty" and a bare rail where the fader would be. */
+.mx-v2-root .mx-strip.empty {
+  background: #0d0d10;
+  cursor: default;
+}
+.mx-v2-root .mx-strip.empty:hover { background: #111115; }
+.mx-v2-root .mx-strip.empty .mx-s-num-idx {
+  background: #1b1b21;
+  color: #71717a;
+}
+.mx-v2-root .mx-strip.empty .mx-s-name {
+  color: #5f5f69 !important;
+  font-weight: 500;
+}
+.mx-v2-root .mx-strip.empty.selected { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55); }
+.mx-s-empty-note {
+  order: 2;
+  flex: 1;
+  padding-top: 16px;
+  font-size: 9.5px;
+  color: #4b4b55;
+  text-align: center;
+  font-style: normal;
+}
+.mx-s-empty-rail {
+  order: 3;
+  flex: 0 0 330px;
+  max-height: 55%;
+  position: relative;
+  margin: 8px 0 6px;
+}
+.mx-s-empty-rail span {
+  position: absolute;
+  left: 24px;
+  top: 4px;
+  bottom: 4px;
+  width: 4px;
+  border-radius: 2px;
+  background: #16161a;
+}
+.mx-v2-root .mx-strip.empty .mx-s-db,
+.mx-v2-root .mx-strip.empty .mx-s-out { min-height: 22px; }
+
+/* Renaming a strip in place. */
+.mx-s-name-input {
+  order: 1;
+  margin: 6px 4px 2px;
+  min-height: 26px;
+  width: calc(100% - 8px);
+  box-sizing: border-box;
+  padding: 0 4px;
+  border: 1px solid #ef4444;
+  border-radius: 4px;
+  background: #0b0b0f;
+  color: #fff;
+  font: 600 11.5px Inter, 'Segoe UI', system-ui, sans-serif;
+  text-align: center;
+  outline: none;
+}
+
+/* A strip's right-click menu: Rename and Colour. */
+.mx-insert-menu {
+  position: fixed;
+  z-index: 10000;
+  width: 206px;
+  padding: 4px;
+  background: #141419;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  font: 12px Inter, 'Segoe UI', system-ui, sans-serif;
+  color: #e4e4e7;
+}
+.mx-insert-menu-title {
+  padding: 4px 9px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #71717a;
+}
+.mx-insert-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mx-insert-menu button:hover { background: rgba(220, 38, 38, 0.18); color: #fff; }
+.mx-insert-menu small { color: #71717a; font: 500 10.5px 'JetBrains Mono', monospace; }
+.mx-insert-menu button:hover small { color: #fca5a5; }
+
+/* What plays into the selected insert (mockup M2's panel). */
+.mx-fx-plays { padding: 10px 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.mx-fx-plays .mx-fx-routing-head h4 { display: flex; justify-content: space-between; width: 100%; margin: 0 0 6px; }
+.mx-fx-plays .mx-fx-routing-head h4 span { font-size: 9px; color: #71717a; font-weight: 700; }
+.mx-fx-plays-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; font-size: 11px; color: #e4e4e7; }
+.mx-fx-plays-row i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.mx-fx-plays-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mx-fx-plays-row small { color: #71717a; font-size: 10px; white-space: nowrap; }
+.mx-fx-plays-row.more { color: #a1a1a6; }

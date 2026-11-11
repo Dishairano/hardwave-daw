@@ -5,19 +5,22 @@
 //! answer was no, with a stub module describing what an answer would
 //! look like.
 //!
-//! What comes across is the song: the tempo, an instrument track per
-//! channel that plays notes (a sampler channel with its sample in the
-//! built-in sampler), every sample on the playlist where FL had it at its
-//! channel's level, pan, pitch, direction and stretch, the playlist's
-//! track names and switches, and the mixer: every insert the sound passes
-//! through as a track of its own, with its fader, pan, switches and
-//! routes, FL's Parametric EQ 2 as the built-in EQ, other people's VST3
-//! instruments and effects with their settings, and the automation clips
-//! moving any of those. It opens as a song of its own, like a .hwp. What
-//! cannot come across is what FL's own instruments and most of its
-//! effects hold, a VST2's or CLAP's settings, and automation of knobs with
-//! no counterpart here. The report says what was left behind rather than
-//! letting it be found later.
+//! What comes across is the song, in FL's shape: the tempo; every channel
+//! of FL's channel rack as a channel, in FL's order and filter groups,
+//! with its level, pan and the insert it plays into (a sampler channel
+//! with its sample in the built-in sampler, other people's VST3
+//! instruments with their settings); every sample on the playlist on its
+//! channel and on its FL row, at its pitch, direction and stretch; FL's
+//! rows with their names, colours and switches, per arrangement; the
+//! mixer's inserts the song uses, numbered and named as in FL, with their
+//! fader, pan, switches, routes and effects (FL's Parametric EQ 2 as the
+//! built-in EQ, other people's VST3 effects with their settings); and the
+//! automation clips on their own channels, moving any of those. It opens
+//! as a song of its own, like a .hwp. What cannot come across is what FL's
+//! own instruments and most of its effects hold, a VST2's or CLAP's
+//! settings, and automation of knobs with no counterpart here. Pattern
+//! clips come as a clip per channel on the pattern clip's row. The report
+//! says what was left behind rather than letting it be found later.
 //!
 //! FL's zipped loop package, the .zip it makes to hand a project to
 //! someone else, opens the same way once it is unpacked (flp_package.rs).
@@ -242,11 +245,13 @@ fn open_built(
         apply_fixups(song, pool, &fixups)
     })?;
     log::info!(
-        "import_flp: {name}: {} instrument and {} audio tracks, {} audio and {} pattern clips, {} samples missing",
-        built.report.instrument_tracks,
-        built.report.audio_tracks,
+        "import_flp: {name}: {} channels, {} inserts, {} rows, {} audio, {} pattern and {} automation clips, {} samples missing",
+        built.report.channels,
+        built.report.mixer_inserts,
+        built.report.rows,
         built.report.audio_clips,
         built.report.pattern_clips,
+        built.report.automation_clips + built.report.automation_clips_moving_nothing,
         built.report.missing_samples.len()
     );
 
@@ -298,8 +303,15 @@ fn open_built(
     }
     if !r.plugins_left_behind.is_empty() {
         left_behind.push(format!(
-            "plug-ins on {}: their notes are here on muted tracks; put your own plug-in on one and unmute it",
+            "plug-ins on {}: their channels and notes are here, muted; put your own plug-in on one and unmute it",
             r.plugins_left_behind.join(", ")
+        ));
+    }
+    if r.pattern_placements > 0 {
+        left_behind.push(format!(
+            "pattern clips as one clip: each of the {} pattern clip{} is here as a clip per channel on its row",
+            r.pattern_placements,
+            if r.pattern_placements == 1 { "" } else { "s" }
         ));
     }
     if !r.sample_fades_left_behind.is_empty() {
@@ -345,7 +357,7 @@ fn open_built(
     }
     if !r.automation_left_behind.is_empty() {
         left_behind.push(format!(
-            "automation of {}, which moves something that has no counterpart here",
+            "automation of {}, which moves something that has no counterpart here; its clips are on their rows, moving nothing",
             list_of(&r.automation_left_behind)
         ));
     }
@@ -356,8 +368,11 @@ fn open_built(
 
     Ok(FlpImportReport {
         bpm: r.bpm,
-        tracks: r.instrument_tracks + r.audio_tracks,
-        clips: r.audio_clips + r.pattern_clips,
+        tracks: r.channels + r.mixer_inserts,
+        clips: r.audio_clips
+            + r.pattern_clips
+            + r.automation_clips
+            + r.automation_clips_moving_nothing,
         notes: r.notes,
         samples: r.missing_samples,
         left_behind,

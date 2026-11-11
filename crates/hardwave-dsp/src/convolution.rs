@@ -231,7 +231,8 @@ pub struct ConvolutionReverb {
     pre_delay_r: Vec<f32>,
     pre_delay_pos: usize,
     pre_delay_samples: usize,
-    wet_mix: f32,
+    dry_gain: f32,
+    wet_gain: f32,
     stereo_width: f32,
     tail_hp_l: Biquad,
     tail_hp_r: Biquad,
@@ -242,21 +243,24 @@ pub struct ConvolutionReverb {
 
 impl ConvolutionReverb {
     pub fn new(sample_rate: f32) -> Self {
-        Self {
+        let mut reverb = Self {
             left: ConvolutionChannel::new(),
             right: ConvolutionChannel::new(),
             pre_delay_l: vec![0.0; sample_rate as usize],
             pre_delay_r: vec![0.0; sample_rate as usize],
             pre_delay_pos: 0,
             pre_delay_samples: 0,
-            wet_mix: 0.3,
+            dry_gain: 1.0,
+            wet_gain: 0.0,
             stereo_width: 1.0,
             tail_hp_l: Biquad::default(),
             tail_hp_r: Biquad::default(),
             tail_lp_l: Biquad::default(),
             tail_lp_r: Biquad::default(),
             sample_rate: sample_rate.max(1.0),
-        }
+        };
+        reverb.set_mix(0.3);
+        reverb
     }
 
     /// Load a mono IR onto both channels. Use `load_ir_stereo` for
@@ -315,8 +319,14 @@ impl ConvolutionReverb {
         self.pre_delay_samples = samples.min(self.pre_delay_l.len().saturating_sub(1));
     }
 
+    /// Dry/wet mix. 0 = all dry, 1 = all wet; an equal-power blend in
+    /// between, so with an impulse of unit energy a mix keeps about the
+    /// dry signal's loudness. A straight crossfade dipped 2.4 dB at 30 %.
     pub fn set_mix(&mut self, mix: f32) {
-        self.wet_mix = mix.clamp(0.0, 1.0);
+        let m = mix.clamp(0.0, 1.0);
+        let angle = m * std::f32::consts::FRAC_PI_2;
+        self.dry_gain = if m >= 1.0 { 0.0 } else { angle.cos() };
+        self.wet_gain = if m <= 0.0 { 0.0 } else { angle.sin() };
     }
 
     pub fn set_stereo_width(&mut self, width: f32) {
@@ -401,8 +411,10 @@ impl ConvolutionReverb {
         let wet_l = mid + side;
         let wet_r = mid - side;
 
-        let m = self.wet_mix;
-        (dry_l * (1.0 - m) + wet_l * m, dry_r * (1.0 - m) + wet_r * m)
+        (
+            dry_l * self.dry_gain + wet_l * self.wet_gain,
+            dry_r * self.dry_gain + wet_r * self.wet_gain,
+        )
     }
 }
 

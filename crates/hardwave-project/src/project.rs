@@ -57,10 +57,14 @@ pub struct ProjectMetadata {
 /// 3: where things show in FL's three lists: the playlist's rows, each
 ///    clip's row, the mixer's numbers and the rack's groups. Display only;
 ///    a song from before is laid out on opening exactly as it looked.
+/// 4: the same fields, now kept up to date by every edit (the playlist
+///    draws its rows). A format 3 song was saved by a build that left new
+///    clips without a row and rows behind when tracks were added or
+///    moved, so it is laid out again on opening, as a format 2 song is.
 ///
 /// A file claiming a higher number than this is refused on load instead of
 /// being read as whatever happens to line up.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// A film or a game capture, played in time with the song.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -161,6 +165,15 @@ pub struct Project {
     /// index into this.
     #[serde(default)]
     pub rack_groups: Vec<String>,
+    /// The mixer's inserts sit at 0 dB with their pan at centre, as in FL:
+    /// a track that other tracks play into (an insert, a bus, a return)
+    /// passes a centred sound at the level it gets, so routing a channel
+    /// into an insert is as loud as playing it straight into the master.
+    /// Songs made before kept the pan law's 3 dB drop at every track,
+    /// buses included; a file without this field is one of those and keeps
+    /// it, so it renders exactly as it did. New songs and FL imports set it.
+    #[serde(default)]
+    pub inserts_unity_at_centre: bool,
 }
 
 /// One plugin's saved state — id + opaque chunk. `format_hint` is a
@@ -224,6 +237,8 @@ impl Default for Project {
             keyboard_track: None,
             rows: Vec::new(),
             rack_groups: Vec::new(),
+            // A new song's inserts are at 0 dB at centre, as in FL.
+            inserts_unity_at_centre: true,
             scenes: vec![
                 "Scene 1".to_string(),
                 "Scene 2".to_string(),
@@ -370,11 +385,13 @@ impl Project {
     /// values. Format 2 to 3 fills in where everything shows in FL's three
     /// lists, laid out exactly as the playlist, mixer and rack showed the
     /// song before (`lay_out_as_before`); nothing that makes sound is
-    /// touched. Each step is keyed on the version it starts from, and the
-    /// version is stamped at the end so the next save writes the current
-    /// format.
+    /// touched. Format 3 to 4 lays it out the same way again: the builds
+    /// that wrote format 3 did not keep the layout up to date, and none of
+    /// them could edit it, so nothing made by hand is lost. Each step is
+    /// keyed on the version it starts from, and the version is stamped at
+    /// the end so the next save writes the current format.
     fn migrate(&mut self) {
-        if self.version < 3 {
+        if self.version < 4 {
             self.lay_out_as_before();
         }
         self.version = FORMAT_VERSION;
@@ -388,6 +405,8 @@ impl Project {
         let mut old = self.clone();
         old.version = 2;
         old.forget_layout();
+        // Older builds had the pan law's drop at every track.
+        old.inserts_unity_at_centre = false;
         let data = rmp_serde::to_vec_named(&old).unwrap_or_default();
         zstd::encode_all(data.as_slice(), 3).unwrap_or_default()
     }
@@ -503,7 +522,20 @@ impl Project {
                 // always listed MIDI tracks.
                 fresh.mixer_number = slot.mixer_number;
                 fresh.rack_group = if instrument { Some(0) } else { slot.rack_group };
+                // The playlist row of that insert, laid out with the song,
+                // takes the track's name and colour, as the row of a track
+                // always showed them.
+                let shown = slot.name.clone();
                 *slot = fresh;
+                let color = slot.color.clone();
+                if let Some(r) = row
+                    .checked_sub(1)
+                    .and_then(|r| self.rows.get_mut(r))
+                    .filter(|r| r.name == shown)
+                {
+                    r.name = name.to_string();
+                    r.color = Some(color);
+                }
                 id
             }
             None if instrument => self.add_midi_track(name.to_string()),
@@ -514,18 +546,21 @@ impl Project {
     pub fn add_audio_track(&mut self, name: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.tracks.push(Track::new_audio(id.clone(), name));
+        self.list_new_track(&id);
         id
     }
 
     pub fn add_midi_track(&mut self, name: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.tracks.push(Track::new_midi(id.clone(), name));
+        self.list_new_track(&id);
         id
     }
 
     pub fn add_automation_track(&mut self, name: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.tracks.push(Track::new_automation(id.clone(), name));
+        self.list_new_track(&id);
         id
     }
 
@@ -640,6 +675,25 @@ impl Project {
     /// The format another build sent as `FORMAT_SECTION`.
     pub fn read_format_section(blob: &[u8]) -> Option<u32> {
         rmp_serde::from_slice(blob).ok()
+    }
+
+    /// The project format a song's bytes (as `to_bytes` writes them) are
+    /// in, read without opening the song. None when they are not a song.
+    ///
+    /// A room partner on an older build sends its song in its own format,
+    /// and opening it here would bring it up to this one: the song would
+    /// be taken, and every edit made to it sent back to a build that drops
+    /// the fields it does not know. The format is read first, so such a
+    /// song is never taken.
+    pub fn bytes_format(bytes: &[u8]) -> Option<u32> {
+        #[derive(Deserialize)]
+        struct Probe {
+            version: u32,
+        }
+        let data = decompress_capped(bytes).ok()?;
+        rmp_serde::from_slice::<Probe>(&data)
+            .ok()
+            .map(|p| p.version)
     }
 
     /// Whether a track a room sent came from a build that keeps where
@@ -1141,6 +1195,20 @@ mod tests {
         })
         .unwrap();
         assert!(!Project::arrangements_section_knows_layout(&old));
+    }
+
+    /// A room partner's song says its format before it is opened: the
+    /// current one, an older build's, or not a song at all.
+    #[test]
+    fn a_songs_format_is_read_without_opening_it() {
+        let mut song = Project::default();
+        song.ensure_arrangements();
+        assert_eq!(
+            Project::bytes_format(&song.to_bytes().unwrap()),
+            Some(FORMAT_VERSION)
+        );
+        assert_eq!(Project::bytes_format(&song.older_format_bytes()), Some(2));
+        assert_eq!(Project::bytes_format(b"not a song"), None);
     }
 
     /// A room partner cannot stop the transport with a tempo of 0 or NaN.

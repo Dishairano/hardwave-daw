@@ -1794,7 +1794,7 @@ export function App() {
     tracks.pasteClipsAtPosition(pasteAt).then(({ pasted, skipped }) => {
       if (skipped > 0) {
         useNotificationStore.getState().push('warning', `${skipped} of ${pasted.length + skipped} clips were not pasted`, {
-          detail: 'Audio clips go on audio tracks and MIDI clips on MIDI tracks, and there were not enough tracks below the one you pasted on.',
+          detail: 'A pasted clip goes back on the channel it was copied from, and those channels are gone.',
         })
       }
     }).catch((e) => console.warn('paste failed', e))

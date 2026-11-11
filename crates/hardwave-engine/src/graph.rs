@@ -102,6 +102,10 @@ pub trait AudioNode: Send {
         Vec::new()
     }
 
+    /// Hand this node's plug-ins the parameter changes still waiting for
+    /// a block. Default nothing, for nodes without plug-ins.
+    fn flush_plugin_parameters(&mut self) {}
+
     /// Hand off this node's plug-in chain so it can be reattached to a
     /// freshly-built TrackNode after a graph rebuild. Default `None`.
     /// TrackNode overrides to swap in an empty chain and return the

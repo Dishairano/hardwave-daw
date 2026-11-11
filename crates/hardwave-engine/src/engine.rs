@@ -180,6 +180,7 @@ use crate::master_node::MasterNode;
 use crate::master_tap::{self, SharedMasterTap};
 use crate::track_node::{ClipRegion, TrackMeterState, TrackNode};
 use crate::transport::{TransportCommand, TransportState};
+use hardwave_project::describe::describe_snapshots;
 use hardwave_project::snapshot::Snapshot;
 
 mod graph_build;
@@ -189,7 +190,6 @@ use graph_build::{
     BuildMode, CarryKind, ChainBoard, GraphBuilder, MonitorEdges, PreparedGraph, SendEdges,
 };
 use hardwave_project::{InputChannel, RecordSource};
-use std::borrow::Cow;
 
 /// Shared per-track meter map. Rebuilt when the audio graph is rebuilt.
 pub type TrackMeterMap = Arc<Mutex<HashMap<String, Arc<TrackMeterState>>>>;
@@ -230,6 +230,19 @@ pub struct History {
     bytes: usize,
     /// `HISTORY_BYTES`, smaller in tests.
     max_bytes: usize,
+    /// Counts every change to the steps, their names or the song the
+    /// newest one leads to, so the list is worked out once per change
+    /// and the window can be told when to read it again.
+    version: u64,
+    /// The list as last worked out, for `version`.
+    listed: Option<Listed>,
+}
+
+/// The history list as worked out for one version of the history.
+struct Listed {
+    version: u64,
+    rows: Vec<HistoryEntry>,
+    applied: usize,
 }
 
 /// One edit: a song it can be undone or redone to, and what the edit was.
@@ -237,8 +250,10 @@ struct Step {
     song: Snapshot,
     /// What the app called the edit, when it said.
     label: Option<String>,
-    /// What the edit changed, read off the songs, once worked out. Kept
-    /// only while both songs are snapshots, which do not change.
+    /// What the edit changed, read off the two snapshots on either side
+    /// of it as soon as both exist: when the next step is taken, or when
+    /// the edit is undone or redone. Two neighbouring snapshots share what
+    /// the edit did not change, so this costs what the edit changed.
     described: Option<hardwave_project::describe::Change>,
     /// When the edit was made, in milliseconds since 1970.
     at_ms: u64,
@@ -267,13 +282,23 @@ impl Step {
     }
 
     /// Move the edit to the other stack: `song` becomes the song it holds
-    /// and the song it held comes back. Returns the bytes the history
-    /// grew by, which can be less than nothing.
-    fn swap(&mut self, song: &mut Project) -> isize {
+    /// and the song it held comes back. `undoing` says which way: the step
+    /// holds the song before the edit when it is undone, and the song
+    /// after it when it is redone. Returns the bytes the history grew by,
+    /// which can be less than nothing.
+    fn swap(&mut self, song: &mut Project, undoing: bool) -> isize {
         let back = self.song.to_project();
         // The song as it is shares its parts with the one it goes back to:
         // the two differ by this one edit.
         let (now, added) = Snapshot::take(song, Some(&self.song));
+        // Both sides of the edit are snapshots now: the moment to say what
+        // it was, if nothing has yet.
+        let (before, after) = if undoing {
+            (&self.song, &now)
+        } else {
+            (&now, &self.song)
+        };
+        describe_if_needed(&self.label, &mut self.described, before, after);
         let freed = self.song.bytes_freed_by_drop();
         self.song = now;
         *song = back;
@@ -281,34 +306,35 @@ impl Step {
     }
 }
 
-/// The row for an edit that turned `before` into `after`. A description
-/// worked out between two snapshots (`keep`) is stored in `described`.
-/// The songs are only made when the edit has to be described.
-fn history_row<'a>(
-    label: &Option<String>,
-    described: &mut Option<hardwave_project::describe::Change>,
-    at_ms: u64,
-    songs: impl FnOnce() -> (Cow<'a, Project>, Cow<'a, Project>),
-    keep: bool,
-) -> HistoryEntry {
-    let change = match (label, &*described) {
+/// The row for an edit: the app's name for it, or what it changed.
+fn history_row(step: &Step, change: Option<&hardwave_project::describe::Change>) -> HistoryEntry {
+    let change = match (&step.label, change.or(step.described.as_ref())) {
         (Some(label), _) => hardwave_project::describe::Change {
             label: label.clone(),
             ..Default::default()
         },
         (None, Some(change)) => change.clone(),
-        (None, None) => {
-            let (before, after) = songs();
-            let change = hardwave_project::describe::describe_change(&before, &after);
-            if keep {
-                *described = Some(change.clone());
-            }
-            change
-        }
+        (None, None) => hardwave_project::describe::Change {
+            label: "Edit".into(),
+            ..Default::default()
+        },
     };
     HistoryEntry {
         change,
-        time: at_ms,
+        time: step.at_ms,
+    }
+}
+
+/// What turned `before` into `after`, for a step that has no name or
+/// description of its own yet.
+fn describe_if_needed(
+    label: &Option<String>,
+    described: &mut Option<hardwave_project::describe::Change>,
+    before: &Snapshot,
+    after: &Snapshot,
+) {
+    if label.is_none() && described.is_none() {
+        *described = Some(describe_snapshots(before, after));
     }
 }
 
@@ -322,7 +348,20 @@ impl History {
             saved_at: 0,
             bytes: 0,
             max_bytes: HISTORY_BYTES,
+            version: 0,
+            listed: None,
         }
+    }
+
+    /// Counts every change the history list would show: a new step, an
+    /// undo or redo, a name, a later move of the newest edit, a clear.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    fn changed(&mut self) {
+        self.version = self.version.wrapping_add(1);
+        self.listed = None;
     }
 
     /// Keep `song` as it is before an edit. It shares every part the edit
@@ -333,6 +372,16 @@ impl History {
             self.forget(step);
         }
         let (snapshot, added) = Snapshot::take(song, self.undo.last().map(|step| &step.song));
+        // The step before ends here: its edit is what lies between the
+        // two, and the two share everything it did not change.
+        if let Some(previous) = self.undo.last_mut() {
+            describe_if_needed(
+                &previous.label,
+                &mut previous.described,
+                &previous.song,
+                &snapshot,
+            );
+        }
         self.bytes += added;
         self.undo.push(Step::new(snapshot));
         self.trim();
@@ -379,12 +428,14 @@ impl History {
         self.redo.clear();
         self.trimmed = false;
         self.bytes = 0;
+        self.changed();
     }
 
     /// The song changed without a step of its own: a later move of a
     /// gesture whose first move took the step.
     pub fn note_edit(&mut self) {
         self.edits += 1;
+        self.changed();
     }
 
     /// The song is now what is on disk: it was just saved or opened.
@@ -409,7 +460,7 @@ impl History {
             return false;
         };
         self.note_edit();
-        let grew = step.swap(song);
+        let grew = step.swap(song, true);
         self.bytes = self.bytes.saturating_add_signed(grew);
         self.redo.push(step);
         self.trim();
@@ -422,7 +473,7 @@ impl History {
             return false;
         };
         self.note_edit();
-        let grew = step.swap(song);
+        let grew = step.swap(song, false);
         self.bytes = self.bytes.saturating_add_signed(grew);
         self.undo.push(step);
         self.trim();
@@ -446,6 +497,7 @@ impl History {
         match self.undo.last_mut() {
             Some(step) if step.label.is_none() && step.at_ms >= since_ms => {
                 step.label = Some(label);
+                self.changed();
                 true
             }
             _ => false,
@@ -457,64 +509,72 @@ impl History {
         !self.trimmed
     }
 
+    /// The history list as last worked out, if nothing changed since.
+    pub fn listed(&self) -> Option<(Vec<HistoryEntry>, usize)> {
+        self.listed
+            .as_ref()
+            .filter(|listed| listed.version == self.version)
+            .map(|listed| (listed.rows.clone(), listed.applied))
+    }
+
     /// Every edit, oldest first, and how many of them are applied: the
     /// undo steps, then the redo steps. `current` is the song as it is.
-    pub fn entries(&mut self, current: &Project) -> (Vec<HistoryEntry>, usize) {
-        let applied = self.undo.len();
-        let mut out = Vec::with_capacity(applied + self.redo.len());
-        for i in 0..applied {
+    ///
+    /// Every step but the newest was described when the step after it was
+    /// taken, or when it was undone or redone. The newest leads to the
+    /// song as it is, which a snapshot sharing the newest step's parts
+    /// describes. The list is kept until the history changes, so asking
+    /// again costs nothing. `current` is only borrowed mutably to take
+    /// that snapshot; it is left as it was.
+    pub fn entries(&mut self, current: &mut Project) -> (Vec<HistoryEntry>, usize) {
+        if let Some(listed) = self.listed() {
+            return listed;
+        }
+        // Steps whose neighbour is a snapshot and that no step change
+        // described yet. None are expected; this keeps the list whole if
+        // a path missed one.
+        for i in 0..self.undo.len().saturating_sub(1) {
             let (head, tail) = self.undo.split_at_mut(i + 1);
-            let Step {
-                song,
-                label,
-                described,
-                at_ms,
-                ..
-            } = &mut head[i];
-            let after = tail.first().map(|next| &next.song);
-            out.push(history_row(
-                label,
-                described,
-                *at_ms,
-                || {
-                    let after = match after {
-                        Some(after) => Cow::Owned(after.to_project()),
-                        None => Cow::Borrowed(current),
-                    };
-                    (Cow::Owned(song.to_project()), after)
-                },
-                after.is_some(),
-            ));
+            let step = &mut head[i];
+            describe_if_needed(&step.label, &mut step.described, &step.song, &tail[0].song);
         }
-        // The redo stack holds each undone edit's result; the first comes
-        // from the song as it is.
+        for i in 0..self.redo.len().saturating_sub(1) {
+            let (head, tail) = self.redo.split_at_mut(i + 1);
+            let step = &mut head[i];
+            describe_if_needed(&step.label, &mut step.described, &tail[0].song, &step.song);
+        }
+        // The two steps next to the song as it is: the newest edit, and
+        // the next one to redo. Worked out for this version only, since
+        // the song can still change under them.
+        let undescribed = |step: &Step| step.label.is_none() && step.described.is_none();
+        let newest = self.undo.last().filter(|s| undescribed(s)).map(|step| {
+            let (now, _) = Snapshot::take(current, Some(&step.song));
+            describe_snapshots(&step.song, &now)
+        });
+        let next_redo = self.redo.last().filter(|s| undescribed(s)).map(|step| {
+            let (now, _) = Snapshot::take(current, Some(&step.song));
+            describe_snapshots(&now, &step.song)
+        });
+
+        let applied = self.undo.len();
+        let mut rows = Vec::with_capacity(applied + self.redo.len());
+        for (i, step) in self.undo.iter().enumerate() {
+            let change = (i + 1 == applied).then_some(newest.as_ref()).flatten();
+            rows.push(history_row(step, change));
+        }
+        // The redo stack holds the next one to redo last.
         let undone = self.redo.len();
-        for k in 0..undone {
-            let index = undone - 1 - k;
-            let (head, tail) = self.redo.split_at_mut(index + 1);
-            let Step {
-                song,
-                label,
-                described,
-                at_ms,
-                ..
-            } = &mut head[index];
-            let before = tail.first().map(|previous| &previous.song);
-            out.push(history_row(
-                label,
-                described,
-                *at_ms,
-                || {
-                    let before = match before {
-                        Some(before) => Cow::Owned(before.to_project()),
-                        None => Cow::Borrowed(current),
-                    };
-                    (before, Cow::Owned(song.to_project()))
-                },
-                before.is_some(),
-            ));
+        for (k, step) in self.redo.iter().rev().enumerate() {
+            let change = (k == 0).then_some(next_redo.as_ref()).flatten();
+            rows.push(history_row(step, change));
         }
-        (out, applied)
+        debug_assert_eq!(rows.len(), applied + undone);
+        self.listed = Some(Listed {
+            version: self.version,
+            rows: rows.clone(),
+            applied,
+        });
+        (rows, applied)
     }
 }
 
@@ -542,7 +602,7 @@ mod history_list_tests {
         assert!(h.label_newest("Set tempo".into(), 0));
         h.push(&mut song(130.0));
         let mut current = song(140.0);
-        let (rows, applied) = h.entries(&current);
+        let (rows, applied) = h.entries(&mut current);
         let labels: Vec<&str> = rows.iter().map(|r| r.change.label.as_str()).collect();
         assert_eq!(labels, vec!["Set tempo", "Tempo"]);
         assert_eq!(applied, 2);
@@ -550,20 +610,77 @@ mod history_list_tests {
         // Undo moves the cursor, not the names.
         assert!(h.undo(&mut current));
         assert_eq!(current.tempo_map.entries[0].bpm, 130.0);
-        let (rows, applied) = h.entries(&current);
+        let (rows, applied) = h.entries(&mut current);
         let labels: Vec<&str> = rows.iter().map(|r| r.change.label.as_str()).collect();
         assert_eq!(labels, vec!["Set tempo", "Tempo"]);
         assert_eq!(applied, 1);
         assert!(h.undo(&mut current));
         assert_eq!(current.tempo_map.entries[0].bpm, 120.0);
-        assert_eq!(h.entries(&current).1, 0);
+        assert_eq!(h.entries(&mut current).1, 0);
         assert!(!h.undo(&mut current), "nothing older");
         assert!(h.redo(&mut current));
         assert_eq!(current.tempo_map.entries[0].bpm, 130.0);
-        let (rows, applied) = h.entries(&current);
+        let (rows, applied) = h.entries(&mut current);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].change.label, "Set tempo");
         assert_eq!(applied, 1);
+    }
+
+    /// Each step is described once, when the step after it is taken or
+    /// when it is undone, from the two snapshots on either side; the list
+    /// is worked out once per change and then handed back as it was.
+    #[test]
+    fn steps_are_described_as_they_are_taken_and_the_list_kept_until_it_changes() {
+        let mut h = History::new();
+        let mut song = busy_song();
+        let mut songs = vec![song.clone()];
+        for n in 0..6usize {
+            h.push(&mut song);
+            match n % 3 {
+                0 => song.tracks[2].clips[n].position_ticks += 96,
+                1 => song.tracks[3].volume_db = -(n as f64),
+                _ => song.tempo_map.entries[0].bpm += 1.0,
+            }
+            songs.push(song.clone());
+        }
+        // Every step but the newest was described when the next was taken.
+        assert!(h.undo[..5].iter().all(|step| step.described.is_some()));
+        assert!(h.undo[5].described.is_none());
+        let words = |rows: &[HistoryEntry]| -> Vec<String> {
+            rows.iter().map(|r| r.change.text()).collect()
+        };
+        let expected: Vec<String> = songs
+            .windows(2)
+            .map(|w| hardwave_project::describe::describe_change(&w[0], &w[1]).text())
+            .collect();
+        assert!(expected[0].starts_with("Move clip"), "{}", expected[0]);
+        let (rows, applied) = h.entries(&mut song);
+        assert_eq!((words(&rows), applied), (expected.clone(), 6));
+        assert!(h.listed().is_some(), "kept");
+        let version = h.version();
+
+        // A later move of the newest edit changes what it did.
+        h.note_edit();
+        song.tracks[4].muted = true;
+        assert!(h.listed().is_none());
+        assert!(h.version() != version);
+        let (rows, _) = h.entries(&mut song);
+        let now = hardwave_project::describe::describe_change(&songs[5], &song).text();
+        assert_eq!(rows[5].change.text(), now);
+        assert!(now.starts_with("Mute"), "{now}");
+        h.note_edit();
+        song.tracks[4].muted = false;
+
+        // Undo and redo keep every row, the cursor moves.
+        assert!(h.undo(&mut song));
+        assert!(h.undo(&mut song));
+        assert!(h.redo.iter().all(|step| step.described.is_some()));
+        let (rows, applied) = h.entries(&mut song);
+        assert_eq!((words(&rows), applied), (expected.clone(), 4));
+        assert!(h.redo(&mut song));
+        let (rows, applied) = h.entries(&mut song);
+        assert_eq!((words(&rows), applied), (expected, 5));
+        assert!(h.undo[..5].iter().all(|step| step.described.is_some()));
     }
 
     #[test]
@@ -1215,16 +1332,29 @@ impl DawEngine {
     /// applied.
     ///
     /// Takes the song and the history by their own locks, not the
-    /// engine's: describing a step reads two whole songs, and the History
-    /// panel asks once a second while it is open.
+    /// engine's. Unchanged since it was last asked for, the list is handed
+    /// back as it was, without touching the song; otherwise the song is
+    /// locked first, as undo locks them, and read in place.
     pub fn history_entries(
         project: &Mutex<Project>,
         history: &Mutex<History>,
     ) -> (Vec<HistoryEntry>, usize, bool) {
-        let current = project.lock().clone();
+        {
+            let history = history.lock();
+            if let Some((entries, applied)) = history.listed() {
+                return (entries, applied, history.starts_at_open());
+            }
+        }
+        let mut song = project.lock();
         let mut history = history.lock();
-        let (entries, applied) = history.entries(&current);
+        let (entries, applied) = history.entries(&mut song);
         (entries, applied, history.starts_at_open())
+    }
+
+    /// Counts every change to the undo steps (see [`History::version`]),
+    /// so the window knows when to read the history list again.
+    pub fn history_version(&self) -> u64 {
+        self.history.lock().version()
     }
 
     /// Reset the history — e.g. after loading or creating a new project.
@@ -3091,6 +3221,56 @@ impl DawEngine {
         }
     }
 
+    /// Play the song from the top as a sound card does, without one: the graph is
+    /// built for the engine's buffer size, as playback builds it, and each
+    /// block asks for `device_frames`, which a driver can make fewer than
+    /// that (Windows hands 480-frame blocks to a graph built for 512).
+    /// Plug-ins on the project's inserts are made with `instantiate`, as an
+    /// export makes them. Each interleaved stereo block goes to `on_block`
+    /// (false stops early).
+    ///
+    /// For checking that playback and an export of the same song agree:
+    /// an export always fills its blocks, so a part of playback that went
+    /// wrong only on a short block was never heard in one. Like
+    /// [`Self::play_live_without_device`] it reads the engine's own MIDI
+    /// input, and refuses while the engine is running.
+    pub fn play_live_in_device_blocks(
+        &self,
+        sample_rate: u32,
+        total_samples: u64,
+        device_frames: usize,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+        mut on_block: impl FnMut(&[f32]) -> bool,
+    ) -> Result<(), String> {
+        if self.is_running() {
+            return Err("the engine is running: its audio thread reads the live input".into());
+        }
+        let buffer_size = (self.audio_device.buffer_size as usize).max(1);
+        let device_frames = device_frames.max(1);
+        let mut callback = self.offline_callback(
+            sample_rate,
+            buffer_size,
+            0,
+            instantiate,
+            |_| {},
+            Arc::new(Mutex::new(None)),
+        );
+        callback.midi_input = Arc::clone(&self.midi_input);
+        callback.midi_capture_ring = Arc::clone(&self.midi_capture_ring);
+        let mut buf = vec![0.0_f32; device_frames * 2];
+        let mut left = total_samples;
+        while left > 0 {
+            let frames = left.min(device_frames as u64) as usize;
+            buf.fill(0.0);
+            callback.process(&mut buf, frames, 2);
+            if !on_block(&buf[..frames * 2]) {
+                break;
+            }
+            left -= frames as u64;
+        }
+        Ok(())
+    }
+
     /// What one graph costs, `runs` times over, with the song playing from
     /// half a minute in: `build` is the work done off the audio thread,
     /// `swap` what the audio thread does to put the graph in. The plug-ins
@@ -4088,6 +4268,17 @@ impl EngineCallback {
     /// implementations don't allocate beyond a `Vec<u8>`. A future
     /// commit can move this to a worker thread if a third-party plug-in
     /// turns out to misbehave.
+    /// Hand every live plug-in the parameter changes still waiting for a
+    /// block (see `HostedPlugin::flush_parameters`). Does not allocate.
+    fn flush_plugin_parameters(&mut self) {
+        for node in self.graph.iter_nodes_mut() {
+            node.flush_plugin_parameters();
+        }
+        for chain in self.parked_chains.values_mut() {
+            chain.flush_parameters();
+        }
+    }
+
     fn service_snapshot_request(&mut self) {
         // RT-safety: try_lock — if the UI thread is placing a request
         // into the slot right now, we simply pick it up next block
@@ -4099,6 +4290,9 @@ impl EngineCallback {
             slot.take()
         };
         let Some(tx) = tx else { return };
+        // The state read back has every value set so far, not only the
+        // ones a block has run with.
+        self.flush_plugin_parameters();
 
         let mut map: std::collections::HashMap<(String, String), Vec<u8>> =
             std::collections::HashMap::new();
@@ -5122,6 +5316,10 @@ impl EngineCallback {
         // or being played live, the graph can only produce silence — skip
         // processing to save CPU.
         if !playing && !self.has_monitored_input && self.live_midi_hold == 0 {
+            // No block runs, so VST3 and CLAP plug-ins get the values set
+            // meanwhile here: a knob turned with the song stopped took
+            // effect (and read back) only once play started.
+            self.flush_plugin_parameters();
             output.fill(0.0);
             self.park_meters();
             return;
@@ -7144,6 +7342,155 @@ mod rt_safety_tests {
             rx.try_recv().is_ok(),
             "snapshot request must be serviced on the first uncontended block"
         );
+    }
+
+    /// Like a VST3 or CLAP plug-in: a value set is only taken in at the
+    /// start of a block (or a flush), and the state reports what was taken.
+    struct BlockFed {
+        desc: hardwave_plugin_host::types::PluginDescriptor,
+        waiting: Option<f64>,
+        taken: Arc<std::sync::atomic::AtomicU64>,
+    }
+    impl BlockFed {
+        fn take(&mut self) {
+            if let Some(v) = self.waiting.take() {
+                self.taken
+                    .store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+    impl hardwave_plugin_host::types::HostedPlugin for BlockFed {
+        fn descriptor(&self) -> &hardwave_plugin_host::types::PluginDescriptor {
+            &self.desc
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            num_samples: usize,
+        ) {
+            self.take();
+            for (o, i) in outputs.iter_mut().zip(inputs) {
+                o.clear();
+                o.extend_from_slice(&i[..num_samples.min(i.len())]);
+            }
+        }
+        fn flush_parameters(&mut self) {
+            self.take();
+        }
+        fn get_parameter_count(&self) -> u32 {
+            1
+        }
+        fn get_parameter_info(
+            &self,
+            _i: u32,
+        ) -> Option<hardwave_plugin_host::types::ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            f64::from_bits(self.taken.load(std::sync::atomic::Ordering::Relaxed))
+        }
+        fn set_parameter_value(&mut self, _i: u32, v: f64) {
+            self.waiting = Some(v);
+        }
+        fn get_state(&self) -> Vec<u8> {
+            self.get_parameter_value(0).to_le_bytes().to_vec()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    /// Bug D from the test machine: Drive set to 0.73 on the master's
+    /// plug-in with the song stopped read back 0.333 until play. No block
+    /// runs while stopped, and VST3 and CLAP plug-ins only take a value in
+    /// a block, so the plug-in, and the state read back, kept the old one.
+    #[test]
+    fn a_parameter_set_with_the_song_stopped_takes_effect_and_reads_back_at_once() {
+        use crate::insert_chain::{InsertCommand, LiveSlot};
+        use hardwave_plugin_host::types::{
+            HostedPlugin, PluginCategory, PluginDescriptor, PluginFormat,
+        };
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        assert!(!cb.transport.is_playing());
+        let taken = Arc::new(std::sync::atomic::AtomicU64::new(0.333f64.to_bits()));
+        let plugin: Box<dyn HostedPlugin> = Box::new(BlockFed {
+            desc: PluginDescriptor {
+                id: "test.block-fed".into(),
+                name: "Block Fed".into(),
+                vendor: "Hardwave Tests".into(),
+                version: "1".into(),
+                format: PluginFormat::Vst3,
+                path: std::path::PathBuf::from("<test>"),
+                category: PluginCategory::Effect,
+                num_inputs: 2,
+                num_outputs: 2,
+                has_midi_input: false,
+                has_editor: false,
+            },
+            waiting: None,
+            taken: Arc::clone(&taken),
+        });
+        let slot = LiveSlot {
+            param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
+            levels: Default::default(),
+            slot_id: "shape".into(),
+            plugin,
+            enabled: true,
+            wet: 1.0,
+            sidechain_active: false,
+            gain_reduction_db: LiveSlot::new_gain_reduction(),
+        };
+        let set = |value: f64| InsertCommand::SetParameter {
+            track_id: "master".into(),
+            slot_id: "shape".into(),
+            param_id: 0,
+            value,
+        };
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: "master".into(),
+                slot,
+            })
+            .ok()
+            .unwrap();
+        cmd_tx.try_send(set(0.73)).ok().unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        let now = || f64::from_bits(taken.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(
+            now(),
+            0.73,
+            "the plug-in has the value with the song stopped"
+        );
+
+        // A read-back asked in the same block as the change has it too.
+        cmd_tx.try_send(set(0.5)).ok().unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        *cb.pending_state_snapshot.lock() = Some(tx);
+        cb.process(&mut out, 256, 2);
+        let states = rx.try_recv().expect("the read-back was answered");
+        let bytes = states
+            .get(&("master".to_string(), "shape".to_string()))
+            .expect("the master's plug-in is in it");
+        assert_eq!(f64::from_le_bytes(bytes[..8].try_into().unwrap()), 0.5);
     }
 
     #[test]

@@ -39,12 +39,14 @@ export function HistoryPanel({ onClose }: Props) {
   const redo = useTrackStore(s => s.redo)
 
   // The list is the engine's undo stack. Edits made while it is open
-  // (a note drawn, a fader moved on a desk) show within a second.
+  // (a note drawn, a fader moved on a desk) show when the engine says its
+  // steps changed. It was read every second, which on a big song froze
+  // the window each time.
+  const follow = useHistoryStore(s => s.follow)
   useEffect(() => {
     void refresh()
-    const timer = window.setInterval(() => { void refresh() }, 1000)
-    return () => window.clearInterval(timer)
-  }, [refresh])
+    return follow()
+  }, [refresh, follow])
 
   const rows = useMemo(() => {
     // Undoing everything gets back to the song as opened, unless old

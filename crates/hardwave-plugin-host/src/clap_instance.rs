@@ -412,6 +412,38 @@ impl ClapPluginInstance {
         }
     }
 
+    /// Start the event list over with the waiting parameter changes
+    /// (automation, generic knob UI, the set_plugin_parameter IPC, and
+    /// editor GUI edits captured via request_flush) as
+    /// CLAP_EVENT_PARAM_VALUE events at its head. Draining empties the
+    /// shared queue for next time and keeps its room.
+    fn take_param_events(&mut self) {
+        let events = &mut self.event_queue.events;
+        events.clear();
+        let mut pending = self.pending_params.lock();
+        for (param_id, value) in pending.drain(..) {
+            if events.len() >= MAX_BLOCK_EVENTS {
+                break;
+            }
+            events.push(EncodedEvent::ParamValue(ClapEventParamValue {
+                header: ClapEventHeader {
+                    size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                    time: 0,
+                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                    event_type: CLAP_EVENT_PARAM_VALUE,
+                    flags: 0,
+                },
+                param_id,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value,
+            }));
+        }
+    }
+
     fn params_ext(&self) -> Option<*const ClapPluginParams> {
         if self.plugin.is_null() {
             return None;
@@ -708,36 +740,8 @@ impl HostedPlugin for ClapPluginInstance {
             constant_mask: 0,
         };
 
+        self.take_param_events();
         let events = &mut self.event_queue.events;
-        events.clear();
-        // Inject host-side parameter changes (automation, generic knob
-        // UI, the set_plugin_parameter IPC, and editor GUI edits captured
-        // via request_flush) as CLAP_EVENT_PARAM_VALUE events at the head
-        // of the block. Draining empties the shared queue for next time
-        // and keeps its room.
-        let mut pending = self.pending_params.lock();
-        for (param_id, value) in pending.drain(..) {
-            if events.len() >= MAX_BLOCK_EVENTS {
-                break;
-            }
-            events.push(EncodedEvent::ParamValue(ClapEventParamValue {
-                header: ClapEventHeader {
-                    size: std::mem::size_of::<ClapEventParamValue>() as u32,
-                    time: 0,
-                    space_id: CLAP_CORE_EVENT_SPACE_ID,
-                    event_type: CLAP_EVENT_PARAM_VALUE,
-                    flags: 0,
-                },
-                param_id,
-                cookie: std::ptr::null_mut(),
-                note_id: -1,
-                port_index: -1,
-                channel: -1,
-                key: -1,
-                value,
-            }));
-        }
-        drop(pending);
         encode_midi_events(midi_in, events);
         let events_ctx: *mut EncodedEventQueue = &mut *self.event_queue;
 
@@ -815,6 +819,37 @@ impl HostedPlugin for ClapPluginInstance {
             }
         }
         q.push((id, value));
+    }
+
+    fn flush_parameters(&mut self) {
+        // Inactive, the first block after activation takes them.
+        if !self.active || self.plugin.is_null() || self.pending_params.lock().is_empty() {
+            return;
+        }
+        // The extension's id as it is stored (it ends in a nul), so the
+        // audio thread makes no string to ask for it.
+        let params = unsafe {
+            ((*self.plugin).get_extension)(self.plugin, CLAP_EXT_PARAMS.as_ptr() as *const c_char)
+        } as *const ClapPluginParams;
+        if params.is_null() {
+            return;
+        }
+        // `params.flush` is CLAP's way to hand over parameter changes
+        // outside a block, so the plug-in (and the state a save or a
+        // read-back takes) has the value with the song stopped.
+        self.take_param_events();
+        let events_ctx: *mut EncodedEventQueue = &mut *self.event_queue;
+        let input_events = ClapInputEvents {
+            ctx: events_ctx as *mut c_void,
+            size: event_queue_size,
+            get: event_queue_get,
+        };
+        let output_events = ClapOutputEvents {
+            ctx: std::ptr::null_mut(),
+            try_push: event_queue_push_noop,
+        };
+        unsafe { ((*params).flush)(self.plugin, &input_events, &output_events) };
+        self.event_queue.events.clear();
     }
 
     fn get_state(&self) -> Vec<u8> {
@@ -1682,5 +1717,168 @@ mod event_tests {
             MAX_BLOCK_EVENTS,
             "no growing on the audio thread"
         );
+    }
+}
+
+#[cfg(test)]
+mod flush_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // What the fake plug-in has taken in, as f64 bits.
+    static TAKEN: AtomicU64 = AtomicU64::new(0);
+
+    unsafe extern "C" fn count(_: *const ClapPlugin) -> u32 {
+        1
+    }
+    unsafe extern "C" fn get_info(_: *const ClapPlugin, _: u32, _: *mut ClapParamInfo) -> bool {
+        false
+    }
+    unsafe extern "C" fn get_value(_: *const ClapPlugin, _: u32, out: *mut f64) -> bool {
+        *out = f64::from_bits(TAKEN.load(Ordering::SeqCst));
+        true
+    }
+    unsafe extern "C" fn to_text(
+        _: *const ClapPlugin,
+        _: u32,
+        _: f64,
+        _: *mut c_char,
+        _: u32,
+    ) -> bool {
+        false
+    }
+    unsafe extern "C" fn to_value(
+        _: *const ClapPlugin,
+        _: u32,
+        _: *const c_char,
+        _: *mut f64,
+    ) -> bool {
+        false
+    }
+    unsafe extern "C" fn flush(
+        _: *const ClapPlugin,
+        in_events: *const ClapInputEvents,
+        _: *const ClapOutputEvents,
+    ) {
+        let list = &*in_events;
+        for i in 0..(list.size)(in_events) {
+            let header = (list.get)(in_events, i);
+            if (*header).event_type == CLAP_EVENT_PARAM_VALUE {
+                let ev = &*(header as *const ClapEventParamValue);
+                TAKEN.store(ev.value.to_bits(), Ordering::SeqCst);
+            }
+        }
+    }
+    static PARAMS: ClapPluginParams = ClapPluginParams {
+        count,
+        get_info,
+        get_value,
+        value_to_text: to_text,
+        text_to_value: to_value,
+        flush,
+    };
+    unsafe extern "C" fn get_extension(_: *const ClapPlugin, id: *const c_char) -> *const c_void {
+        if CStr::from_ptr(id).to_bytes_with_nul() == CLAP_EXT_PARAMS {
+            &PARAMS as *const ClapPluginParams as *const c_void
+        } else {
+            std::ptr::null()
+        }
+    }
+    unsafe extern "C" fn init(_: *const ClapPlugin) -> bool {
+        true
+    }
+    unsafe extern "C" fn nothing(_: *const ClapPlugin) {}
+    unsafe extern "C" fn activate(_: *const ClapPlugin, _: f64, _: u32, _: u32) -> bool {
+        true
+    }
+    unsafe extern "C" fn process(_: *const ClapPlugin, _: *const ClapProcess) -> i32 {
+        0
+    }
+
+    /// A value set while no block runs (the song stopped) reaches the
+    /// plug-in through `params.flush`, so the plug-in, its window and its
+    /// saved state have it at once instead of after play starts.
+    #[test]
+    fn a_value_set_between_blocks_reaches_the_plug_in_on_flush() {
+        TAKEN.store(0.333f64.to_bits(), Ordering::SeqCst);
+        let plugin = Box::new(ClapPlugin {
+            desc: std::ptr::null(),
+            plugin_data: std::ptr::null_mut(),
+            init,
+            destroy: nothing,
+            activate,
+            deactivate: nothing,
+            start_processing: init,
+            stop_processing: nothing,
+            reset: nothing,
+            process,
+            get_extension,
+            on_main_thread: nothing,
+        });
+        let pending_params: SharedParamQueue = Arc::new(Mutex::new(Vec::new()));
+        let host_ctx = Box::new(ClapHostContext {
+            plugin: &*plugin,
+            resize_request: Arc::new(Mutex::new(None)),
+            pending: Arc::clone(&pending_params),
+            gui_edit_log: Arc::new(Mutex::new(Vec::new())),
+        });
+        let mut instance = ClapPluginInstance {
+            descriptor: PluginDescriptor {
+                id: "clap:test.fake".into(),
+                name: "Fake".into(),
+                vendor: "Test".into(),
+                version: "0".into(),
+                format: PluginFormat::Clap,
+                path: "<test>".into(),
+                category: PluginCategory::Effect,
+                num_inputs: 2,
+                num_outputs: 2,
+                has_midi_input: false,
+                has_editor: false,
+            },
+            active: true,
+            processing: true,
+            sample_rate: 48_000.0,
+            max_block: 256,
+            library: None,
+            entry: std::ptr::null(),
+            plugin: &*plugin,
+            host: Box::new(crate::clap_ffi::build_static_host()),
+            host_ctx,
+            cached_params: Vec::new(),
+            latency: 0,
+            initialized: true,
+            pending_params,
+            gui_edit_log: Arc::new(Mutex::new(Vec::new())),
+            gui_open: false,
+            transport: TransportInfo::default(),
+            editor: Arc::new(Mutex::new(ClapEditorSide {
+                plugin: &*plugin,
+                gui: std::ptr::null(),
+                name: String::new(),
+                open: false,
+                resize_request: Arc::new(Mutex::new(None)),
+            })),
+            presets: std::sync::OnceLock::new(),
+            input_scratch: Vec::new(),
+            input_ptrs: Vec::with_capacity(8),
+            output_ptrs: Vec::with_capacity(8),
+            event_queue: Box::new(EncodedEventQueue {
+                events: Vec::with_capacity(MAX_BLOCK_EVENTS),
+            }),
+        };
+        instance.set_parameter_value(7, 0.73);
+        assert_eq!(instance.get_parameter_value(7), 0.333, "waits for a block");
+        instance.flush_parameters();
+        assert_eq!(instance.get_parameter_value(7), 0.73);
+        assert!(
+            instance.pending_params.lock().is_empty(),
+            "handed over once"
+        );
+        // Nothing waiting: nothing is sent.
+        TAKEN.store(0.5f64.to_bits(), Ordering::SeqCst);
+        instance.flush_parameters();
+        assert_eq!(instance.get_parameter_value(7), 0.5);
+        drop(instance);
     }
 }

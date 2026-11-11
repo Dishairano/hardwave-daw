@@ -702,6 +702,10 @@ const mock: TauriInternals = {
       // or the app never leaves the splash and all UI specs fail.
       case 'get_track_with_clips':
         return null
+      case 'get_playlist_rows':
+        // The playlist's rows, seeded by a harness shot; none reads as
+        // unnamed rows.
+        return (window as unknown as { __hwMockRows?: unknown[] }).__hwMockRows ?? []
       case 'get_tracks_with_clips':
         // The harness can seed a session for the app to reload after a
         // change (window.__hwMockTracks); the plain app boots empty.
@@ -712,6 +716,9 @@ const mock: TauriInternals = {
       case 'get_plugins':
         // A harness shot can seed the scan (window.__hwMockPlugins).
         return (window as unknown as { __hwMockPlugins?: unknown[] }).__hwMockPlugins ?? []
+      case 'get_rack_groups':
+        // A harness shot can seed the song's rack groups.
+        return (window as unknown as { __hwMockRackGroups?: string[] }).__hwMockRackGroups ?? ['Unsorted']
       case 'get_tracks':
       case 'find_missing_plugins':
         return []

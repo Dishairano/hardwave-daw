@@ -33,6 +33,9 @@ interface HistoryState {
   push: (label: string, since: number) => void
   /** Read the list from the engine again. */
   refresh: () => Promise<void>
+  /** Read the list again whenever the engine says its steps changed
+   *  (`daw:historyChanged`), until the returned function is called. */
+  follow: () => () => void
   undoOne: () => void
   redoOne: () => void
   jumpTo: (target: number, undo: () => Promise<boolean>, redo: () => Promise<boolean>) => Promise<void>
@@ -48,6 +51,11 @@ interface HistoryState {
  * row that undid something else. Now a label only names a step the engine
  * took, and steps without one are described by the engine.
  */
+/** The read of the list on its way, and whether it was asked for again
+ *  meanwhile. */
+let reading: Promise<void> | null = null
+let readAgain = false
+
 export const useHistoryStore = create<HistoryState>((set, get) => ({
   entries: [],
   cursor: 0,
@@ -58,13 +66,43 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
   },
 
   refresh: async () => {
-    const h = await invoke<UndoHistory>('get_undo_history').catch(() => null)
-    if (!h) return
-    set({
-      entries: h.entries.map((e, i) => ({ ...e, id: `h${i}` })),
-      cursor: h.cursor,
-      startsAtOpen: h.startsAtOpen,
-    })
+    // One read at a time: asked again while one is on its way, the list
+    // is read once more after it, never several times side by side.
+    if (reading) {
+      readAgain = true
+      return reading
+    }
+    reading = (async () => {
+      do {
+        readAgain = false
+        const h = await invoke<UndoHistory>('get_undo_history').catch(() => null)
+        if (h) {
+          set({
+            entries: h.entries.map((e, i) => ({ ...e, id: `h${i}` })),
+            cursor: h.cursor,
+            startsAtOpen: h.startsAtOpen,
+          })
+        }
+      } while (readAgain)
+    })()
+    try {
+      await reading
+    } finally {
+      reading = null
+    }
+  },
+
+  follow: () => {
+    let stopped = false
+    let unlisten: (() => void) | null = null
+    import('@tauri-apps/api/event')
+      .then(({ listen }) => listen('daw:historyChanged', () => { void get().refresh() }))
+      .then((un) => { if (stopped) un(); else unlisten = un })
+      .catch(() => { /* no events outside the app; the list was read when it opened */ })
+    return () => {
+      stopped = true
+      if (unlisten) unlisten()
+    }
   },
 
   undoOne: () => { void get().refresh() },

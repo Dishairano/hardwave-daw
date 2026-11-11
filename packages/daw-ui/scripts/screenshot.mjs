@@ -15,7 +15,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright'
 
-const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account', 'tunenotes', 'tempolane', 'newsong', 'emptyroll']
+const ALL = ['playlist', 'mixer', 'channelrack', 'pianoroll', 'firstrun', 'newcontroller', 'browser', 'settings', 'macros', 'presets', 'midifx', 'manual', 'modulation', 'reference', 'scripts', 'spectral', 'session', 'collab', 'presence', 'workspace', 'newproject', 'perftest', 'stems', 'collabhost', 'playlistnames', 'plugin', 'history', 'loudness', 'oscilloscope', 'spectrum', 'midimappings', 'tune', 'midiroute', 'samplewindow', 'panels', 'account', 'tunenotes', 'tempolane', 'newsong', 'emptyroll', 'flrows', 'flrack', 'flrackauto']
 /** What to do on a panel before it is photographed, as a person would. */
 const ACTIONS = {
   // Open NOTES, choose "go", and hold it mid-drag a semitone and a half up,
@@ -36,6 +36,11 @@ const ACTIONS = {
     }
     await sleep(300)
   },
+}
+// The FL song's rack with its Automation group picked.
+ACTIONS.flrackauto = async (page) => {
+  await page.locator('[data-testid="rack-group-1"]').click()
+  await sleep(400)
 }
 const arg = process.argv[2]
 const single = arg && ALL.includes(arg)
@@ -110,6 +115,10 @@ try {
       // SHOT_LANE=menu or drag: the tempo lane's menu open, or a point being
       // dragged (panel tempolane).
       + (process.env.SHOT_LANE ? `&lane=${process.env.SHOT_LANE}` : '')
+      // SHOT_ROWMENU=6 opens playlist row 6's menu, SHOT_TIP=1 rests the
+      // pointer on a clip (panel flrows).
+      + (process.env.SHOT_ROWMENU ? `&menu=${process.env.SHOT_ROWMENU}` : '')
+      + (process.env.SHOT_TIP ? '&tip=1' : '')
     await page.goto(`${BASE}${query}`, { waitUntil: 'networkidle' })
     await sleep(2200) // let async loads + canvas redraw settle
     if (ACTIONS[panel]) await ACTIONS[panel](page)

@@ -7,6 +7,9 @@ import { Fader } from '../../primitives/Fader'
 import { MeterPair } from '../../primitives/Meter'
 import { DbScale } from './DbScale'
 import { SendsDots } from './SendsDots'
+import { StripName } from './StripName'
+import { insertName } from '../../../lib/mixerNumbers'
+import { useMixerSelectionStore } from '../../../stores/mixerSelectionStore'
 import {
   useTrackName,
   useTrackVolume,
@@ -42,7 +45,7 @@ const MONITOR_TITLES: Record<MonitorMode, string> = {
 }
 export interface ChannelStripProps {
   trackId: string
-  /** Numeric position (1-based) shown in the s-num header. Master uses 'M'. */
+  /** The insert's mixer number, shown in the cap. Master uses 'M'. */
   index: number | string
   /** Selected = highlighted + FX rack targets this strip. */
   selected: boolean
@@ -137,7 +140,10 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   // were a fixed pattern before: every strip showed one send it did not have.
   const outputName = useTrackStore((s) => {
     const bus = s.tracksById[trackId]?.outputBus
-    return bus ? (s.tracksById[bus]?.name ?? null) : null
+    const to = bus ? s.tracksById[bus] : undefined
+    if (!to) return null
+    // By its number, as the mixer shows it: "→ 4 Kick bus".
+    return to.kind === 'Master' || to.mixerNumber == null ? to.name : `${to.mixerNumber} ${insertName(to.mixerNumber, to)}`
   })
   const sends = useSendStore((s) => s.byTrack[trackId] ?? NO_SENDS)
   const sendDots = useMemo(
@@ -204,6 +210,16 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
   )
 
   const onClick = useCallback(() => onSelect(trackId), [trackId, onSelect])
+  // Right-click: Rename and Colour, as FL's insert menu.
+  const onContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (typeof index !== 'number') return
+      e.preventDefault()
+      onSelect(trackId)
+      useMixerSelectionStore.getState().openStripMenu({ number: index, x: e.clientX, y: e.clientY })
+    },
+    [index, trackId, onSelect],
+  )
 
   // ---- M/S/R pill handlers — stopPropagation so clicking the pill
   // doesn't also re-select the strip ----
@@ -284,6 +300,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
       // named tags, so a hex colour from the track never showed.
       style={color && /^#[0-9a-f]{6}$/i.test(color) ? ({ ['--strip-color' as string]: color } as CSSProperties) : undefined}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       data-track-id={trackId}
       data-idx={index}
     >
@@ -338,7 +355,7 @@ export const ChannelStrip = memo(function ChannelStrip(props: ChannelStripProps)
           </div>
         )}
       </div>
-      <div className="mx-s-name">{name || t('Track')}</div>
+      <StripName number={typeof index === 'number' ? index : 0} trackId={trackId} name={name || ''} />
       {/* What share of each audio block this track is taking. The CPU meter
           in the toolbar says the load is high; this says which track. Shown
           only once a track is worth noticing, so a mixer full of quiet

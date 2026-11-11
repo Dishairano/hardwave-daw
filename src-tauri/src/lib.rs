@@ -416,6 +416,17 @@ pub fn run() {
             commands::automation::set_automation_point_curve,
             commands::automation::set_automation_lane_visible,
             commands::automation::apply_lfo_to_lane,
+            commands::rows::get_playlist_rows,
+            commands::rows::set_clip_rows,
+            commands::rows::set_automation_clip_row,
+            commands::rows::set_row_name,
+            commands::rows::set_row_color,
+            commands::rows::set_row_mute,
+            commands::rows::set_row_solo,
+            commands::rows::insert_rows,
+            commands::rows::delete_rows,
+            commands::rows::place_clip_copy,
+            commands::rows::place_sample_on_row,
             commands::automation_clips::create_automation_clip,
             commands::automation_clips::delete_automation_clip,
             commands::automation_clips::list_automation_clips,
@@ -432,6 +443,7 @@ pub fn run() {
             // Tracks
             commands::tracks::get_tracks,
             commands::tracks::get_tracks_with_clips,
+            commands::rack_groups::get_rack_groups,
             commands::tracks::get_track_with_clips,
             commands::tracks::add_audio_track,
             commands::tracks::add_midi_track,
@@ -621,6 +633,8 @@ pub fn run() {
             commands::tracks::set_track_filter_cutoff,
             commands::tracks::set_track_filter_resonance,
             commands::tracks::set_track_output_bus,
+            commands::mixer_numbers::make_insert,
+            commands::mixer_numbers::route_to_insert,
             // Sends
             commands::sends::get_sends,
             commands::sends::list_sends,
@@ -1107,6 +1121,9 @@ pub fn run() {
                 // engine's processing anew without the song's plug-ins, which
                 // were then gone until the song was opened again.
                 let mut seen_starts = 0u64;
+                // The undo steps as last told: the History panel reads its
+                // list again when they change, instead of every second.
+                let mut seen_history = 0u64;
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(33));
                     tick = tick.wrapping_add(1);
@@ -1131,6 +1148,15 @@ pub fn run() {
                             Err(e) => {
                                 log::error!("Audio health check failed: {e}");
                                 let _ = app_handle.emit("audio-device-error", e);
+                            }
+                        }
+                        // A few times a second is soon enough for a list,
+                        // and a fader dragged on a desk is told once a turn.
+                        if tick.is_multiple_of(6) {
+                            let history = eng.history_version();
+                            if history != seen_history {
+                                seen_history = history;
+                                let _ = app_handle.emit("daw:historyChanged", ());
                             }
                         }
                         let starts = eng.start_count();

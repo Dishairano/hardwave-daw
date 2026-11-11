@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-rows"
+description = "Enables the delete_rows command without any pre-configured scope."
+commands.allow = ["delete_rows"]
+
+[[permission]]
+identifier = "deny-delete-rows"
+description = "Denies the delete_rows command without any pre-configured scope."
+commands.deny = ["delete_rows"]

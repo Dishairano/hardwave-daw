@@ -59,8 +59,19 @@ pub struct UndoHistory {
     pub starts_at_open: bool,
 }
 
+/// Off the window's thread: on a big song a step not described yet took
+/// a fifth of a second, and the window froze for as long. Steps are now
+/// described when they are taken and the list is kept until it changes,
+/// but whatever it costs still never holds up the window.
 #[tauri::command]
-pub fn get_undo_history(state: State<AppState>) -> UndoHistory {
+pub async fn get_undo_history(app: tauri::AppHandle) -> Result<UndoHistory, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || undo_history(&app.state::<AppState>()))
+        .await
+        .map_err(|e| format!("the history list could not be read: {e}"))
+}
+
+pub(crate) fn undo_history(state: &AppState) -> UndoHistory {
     // The engine's own lock only long enough to reach the two parts.
     let (project, history) = {
         let engine = state.engine.lock();

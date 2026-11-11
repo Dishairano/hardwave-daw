@@ -157,7 +157,8 @@ impl NativeConvReverb {
     }
 }
 
-/// Every space's impulse at `sample_rate`, in `preset_index` order.
+/// Every space's impulse at `sample_rate`, in `preset_index` order, each
+/// scaled by `level_matched`.
 fn prepare_bank(rev: &mut ConvolutionReverb, sample_rate: f32) -> Vec<PreparedIr> {
     [
         IrPreset::LargeHall,
@@ -167,10 +168,31 @@ fn prepare_bank(rev: &mut ConvolutionReverb, sample_rate: f32) -> Vec<PreparedIr
     ]
     .into_iter()
     .map(|p| {
-        let (l, r) = synthesize_ir(p, sample_rate);
+        let (mut l, mut r) = synthesize_ir(p, sample_rate);
+        level_matched(&mut l, &mut r);
         rev.prepare_ir(&l, &r)
     })
     .collect()
+}
+
+/// Scale an impulse so its energy per channel is 1: steady noise then
+/// comes out of the reverb as loud as it went in, whatever the space.
+/// The library scales its impulses to a peak of almost 1, which with
+/// seconds of tail behind it is thousands of times the energy: at the
+/// default 30 % a snare came out 21 dB louder than it went in.
+fn level_matched(left: &mut [f32], right: &mut [f32]) {
+    let energy: f64 = left
+        .iter()
+        .chain(right.iter())
+        .map(|&v| v as f64 * v as f64)
+        .sum::<f64>()
+        / 2.0;
+    if energy > 1e-12 {
+        let gain = (1.0 / energy.sqrt()) as f32;
+        for v in left.iter_mut().chain(right.iter_mut()) {
+            *v *= gain;
+        }
+    }
 }
 
 impl Default for NativeConvReverb {
@@ -441,6 +463,95 @@ mod tests {
 }
 
 #[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    fn energy(x: &[f32]) -> f64 {
+        x.iter().map(|&v| v as f64 * v as f64).sum()
+    }
+
+    /// Half a second of steady noise, then three seconds of silence.
+    fn noise_burst() -> Vec<f32> {
+        let mut seed: u32 = 0x2545_f491;
+        let mut x: Vec<f32> = (0..24_000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.5
+            })
+            .collect();
+        x.resize(24_000 + 3 * 48_000, 0.0);
+        x
+    }
+
+    fn run(p: &mut NativeConvReverb, input: &[f32]) -> Vec<f32> {
+        let mut out = Vec::with_capacity(input.len());
+        let mut outputs = vec![Vec::new(), Vec::new()];
+        let mut midi_out = Vec::new();
+        for block in input.chunks(512) {
+            p.process(
+                &[block, block],
+                &mut outputs,
+                &[],
+                &mut midi_out,
+                block.len(),
+            );
+            out.extend_from_slice(&outputs[0]);
+        }
+        out
+    }
+
+    /// At its default settings the reverb is about as loud as the dry
+    /// signal, and so is every space at 100 % wet. The impulses were
+    /// scaled to a peak of almost 1, which with seconds of tail behind
+    /// it is a huge amount of energy: a snare went from -4.5 to +17 dBFS.
+    #[test]
+    fn every_space_is_about_as_loud_as_the_dry_signal() {
+        let dry = noise_burst();
+        let e_dry = energy(&dry);
+
+        let mut p = NativeConvReverb::new();
+        p.activate(48_000.0, 512).unwrap();
+        let out = run(&mut p, &dry);
+        let db = 10.0 * (energy(&out) / e_dry).log10();
+        assert!(
+            db.abs() < 3.0,
+            "default settings: {db:.2} dB from the dry signal"
+        );
+
+        // A snare-like hit: noise dying away over 50 ms. Its peak stays
+        // the dry hit's peak, give or take 3 dB.
+        let hit: Vec<f32> = dry
+            .iter()
+            .enumerate()
+            .map(|(n, &v)| v * (-(n as f32) / 2_400.0).exp())
+            .collect();
+        let peak_dry = hit.iter().fold(0.0_f32, |m, v| m.max(v.abs()));
+        let mut p = NativeConvReverb::new();
+        p.activate(48_000.0, 512).unwrap();
+        let out = run(&mut p, &hit);
+        let peak = out.iter().fold(0.0_f32, |m, v| m.max(v.abs()));
+        let peak_db = 20.0 * (peak / peak_dry).log10();
+        assert!(
+            peak_db.abs() < 3.0,
+            "a hit at default settings peaks {peak_db:.2} dB from the dry hit"
+        );
+
+        for (i, name) in PRESET_NAMES.iter().enumerate() {
+            let mut p = NativeConvReverb::new();
+            p.activate(48_000.0, 512).unwrap();
+            p.set_parameter_value(PARAM_PRESET, i as f64 / 3.0);
+            p.set_parameter_value(PARAM_MIX, 1.0);
+            let wet = run(&mut p, &dry);
+            let db = 10.0 * (energy(&wet) / e_dry).log10();
+            assert!(
+                db.abs() < 4.0,
+                "{name} at 100 %: {db:.2} dB from the dry signal"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod preset_tests {
     use super::*;
 
@@ -451,7 +562,8 @@ mod preset_tests {
         let mut switched = NativeConvReverb::new();
         switched.set_parameter_value(PARAM_PRESET, preset_to_norm(IrPreset::SmallRoom));
         let mut fresh = NativeConvReverb::new();
-        let (l, r) = synthesize_ir(IrPreset::SmallRoom, 48_000.0);
+        let (mut l, mut r) = synthesize_ir(IrPreset::SmallRoom, 48_000.0);
+        level_matched(&mut l, &mut r);
         fresh.rev.load_ir_stereo(&l, &r);
         fresh.rev.set_low_cpu_mode(fresh.low_cpu);
         let (mut a, mut b) = (0.0_f32, 0.0_f32);

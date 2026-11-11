@@ -5,6 +5,8 @@ import { inputLabel, useTrackStore, type TrackInfo } from '../../../stores/track
 import { useNotificationStore } from '../../../stores/notificationStore'
 import { interfaceInputs, inputValue, parseInputValue } from './recordInputs'
 import { t, tf, useLanguage } from '../../../i18n'
+import { insertName, insertsByNumber, lastMixerNumber } from '../../../lib/mixerNumbers'
+import { routeToInsert, withNewInsert } from '../../../lib/insertActions'
 
 export interface RoutingMatrixProps {
   trackId: string
@@ -15,9 +17,8 @@ export interface RoutingMatrixProps {
 // render-loop.
 const EMPTY_SENDS: SendInfo[] = []
 
-/// A new project's inserts are called "Insert 12" and so on. Those are
-/// listed after the channels someone named or put something on.
-const DEFAULT_NAME = /^Insert \d+$/
+/** An option's value for an insert number with no track behind it yet. */
+const EMPTY = 'empty:'
 
 /**
  * Routing for the selected channel, at the top of the FX rack:
@@ -50,17 +51,22 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
     return () => { alive = false }
   }, [])
 
-  const { used, empty } = useMemo(() => {
-    const used: TrackInfo[] = []
-    const empty: TrackInfo[] = []
-    for (const t of tracks) {
-      if (t.id === trackId || t.kind === 'Master') continue
-      const inUse =
-        !DEFAULT_NAME.test(t.name) || t.inserts.length > 0 || t.id === self?.outputBus
-      ;(inUse ? used : empty).push(t)
+  // The mixer's inserts by number, "4 Kick bus", and the numbers no track
+  // has yet, which become an insert when picked. It guessed which inserts
+  // were empty from the name "Insert N" before, and listed every track,
+  // playlist lanes included, in list order.
+  const { inserts, emptyNumbers } = useMemo(() => {
+    const byNumber = insertsByNumber(tracks)
+    const inserts: { number: number; track: TrackInfo }[] = []
+    const emptyNumbers: number[] = []
+    const last = lastMixerNumber(tracks)
+    for (let n = 1; n <= last; n++) {
+      const track = byNumber.get(n)
+      if (!track) emptyNumbers.push(n)
+      else if (track.id !== trackId) inserts.push({ number: n, track })
     }
-    return { used, empty }
-  }, [tracks, trackId, self?.outputBus])
+    return { inserts, emptyNumbers }
+  }, [tracks, trackId])
 
   // A refused route (a loop back to this channel, say) says why on screen.
   const report = (what: string) => (e: unknown) => {
@@ -70,12 +76,17 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
 
   const setOutput = useCallback(
     (value: string) => {
+      if (value.startsWith(EMPTY)) {
+        const n = Number(value.slice(EMPTY.length))
+        void routeToInsert([trackId], n, tf('Route "{name}" to insert {n}', { name: self?.name ?? '', n })).catch(() => {})
+        return
+      }
       useTrackStore
         .getState()
         .setTrackOutputBus(trackId, value === '' ? null : value)
         .catch(report('Could not change the output'))
     },
-    [trackId],
+    [trackId, self?.name],
   )
 
   // An input of the interface (so two tracks can record two inputs at
@@ -109,25 +120,37 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
   const addSend = useCallback(
     (target: string) => {
       if (!target) return
+      if (target.startsWith(EMPTY)) {
+        // A send to an empty number makes the insert: one undo step.
+        const n = Number(target.slice(EMPTY.length))
+        void withNewInsert(n, `Send to insert ${n}`, (id) =>
+          useSendStore.getState().addSend(trackId, id, -6, false),
+        ).catch(report('Could not add the send'))
+        return
+      }
       useSendStore.getState().addSend(trackId, target, -6, false).catch(report('Could not add the send'))
     },
     [trackId],
   )
 
-  const destinations = (exclude: Set<string>) => (
+  /** The inserts by number, then (for an output or a send) the empty
+   *  numbers. Recording takes a track's sound, so it lists no empty ones. */
+  const destinations = (exclude: Set<string>, withEmpty: boolean) => (
     <>
-      {used.length > 0 && (
-        <optgroup label={t('Channels in use')}>
-          {used.filter((t) => !exclude.has(t.id)).map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
+      {inserts.length > 0 && (
+        <optgroup label={t('Inserts')}>
+          {inserts.filter(({ track }) => !exclude.has(track.id)).map(({ number, track }) => (
+            <option key={track.id} value={track.id}>{`${number} ${insertName(number, track)}`}</option>
           ))}
         </optgroup>
       )}
-      <optgroup label={t('Empty inserts')}>
-        {empty.filter((t) => !exclude.has(t.id)).map((t) => (
-          <option key={t.id} value={t.id}>{t.name}</option>
-        ))}
-      </optgroup>
+      {withEmpty && emptyNumbers.length > 0 && (
+        <optgroup label={t('Empty inserts')}>
+          {emptyNumbers.map((n) => (
+            <option key={n} value={`${EMPTY}${n}`}>{`${n} ${insertName(n)}`}</option>
+          ))}
+        </optgroup>
+      )}
     </>
   )
 
@@ -168,7 +191,7 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
               </optgroup>
             )}
             {masterId && <option value={masterId}>{t('Master (the whole song)')}</option>}
-            {destinations(new Set())}
+            {destinations(new Set(), false)}
           </select>
           <div className="mx-fx-routing-head" style={{ marginTop: 10 }}>
             <h4>{t('Output')}</h4>
@@ -187,7 +210,7 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
         title={t("Where this channel's sound goes")}
       >
         <option value="">Master</option>
-        {destinations(new Set())}
+        {destinations(new Set(), true)}
       </select>
 
       <div className="mx-fx-routing-head" style={{ marginTop: 10 }}>
@@ -200,7 +223,12 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
       )}
       <div className="mx-fx-route-list">
         {sends.map((send) => {
-          const dest = tracks.find((t) => t.id === send.target)?.name ?? t('(missing channel)')
+          const to = tracks.find((t) => t.id === send.target)
+          const dest = !to
+            ? t('(missing channel)')
+            : to.mixerNumber != null && to.kind !== 'Master'
+              ? `${to.mixerNumber} ${insertName(to.mixerNumber, to)}`
+              : to.name
           const active = send.enabled
           const rev = send.preFader
           const rowCls =
@@ -278,7 +306,7 @@ export const RoutingMatrix = memo(function RoutingMatrix({ trackId }: RoutingMat
         style={{ marginTop: 6 }}
       >
         <option value="">{t('+ Send to…')}</option>
-        {destinations(sentTo)}
+        {destinations(sentTo, true)}
       </select>
     </div>
   )

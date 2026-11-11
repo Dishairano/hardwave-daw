@@ -79,6 +79,14 @@ pub trait HostedPlugin: Send {
     fn get_parameter_value(&self, id: u32) -> f64;
     fn set_parameter_value(&mut self, id: u32, value: f64);
 
+    /// Hand parameter changes still waiting for the next block to the
+    /// plug-in now, without processing audio. VST3 and CLAP plug-ins only
+    /// hear a new value inside a block, and with the song stopped no block
+    /// runs, so a knob set then read back its old value until play.
+    /// Audio thread only, never during `process`. Native plug-ins set their
+    /// values directly and have nothing to hand over.
+    fn flush_parameters(&mut self) {}
+
     /// Get opaque plugin state for save.
     fn get_state(&self) -> Vec<u8>;
 

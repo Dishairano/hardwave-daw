@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-row-solo"
+description = "Enables the set_row_solo command without any pre-configured scope."
+commands.allow = ["set_row_solo"]
+
+[[permission]]
+identifier = "deny-set-row-solo"
+description = "Denies the set_row_solo command without any pre-configured scope."
+commands.deny = ["set_row_solo"]
