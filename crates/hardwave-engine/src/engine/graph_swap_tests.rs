@@ -411,22 +411,42 @@ fn the_audio_thread_neither_builds_nor_allocates_for_an_edit() {
                 }
             }
             commands.send(EngineCommand::RebuildGraph).unwrap();
-            // The block that takes the request.
+            // The block that takes the request. A graph the builder thread
+            // finished may already go in here (one asked for earlier, or
+            // this one when the test thread was held up for a moment), so
+            // what is checked is that this thread built nothing.
             let seq = cb.graph_seq;
+            let built_here = super::graph_build::builds_on_this_thread();
             let (allocs, frees) = counted(|| cb.process(&mut out, BLOCK, 2));
             all.extend_from_slice(&out);
             assert_eq!((allocs, frees), (0, 0), "asking for a graph");
-            assert_eq!(cb.graph_seq, seq, "nothing is built on the audio thread");
-            // Wait for the builder, as the sound card would keep calling.
+            assert_eq!(
+                super::graph_build::builds_on_this_thread(),
+                built_here,
+                "nothing is built on the audio thread"
+            );
+            let BuildMode::Thread(link) = &cb.builder else {
+                panic!("the builder thread is still running");
+            };
+            let wanted = link.requested();
+            assert!(wanted > seq, "the edit asked for a graph");
+            // Wait for the builder, as the sound card would keep calling,
+            // until the graph asked for is in.
             let started = std::time::Instant::now();
-            while !matches!(&cb.builder, BuildMode::Thread(link) if link.has_ready()) {
-                assert!(started.elapsed().as_secs() < 30, "the builder answers");
-                std::thread::yield_now();
+            while cb.graph_seq < wanted {
+                while !matches!(&cb.builder, BuildMode::Thread(link) if link.has_ready()) {
+                    assert!(started.elapsed().as_secs() < 30, "the builder answers");
+                    std::thread::yield_now();
+                }
+                let (allocs, frees) = counted(|| cb.process(&mut out, BLOCK, 2));
+                all.extend_from_slice(&out);
+                assert_eq!((allocs, frees), (0, 0), "swapping the graph in");
             }
-            let (allocs, frees) = counted(|| cb.process(&mut out, BLOCK, 2));
-            all.extend_from_slice(&out);
-            assert_eq!((allocs, frees), (0, 0), "swapping the graph in");
-            assert!(cb.graph_seq > seq, "the new graph is in");
+            assert_eq!(
+                super::graph_build::builds_on_this_thread(),
+                built_here,
+                "nothing is built on the audio thread"
+            );
             swaps += 1;
             continue;
         }
