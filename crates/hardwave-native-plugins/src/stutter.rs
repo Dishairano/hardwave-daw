@@ -340,8 +340,8 @@ impl HostedPlugin for NativeStutter {
 
     fn get_state(&self) -> Vec<u8> {
         format!(
-            "{{\"mix\":{},\"slice\":{},\"rep\":{},\"dec\":{}}}",
-            self.mix, self.slice_ms, self.repeats, self.decay
+            "{{\"mix\":{},\"slice\":{},\"rep\":{},\"dec\":{},\"sync\":{}}}",
+            self.mix, self.slice_ms, self.repeats, self.decay, self.sync
         )
         .into_bytes()
     }
@@ -367,6 +367,8 @@ impl HostedPlugin for NativeStutter {
         if let Some(v) = read("dec") {
             self.decay = v.clamp(0.5, 1.0);
         }
+        // Older songs have no sync: their stutter was free running.
+        self.sync = read("sync").map_or(0, |v| (v.max(0.0) as usize).min(SYNC_DIVISIONS.len() - 1));
         self.recompute_slice();
         Ok(())
     }
