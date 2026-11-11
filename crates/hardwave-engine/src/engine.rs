@@ -3221,6 +3221,56 @@ impl DawEngine {
         }
     }
 
+    /// Play the song from the top as a sound card does, without one: the graph is
+    /// built for the engine's buffer size, as playback builds it, and each
+    /// block asks for `device_frames`, which a driver can make fewer than
+    /// that (Windows hands 480-frame blocks to a graph built for 512).
+    /// Plug-ins on the project's inserts are made with `instantiate`, as an
+    /// export makes them. Each interleaved stereo block goes to `on_block`
+    /// (false stops early).
+    ///
+    /// For checking that playback and an export of the same song agree:
+    /// an export always fills its blocks, so a part of playback that went
+    /// wrong only on a short block was never heard in one. Like
+    /// [`Self::play_live_without_device`] it reads the engine's own MIDI
+    /// input, and refuses while the engine is running.
+    pub fn play_live_in_device_blocks(
+        &self,
+        sample_rate: u32,
+        total_samples: u64,
+        device_frames: usize,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+        mut on_block: impl FnMut(&[f32]) -> bool,
+    ) -> Result<(), String> {
+        if self.is_running() {
+            return Err("the engine is running: its audio thread reads the live input".into());
+        }
+        let buffer_size = (self.audio_device.buffer_size as usize).max(1);
+        let device_frames = device_frames.max(1);
+        let mut callback = self.offline_callback(
+            sample_rate,
+            buffer_size,
+            0,
+            instantiate,
+            |_| {},
+            Arc::new(Mutex::new(None)),
+        );
+        callback.midi_input = Arc::clone(&self.midi_input);
+        callback.midi_capture_ring = Arc::clone(&self.midi_capture_ring);
+        let mut buf = vec![0.0_f32; device_frames * 2];
+        let mut left = total_samples;
+        while left > 0 {
+            let frames = left.min(device_frames as u64) as usize;
+            buf.fill(0.0);
+            callback.process(&mut buf, frames, 2);
+            if !on_block(&buf[..frames * 2]) {
+                break;
+            }
+            left -= frames as u64;
+        }
+        Ok(())
+    }
+
     /// What one graph costs, `runs` times over, with the song playing from
     /// half a minute in: `build` is the work done off the audio thread,
     /// `swap` what the audio thread does to put the graph in. The plug-ins
