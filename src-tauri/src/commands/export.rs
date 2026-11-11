@@ -156,6 +156,20 @@ fn instrument_ids(engine: &DawEngine) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// What the export window shows while the stretched clips are baked
+/// before the render: how many are done, at 0 percent so no time left is
+/// guessed from it. The last one clears the line again for the render.
+fn baking_progress(done: usize, total: usize) -> ExportProgress {
+    ExportProgress {
+        percent: 0.0,
+        label: Some(if done < total {
+            format!("preparing stretched audio, {done} of {total}")
+        } else {
+            String::new()
+        }),
+    }
+}
+
 /// What a render plays.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum RenderAs {
@@ -196,6 +210,7 @@ where
         start_samples,
         cancel,
         on_progress,
+        |_, _| {},
         render_as,
         prepare,
     )
@@ -203,25 +218,50 @@ where
 }
 
 /// As `render_unlocked`, and say how loud the file came out: `None` when
-/// the render was cancelled.
+/// the render was cancelled. `on_bake(done, total)` follows the clips'
+/// bakes made before the render.
 #[allow(clippy::too_many_arguments)]
 fn render_unlocked_measured<F>(
-    engine: parking_lot::MutexGuard<'_, DawEngine>,
+    mut engine: parking_lot::MutexGuard<'_, DawEngine>,
     out_path: &Path,
     fmt: RenderFormat,
     total_samples: u64,
     start_samples: u64,
     cancel: &Arc<AtomicBool>,
     on_progress: F,
+    on_bake: impl FnMut(usize, usize),
     render_as: RenderAs,
     prepare: impl FnOnce(&mut Project),
 ) -> Result<Option<FileLoudness>, String>
 where
     F: FnMut(u64, u64),
 {
+    // The stretched, warped and tuned clips are baked first, with the
+    // engine let go. Made under its lock, the first export after an FL
+    // import baked every stretched clip of the song while the window
+    // waited for the engine to save, poll or play, over a minute and a
+    // half. Only the clips the render plays are baked; a pattern plays
+    // from the channel rack, so it gets them all.
+    let pattern = match render_as {
+        RenderAs::Pattern => true,
+        RenderAs::ATrack => false,
+        RenderAs::Mix => engine.transport.pattern_mode.load(Ordering::Relaxed),
+    };
+    let span = (!pattern).then(|| (start_samples, start_samples.saturating_add(total_samples)));
+    let bakes = engine.offline_bakes(fmt.sample_rate, span);
+    if !bakes.is_empty()
+        && !parking_lot::MutexGuard::unlocked(&mut engine, || bakes.run(cancel, on_bake))
+    {
+        return Ok(None);
+    }
     let factory = offline_insert_factory(&engine);
-    let render =
-        engine.prepare_offline_render(fmt.sample_rate, start_samples, Some(&factory), prepare);
+    let render = engine.prepare_offline_span(
+        fmt.sample_rate,
+        start_samples,
+        span,
+        Some(&factory),
+        prepare,
+    );
     drop(engine);
     let render = match render_as {
         RenderAs::Mix => render,
@@ -1290,6 +1330,9 @@ pub async fn export_project_wav(
                     );
                 }
             },
+            |done, total| {
+                let _ = app_for_progress.emit("export-progress", baking_progress(done, total));
+            },
             if pattern {
                 RenderAs::Pattern
             } else {
@@ -2004,7 +2047,7 @@ pub async fn export_project_stems(
                 let label = track_name.clone();
                 let idx = render_idx;
 
-                let completed = render_unlocked(
+                let completed = render_unlocked_measured(
                     engine.lock(),
                     &stem_path,
                     fmt,
@@ -2026,6 +2069,15 @@ pub async fn export_project_stems(
                             );
                         }
                     },
+                    |done, total| {
+                        let _ = app_for_progress.emit(
+                            "export-progress",
+                            ExportProgress {
+                                percent: (idx as f64 / total_renders as f64 * 100.0) as f32,
+                                ..baking_progress(done, total)
+                            },
+                        );
+                    },
                     render_as,
                     |proj: &mut Project| {
                         isolate_for_stem(proj, &target_id);
@@ -2040,7 +2092,8 @@ pub async fn export_project_stems(
                             end_the_song_at(proj, end, sample_rate);
                         }
                     },
-                )?;
+                )?
+                .is_some();
 
                 if !completed {
                     let _ = fs::remove_file(&stem_path);
@@ -2059,7 +2112,7 @@ pub async fn export_project_stems(
                 let app_for_progress = app.clone();
                 let idx = render_idx;
 
-                let completed = render_unlocked(
+                let completed = render_unlocked_measured(
                     engine.lock(),
                     &master_path,
                     fmt,
@@ -2081,6 +2134,15 @@ pub async fn export_project_stems(
                             );
                         }
                     },
+                    |done, total| {
+                        let _ = app_for_progress.emit(
+                            "export-progress",
+                            ExportProgress {
+                                percent: (idx as f64 / total_renders as f64 * 100.0) as f32,
+                                ..baking_progress(done, total)
+                            },
+                        );
+                    },
                     render_as,
                     |proj: &mut Project| {
                         if let Some(end) = range_end {
@@ -2094,7 +2156,8 @@ pub async fn export_project_stems(
                             }
                         }
                     },
-                )?;
+                )?
+                .is_some();
 
                 if !completed {
                     let _ = fs::remove_file(&master_path);
@@ -3054,6 +3117,102 @@ mod stem_and_freeze_tests {
             p.track(&drums).unwrap().muted,
             "another track's own mute stays, as it keys sidechains as heard"
         );
+    }
+
+    /// An export bakes its stretched clips with the engine let go, so the
+    /// window's commands (the autosave, the polls, the transport) get it
+    /// at once; the export window hears how far the bakes are; and
+    /// stopping the export stops it before the next bake, with no file. The first
+    /// export after an FL import held the engine through every bake, and
+    /// the window froze for a minute and a half.
+    #[test]
+    fn an_export_bakes_its_stretched_clips_with_the_engine_free() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let engine = parking_lot::Mutex::new(DawEngine::new());
+        {
+            let e = engine.lock();
+            e.audio_pool.insert(
+                "loop".into(),
+                AudioBuffer {
+                    channels: vec![vec![0.25; SR as usize]; 2],
+                    sample_rate: SR,
+                    num_frames: SR as usize,
+                },
+            );
+            let mut p = e.project.lock();
+            let id = p.add_audio_track("Loop".into());
+            for (n, stretch) in [1.5f64, 2.0].into_iter().enumerate() {
+                let mut clip = audio(&format!("c{n}"), "loop", SR as u64, &id);
+                if let ClipContent::Audio(a) = &mut clip.content {
+                    a.stretch_ratio = stretch;
+                }
+                clip.position_ticks = n as u64 * LEN_TICKS;
+                p.track_mut(&id).unwrap().clips.push(clip);
+            }
+        }
+        let dir = tempfile::tempdir().expect("a folder");
+        let out = dir.path().join("export.wav");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut seen = Vec::new();
+        let loudness = super::render_unlocked_measured(
+            engine.lock(),
+            &out,
+            super::format_for_a_track(SR),
+            SR as u64 * 4,
+            0,
+            &cancel,
+            |_, _| {},
+            |done, total| {
+                // What the window does: its command gets the engine now.
+                assert!(
+                    engine.try_lock().is_some(),
+                    "the engine is free while the export bakes"
+                );
+                seen.push((done, total));
+                // Stopped as soon as the bakes start.
+                cancel.store(true, Ordering::Relaxed);
+            },
+            super::RenderAs::Mix,
+            |_| {},
+        )
+        .expect("no error");
+        assert!(loudness.is_none(), "stopped");
+        assert_eq!(seen, vec![(0, 2)], "stopped before a bake was made");
+        assert!(!out.exists(), "no file");
+
+        // Started again, it makes the bakes and the file.
+        cancel.store(false, Ordering::Relaxed);
+        let mut seen = Vec::new();
+        let loudness = super::render_unlocked_measured(
+            engine.lock(),
+            &out,
+            super::format_for_a_track(SR),
+            SR as u64 * 4,
+            0,
+            &cancel,
+            |_, _| {},
+            |done, total| seen.push((done, total)),
+            super::RenderAs::Mix,
+            |_| {},
+        )
+        .expect("no error");
+        assert!(loudness.is_some());
+        assert_eq!(seen, vec![(0, 2), (1, 2), (2, 2)]);
+        assert!(out.exists());
+    }
+
+    /// While the stretched clips are baked the export window says so, and
+    /// the last one clears the line for the render.
+    #[test]
+    fn the_export_window_says_the_stretched_clips_are_being_prepared() {
+        let first = super::baking_progress(0, 3);
+        assert_eq!(first.percent, 0.0);
+        assert_eq!(
+            first.label.as_deref(),
+            Some("preparing stretched audio, 0 of 3")
+        );
+        assert_eq!(super::baking_progress(3, 3).label.as_deref(), Some(""));
     }
 }
 

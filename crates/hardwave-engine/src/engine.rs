@@ -123,6 +123,34 @@ struct WarpBake {
     semitones: f64,
 }
 
+/// The part of the song a render plays, in samples at its rate: only the
+/// clips that sound in it need their bakes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BakeSpan {
+    from: u64,
+    to: u64,
+    sample_rate: f64,
+}
+
+impl BakeSpan {
+    /// Whether `clip` sounds in `span`; every clip does when there is none.
+    fn plays(
+        span: Option<BakeSpan>,
+        clip: &hardwave_project::clip::ClipPlacement,
+        tempo_map: &hardwave_project::tempo::TempoMap,
+    ) -> bool {
+        let Some(span) = span else {
+            return true;
+        };
+        let start = tempo_map.tick_to_samples(clip.position_ticks, span.sample_rate);
+        let end = tempo_map.tick_to_samples(
+            clip.position_ticks.saturating_add(clip.length_ticks),
+            span.sample_rate,
+        );
+        start < span.to && end > span.from
+    }
+}
+
 /// Pool id for a baked stretch / pitch-shift variant of a source. The
 /// original id stays untouched in the project, so `rehydrate_audio_pool`
 /// (which walks clips' `source_path`) never sees these derived keys.
@@ -184,6 +212,8 @@ use hardwave_project::describe::describe_snapshots;
 use hardwave_project::snapshot::Snapshot;
 
 mod graph_build;
+mod offline_bakes;
+pub use offline_bakes::OfflineBakes;
 #[cfg(test)]
 mod graph_swap_tests;
 use graph_build::{
@@ -1873,8 +1903,9 @@ impl DawEngine {
         let _ = self.command_tx.try_send(EngineCommand::RebuildGraph);
     }
 
-    /// The takes with notes tuned by hand this project's clips play.
-    fn tune_bake_plan(&self) -> Vec<TuneBake> {
+    /// The takes with notes tuned by hand this project's clips play, of
+    /// the clips in `span` when there is one.
+    fn tune_bake_plan(&self, span: Option<BakeSpan>) -> Vec<TuneBake> {
         use hardwave_project::clip::ClipContent;
         let project = self.project.lock();
         let mut acc: Vec<TuneBake> = Vec::new();
@@ -1883,6 +1914,9 @@ impl DawEngine {
                 let ClipContent::Audio(audio_clip) = &clip.content else {
                     continue;
                 };
+                if !BakeSpan::plays(span, clip, &project.tempo_map) {
+                    continue;
+                }
                 if !audio_clip.has_tuned_notes() {
                     continue;
                 }
@@ -1985,13 +2019,17 @@ impl DawEngine {
         })
     }
 
-    /// The (source, stretch, semitones) variants this project's clips need.
-    fn stretch_bake_plan(&self) -> Vec<(String, f64, f64)> {
+    /// The (source, stretch, semitones) variants this project's clips need,
+    /// the clips in `span` when there is one.
+    fn stretch_bake_plan(&self, span: Option<BakeSpan>) -> Vec<(String, f64, f64)> {
         use hardwave_project::clip::ClipContent;
         let project = self.project.lock();
         let mut acc: Vec<(String, f64, f64)> = Vec::new();
         for track in &project.tracks {
             for clip in &track.clips {
+                if !BakeSpan::plays(span, clip, &project.tempo_map) {
+                    continue;
+                }
                 if let ClipContent::Audio(audio_clip) = &clip.content {
                     // A clip that follows the tempo, as it plays at this map.
                     let file_rate = self
@@ -2055,9 +2093,10 @@ impl DawEngine {
         );
     }
 
-    /// The warped clips' renders the project needs at `sample_rate`. A clip
-    /// set to resample plays its warp like a tape and is not baked.
-    fn warp_bake_plan(&self, sample_rate: f64) -> Vec<WarpBake> {
+    /// The warped clips' renders the project needs at `sample_rate`, of the
+    /// clips in `span` when there is one. A clip set to resample plays its
+    /// warp like a tape and is not baked.
+    fn warp_bake_plan(&self, sample_rate: f64, span: Option<BakeSpan>) -> Vec<WarpBake> {
         use hardwave_project::clip::ClipContent;
         let project = self.project.lock();
         let mut acc: Vec<WarpBake> = Vec::new();
@@ -2066,6 +2105,9 @@ impl DawEngine {
                 let ClipContent::Audio(audio_clip) = &clip.content else {
                     continue;
                 };
+                if !BakeSpan::plays(span, clip, &project.tempo_map) {
+                    continue;
+                }
                 let Some(buffer_rate) = self
                     .audio_pool
                     .get(&audio_clip.source_path)
@@ -2143,24 +2185,25 @@ impl DawEngine {
     }
 
     /// Bake every warped clip's render the project needs at `sample_rate`,
-    /// BLOCKING until done: the export path, at the export's rate.
+    /// BLOCKING until done.
     fn prebake_warps(&self, sample_rate: f64) {
-        for bake in self.warp_bake_plan(sample_rate) {
+        for bake in self.warp_bake_plan(sample_rate, None) {
             Self::bake_warp_variant(&self.audio_pool, &bake, sample_rate);
         }
     }
 
     /// Bake every stretch variant the project needs, BLOCKING until done.
     ///
-    /// This is the export path: a bounce must not race the bake, or it would
-    /// render varispeed and not match playback. Never call it from the audio
-    /// thread — see [`Self::prebake_stretch_sources_async`] for the UI path.
+    /// A bounce must not race the bake, or it would render varispeed and
+    /// not match playback; a render makes its own with
+    /// [`Self::offline_bakes`]. Never call it from the audio thread — see
+    /// [`Self::prebake_stretch_sources_async`] for the UI path.
     pub fn prebake_stretch_sources(&self) {
         // Tuned takes first: a clip's stretch is baked from its tuned take.
-        for bake in self.tune_bake_plan() {
+        for bake in self.tune_bake_plan(None) {
             Self::bake_tune_variant(&self.audio_pool, &bake);
         }
-        for (source_id, stretch, semitones) in self.stretch_bake_plan() {
+        for (source_id, stretch, semitones) in self.stretch_bake_plan(None) {
             Self::bake_stretch_variant(&self.audio_pool, &source_id, stretch, semitones);
         }
         self.prebake_warps(self.current_sample_rate() as f64);
@@ -2178,12 +2221,12 @@ impl DawEngine {
         let (tunes, todo, warps): Plans = {
             let mut inflight = self.stretch_inflight.lock();
             let tunes = self
-                .tune_bake_plan()
+                .tune_bake_plan(None)
                 .into_iter()
                 .filter(|b| !self.audio_pool.contains(&b.key) && inflight.insert(b.key.clone()))
                 .collect();
             let todo = self
-                .stretch_bake_plan()
+                .stretch_bake_plan(None)
                 .into_iter()
                 .filter(|(s, st, se)| {
                     let key = stretch_cache_key(s, *st, *se);
@@ -2191,7 +2234,7 @@ impl DawEngine {
                 })
                 .collect();
             let warps = self
-                .warp_bake_plan(sample_rate)
+                .warp_bake_plan(sample_rate, None)
                 .into_iter()
                 .filter(|b| !self.audio_pool.contains(&b.key) && inflight.insert(b.key.clone()))
                 .collect();
@@ -3199,10 +3242,28 @@ impl DawEngine {
     /// that lock for the whole render, and every window command that touched
     /// the engine (the load meters poll it several times a second) waited
     /// behind it: the app stopped responding until the export ended.
+    ///
+    /// Every clip's bakes are made first; see [`Self::prepare_offline_span`].
     pub fn prepare_offline_render(
         &self,
         sample_rate: u32,
         start_samples: u64,
+        instantiate: Option<OfflineInsertFactory<'_>>,
+        prepare: impl FnOnce(&mut Project),
+    ) -> OfflineRender {
+        self.prepare_offline_span(sample_rate, start_samples, None, instantiate, prepare)
+    }
+
+    /// As [`Self::prepare_offline_render`], making only the bakes of the
+    /// clips that sound between `bake_span`'s two sample positions when
+    /// there is one. Made here, the bakes hold the caller's lock: make them
+    /// before with [`Self::offline_bakes`], without it, and this finds them
+    /// done.
+    pub fn prepare_offline_span(
+        &self,
+        sample_rate: u32,
+        start_samples: u64,
+        bake_span: Option<(u64, u64)>,
         instantiate: Option<OfflineInsertFactory<'_>>,
         prepare: impl FnOnce(&mut Project),
     ) -> OfflineRender {
@@ -3217,6 +3278,7 @@ impl DawEngine {
                 sample_rate,
                 buffer_size,
                 start_samples,
+                bake_span,
                 instantiate,
                 prepare,
                 Arc::new(Mutex::new(pool)),
@@ -3256,6 +3318,7 @@ impl DawEngine {
             sample_rate,
             buffer_size,
             0,
+            None,
             instantiate,
             |_| {},
             Arc::new(Mutex::new(None)),
@@ -3282,8 +3345,15 @@ impl DawEngine {
     /// are left out; clips, notes, automation and routing are all there.
     #[doc(hidden)]
     pub fn graph_build_times(&self, runs: usize) -> Vec<GraphBuildTime> {
-        let mut callback =
-            self.offline_callback(48_000, 512, 0, None, |_| {}, Arc::new(Mutex::new(None)));
+        let mut callback = self.offline_callback(
+            48_000,
+            512,
+            0,
+            None,
+            None,
+            |_| {},
+            Arc::new(Mutex::new(None)),
+        );
         callback.transport.set_position(48_000 * 30);
         let mut out = vec![0.0f32; 512 * 2];
         for _ in 0..4 {
@@ -3335,6 +3405,7 @@ impl DawEngine {
             sample_rate,
             buffer_size,
             0,
+            None,
             instantiate,
             |_| {},
             Arc::clone(&self.worker_pool),
@@ -3369,6 +3440,7 @@ impl DawEngine {
             sample_rate,
             buffer_size,
             0,
+            None,
             instantiate,
             |_| {},
             Arc::clone(&self.worker_pool),
@@ -3427,6 +3499,7 @@ impl DawEngine {
             buffer_size,
             0,
             None,
+            None,
             |_| {},
             Arc::new(Mutex::new(None)),
         );
@@ -3457,11 +3530,13 @@ impl DawEngine {
 
     /// A private callback over a snapshot of the project, for renders
     /// that happen beside playback rather than through the sound card.
+    #[allow(clippy::too_many_arguments)]
     fn offline_callback(
         &self,
         sample_rate: u32,
         buffer_size: usize,
         start_samples: u64,
+        bake_span: Option<(u64, u64)>,
         instantiate: Option<OfflineInsertFactory<'_>>,
         prepare: impl FnOnce(&mut Project),
         worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
@@ -3469,13 +3544,11 @@ impl DawEngine {
         // Bake stretch variants before rendering. The offline callback's
         // rebuild only looks them up, so without this an export would fall
         // back to varispeed and not match playback. Safe here — an export
-        // runs on the caller's thread, not the audio callback.
-        self.prebake_stretch_sources();
-        // Warped clips at the export's own rate, which may not be the
-        // device's.
-        if sample_rate != self.current_sample_rate() {
-            self.prebake_warps(sample_rate as f64);
-        }
+        // runs on the caller's thread, not the audio callback. Warped clips
+        // are baked at the render's own rate, which may not be the
+        // device's. Only the clips the render plays need theirs.
+        self.offline_bakes(sample_rate, bake_span)
+            .run(&std::sync::atomic::AtomicBool::new(false), |_, _| {});
 
         // Harvest LIVE plug-in state so a bounce reflects the knobs the user
         // is actually hearing. `hydrate_offline_inserts` replays whatever is
