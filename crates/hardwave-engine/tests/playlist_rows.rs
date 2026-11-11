@@ -315,15 +315,23 @@ fn a_muted_row_silences_its_clips_and_no_other() {
 }
 
 #[test]
-fn a_soloed_row_silences_every_other_row_but_not_clips_without_one() {
+fn a_soloed_row_silences_every_other_row_including_clips_drawn_there() {
     let (engine, _) = three_clips();
-    engine.project.lock().rows[1].soloed = true;
+    {
+        let mut p = engine.project.lock();
+        // A clip with no stored row is drawn on the row most of its channel's
+        // clips use (the lowest of equals), here row 0, and obeys that row.
+        let shown = hardwave_project::layout::shown_rows(&p.tracks);
+        let drums = shown.last().expect("the drums track");
+        assert_eq!(drums.clips[2], 0, "the clip with no row is drawn on row 0");
+        p.rows[1].soloed = true;
+    }
     let out = render(&engine, 6);
     assert!(peak(&out, 0, 1) < 1e-6, "row 0 is not soloed");
     assert!(peak(&out, 2, 3) > 0.3, "the soloed row plays");
     assert!(
-        peak(&out, 4, 5) > 0.3,
-        "a clip with no row is never silenced"
+        peak(&out, 4, 5) < 1e-6,
+        "a clip with no row is silenced with the row it is drawn on"
     );
 }
 
