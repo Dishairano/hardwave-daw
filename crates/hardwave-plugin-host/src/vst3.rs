@@ -707,6 +707,25 @@ impl Vst3PluginInstance {
     }
 }
 
+impl Vst3Inner {
+    /// Move the waiting parameter changes (the plug-in window's edits and
+    /// the host's) into this block's change list, which keeps its room.
+    fn take_param_changes(&mut self) {
+        self.in_changes.clear();
+        {
+            let mut q = self.pending_params.lock();
+            for &(id, value) in q.iter() {
+                self.in_changes.add(id as ParamID, 0, value);
+            }
+            q.clear();
+        }
+        for &(id, value) in self.host_param_changes.iter() {
+            self.in_changes.add(id as ParamID, 0, value);
+        }
+        self.host_param_changes.clear();
+    }
+}
+
 impl Drop for Vst3Inner {
     fn drop(&mut self) {
         // Detach + release the plug view first so the plugin can
@@ -1074,18 +1093,7 @@ impl HostedPlugin for Vst3PluginInstance {
         // The processor hears parameters only through this block's
         // parameter changes: edits made in the plug-in's own window (its
         // controller already has them) and values the host set.
-        inner.in_changes.clear();
-        {
-            let mut q = inner.pending_params.lock();
-            for &(id, value) in q.iter() {
-                inner.in_changes.add(id as ParamID, 0, value);
-            }
-            q.clear();
-        }
-        for &(id, value) in inner.host_param_changes.iter() {
-            inner.in_changes.add(id as ParamID, 0, value);
-        }
-        inner.host_param_changes.clear();
+        inner.take_param_changes();
 
         // Prepare output buffers.
         for out in outputs.iter_mut() {
@@ -1232,6 +1240,49 @@ impl HostedPlugin for Vst3PluginInstance {
         }
     }
 
+    fn flush_parameters(&mut self) {
+        let Ok(inner) = self.inner_mut() else {
+            return;
+        };
+        // Not processing: the first block after activation takes them.
+        if !inner.processing || inner.processor.is_none() || inner.in_changes_ptr.is_none() {
+            return;
+        }
+        if inner.host_param_changes.is_empty() && inner.pending_params.lock().is_empty() {
+            return;
+        }
+        inner.take_param_changes();
+        let (Some(processor), Some(changes)) = (&inner.processor, &inner.in_changes_ptr) else {
+            return;
+        };
+        // A block of no samples and no buses is VST3's way to hand over
+        // parameter changes alone, so the processor (and with it the state
+        // a save or read-back takes) has the value with the song stopped.
+        let mut data = vst3::Steinberg::Vst::ProcessData {
+            processMode: ProcessModes_::kRealtime as i32,
+            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+            numSamples: 0,
+            numInputs: 0,
+            numOutputs: 0,
+            inputs: std::ptr::null_mut(),
+            outputs: std::ptr::null_mut(),
+            inputParameterChanges: changes.as_ptr(),
+            outputParameterChanges: std::ptr::null_mut(),
+            inputEvents: std::ptr::null_mut(),
+            outputEvents: std::ptr::null_mut(),
+            processContext: std::ptr::null_mut(),
+        };
+        let res = unsafe { processor.process(&mut data) };
+        if res != kResultOk {
+            log::warn!(
+                "VST3 plugin '{}' parameter flush returned {}",
+                inner.descriptor.id,
+                res
+            );
+        }
+        inner.in_changes.clear();
+    }
+
     fn set_transport(&mut self, transport: TransportInfo) {
         if let Ok(inner) = self.inner_mut() {
             inner.transport = transport;
@@ -1265,6 +1316,11 @@ impl HostedPlugin for Vst3PluginInstance {
         if res != kResultOk {
             return Err(format!("setState failed ({res})"));
         }
+        // Values the host set before this state are older than it: handed
+        // over after it, they put the old knobs back over a loaded preset.
+        // (The window's queue may be shared with a copy for the window,
+        // so it is left alone.)
+        inner.host_param_changes.clear();
         // A controller of its own does not see the component's state: told
         // nothing, its window showed its defaults over the loaded sound, and
         // the first knob touched sent those defaults to the audio.

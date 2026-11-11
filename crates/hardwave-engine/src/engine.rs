@@ -4268,6 +4268,17 @@ impl EngineCallback {
     /// implementations don't allocate beyond a `Vec<u8>`. A future
     /// commit can move this to a worker thread if a third-party plug-in
     /// turns out to misbehave.
+    /// Hand every live plug-in the parameter changes still waiting for a
+    /// block (see `HostedPlugin::flush_parameters`). Does not allocate.
+    fn flush_plugin_parameters(&mut self) {
+        for node in self.graph.iter_nodes_mut() {
+            node.flush_plugin_parameters();
+        }
+        for chain in self.parked_chains.values_mut() {
+            chain.flush_parameters();
+        }
+    }
+
     fn service_snapshot_request(&mut self) {
         // RT-safety: try_lock — if the UI thread is placing a request
         // into the slot right now, we simply pick it up next block
@@ -4279,6 +4290,9 @@ impl EngineCallback {
             slot.take()
         };
         let Some(tx) = tx else { return };
+        // The state read back has every value set so far, not only the
+        // ones a block has run with.
+        self.flush_plugin_parameters();
 
         let mut map: std::collections::HashMap<(String, String), Vec<u8>> =
             std::collections::HashMap::new();
@@ -5302,6 +5316,10 @@ impl EngineCallback {
         // or being played live, the graph can only produce silence — skip
         // processing to save CPU.
         if !playing && !self.has_monitored_input && self.live_midi_hold == 0 {
+            // No block runs, so VST3 and CLAP plug-ins get the values set
+            // meanwhile here: a knob turned with the song stopped took
+            // effect (and read back) only once play started.
+            self.flush_plugin_parameters();
             output.fill(0.0);
             self.park_meters();
             return;
@@ -7324,6 +7342,155 @@ mod rt_safety_tests {
             rx.try_recv().is_ok(),
             "snapshot request must be serviced on the first uncontended block"
         );
+    }
+
+    /// Like a VST3 or CLAP plug-in: a value set is only taken in at the
+    /// start of a block (or a flush), and the state reports what was taken.
+    struct BlockFed {
+        desc: hardwave_plugin_host::types::PluginDescriptor,
+        waiting: Option<f64>,
+        taken: Arc<std::sync::atomic::AtomicU64>,
+    }
+    impl BlockFed {
+        fn take(&mut self) {
+            if let Some(v) = self.waiting.take() {
+                self.taken
+                    .store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+    impl hardwave_plugin_host::types::HostedPlugin for BlockFed {
+        fn descriptor(&self) -> &hardwave_plugin_host::types::PluginDescriptor {
+            &self.desc
+        }
+        fn activate(&mut self, _sr: f64, _m: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            num_samples: usize,
+        ) {
+            self.take();
+            for (o, i) in outputs.iter_mut().zip(inputs) {
+                o.clear();
+                o.extend_from_slice(&i[..num_samples.min(i.len())]);
+            }
+        }
+        fn flush_parameters(&mut self) {
+            self.take();
+        }
+        fn get_parameter_count(&self) -> u32 {
+            1
+        }
+        fn get_parameter_info(
+            &self,
+            _i: u32,
+        ) -> Option<hardwave_plugin_host::types::ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _i: u32) -> f64 {
+            f64::from_bits(self.taken.load(std::sync::atomic::Ordering::Relaxed))
+        }
+        fn set_parameter_value(&mut self, _i: u32, v: f64) {
+            self.waiting = Some(v);
+        }
+        fn get_state(&self) -> Vec<u8> {
+            self.get_parameter_value(0).to_le_bytes().to_vec()
+        }
+        fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    /// Bug D from the test machine: Drive set to 0.73 on the master's
+    /// plug-in with the song stopped read back 0.333 until play. No block
+    /// runs while stopped, and VST3 and CLAP plug-ins only take a value in
+    /// a block, so the plug-in, and the state read back, kept the old one.
+    #[test]
+    fn a_parameter_set_with_the_song_stopped_takes_effect_and_reads_back_at_once() {
+        use crate::insert_chain::{InsertCommand, LiveSlot};
+        use hardwave_plugin_host::types::{
+            HostedPlugin, PluginCategory, PluginDescriptor, PluginFormat,
+        };
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        assert!(!cb.transport.is_playing());
+        let taken = Arc::new(std::sync::atomic::AtomicU64::new(0.333f64.to_bits()));
+        let plugin: Box<dyn HostedPlugin> = Box::new(BlockFed {
+            desc: PluginDescriptor {
+                id: "test.block-fed".into(),
+                name: "Block Fed".into(),
+                vendor: "Hardwave Tests".into(),
+                version: "1".into(),
+                format: PluginFormat::Vst3,
+                path: std::path::PathBuf::from("<test>"),
+                category: PluginCategory::Effect,
+                num_inputs: 2,
+                num_outputs: 2,
+                has_midi_input: false,
+                has_editor: false,
+            },
+            waiting: None,
+            taken: Arc::clone(&taken),
+        });
+        let slot = LiveSlot {
+            param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
+            levels: Default::default(),
+            slot_id: "shape".into(),
+            plugin,
+            enabled: true,
+            wet: 1.0,
+            sidechain_active: false,
+            gain_reduction_db: LiveSlot::new_gain_reduction(),
+        };
+        let set = |value: f64| InsertCommand::SetParameter {
+            track_id: "master".into(),
+            slot_id: "shape".into(),
+            param_id: 0,
+            value,
+        };
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: "master".into(),
+                slot,
+            })
+            .ok()
+            .unwrap();
+        cmd_tx.try_send(set(0.73)).ok().unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        let now = || f64::from_bits(taken.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(
+            now(),
+            0.73,
+            "the plug-in has the value with the song stopped"
+        );
+
+        // A read-back asked in the same block as the change has it too.
+        cmd_tx.try_send(set(0.5)).ok().unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        *cb.pending_state_snapshot.lock() = Some(tx);
+        cb.process(&mut out, 256, 2);
+        let states = rx.try_recv().expect("the read-back was answered");
+        let bytes = states
+            .get(&("master".to_string(), "shape".to_string()))
+            .expect("the master's plug-in is in it");
+        assert_eq!(f64::from_le_bytes(bytes[..8].try_into().unwrap()), 0.5);
     }
 
     #[test]
