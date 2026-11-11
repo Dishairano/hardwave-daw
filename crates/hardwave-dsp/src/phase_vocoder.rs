@@ -21,6 +21,11 @@ use std::f32::consts::PI;
 /// using a phase vocoder. `n` must be a power of two ≥ 64 and the
 /// analysis hop is hard-coded to `n / 8` (87.5% overlap).
 pub fn phase_vocoder_stretch(samples: &[f32], ratio: f32, n: usize) -> Vec<f32> {
+    stretch_with(samples, ratio, n, wrap_pi)
+}
+
+/// The stretch, with the phases brought back into [-π, π] by `wrap`.
+fn stretch_with(samples: &[f32], ratio: f32, n: usize, wrap: impl Fn(f32) -> f32) -> Vec<f32> {
     if samples.is_empty() || ratio <= 0.0 || n < 64 || !n.is_power_of_two() {
         return samples.to_vec();
     }
@@ -74,7 +79,7 @@ pub fn phase_vocoder_stretch(samples: &[f32], ratio: f32, n: usize) -> Vec<f32> 
             let phase = scratch[k].im.atan2(scratch[k].re);
             let expected = 2.0 * PI * (k as f32) * (h_a as f32) / (n as f32);
             let delta = phase - prev_analysis_phase[k] - expected;
-            let wrapped = wrap_pi(delta);
+            let wrapped = wrap(delta);
             let true_freq = expected + wrapped;
             if frame == 0 {
                 // The first frame keeps its own phases. Advanced from zero,
@@ -84,7 +89,7 @@ pub fn phase_vocoder_stretch(samples: &[f32], ratio: f32, n: usize) -> Vec<f32> 
                 synthesis_phase[k] = phase;
             } else {
                 let advance = true_freq * (h_s as f32) / (h_a as f32);
-                synthesis_phase[k] = wrap_pi(synthesis_phase[k] + advance);
+                synthesis_phase[k] = wrap(synthesis_phase[k] + advance);
             }
             prev_analysis_phase[k] = phase;
             let (sin_p, cos_p) = synthesis_phase[k].sin_cos();
@@ -169,15 +174,21 @@ pub fn pitch_shift_pv(samples: &[f32], semitones: f32) -> Vec<f32> {
     crate::time_pitch::resample_to_length(&stretched, samples.len())
 }
 
+/// `x` brought into [-π, π] by whole turns, in one step.
+///
+/// The phases it is given grow with the bin: the top bins of a 2048-point
+/// frame advance by hundreds of radians a hop. Taking off one turn at a
+/// time took a few hundred steps for each of those bins in every frame,
+/// most of a stretch bake's time; the first export after an FL import spent
+/// over a minute and a half in it. Worked out in f64, it is also closer to
+/// the true angle than many f32 steps were.
 fn wrap_pi(x: f32) -> f32 {
-    let mut y = x;
-    while y > PI {
-        y -= 2.0 * PI;
+    if (-PI..=PI).contains(&x) {
+        return x;
     }
-    while y < -PI {
-        y += 2.0 * PI;
-    }
-    y
+    let turn = std::f64::consts::TAU;
+    let x = x as f64;
+    ((x - turn * (x / turn).round()) as f32).clamp(-PI, PI)
 }
 
 #[cfg(test)]
@@ -198,6 +209,86 @@ mod tests {
             }
         }
         count
+    }
+
+    /// The old wrap, a turn at a time.
+    fn wrap_by_turns(x: f32) -> f32 {
+        let mut y = x;
+        while y > PI {
+            y -= 2.0 * PI;
+        }
+        while y < -PI {
+            y += 2.0 * PI;
+        }
+        y
+    }
+
+    /// A phase comes back as its true angle. A turn at a time it drifted:
+    /// at -2000 rad it was 4 thousandths of a radian off.
+    #[test]
+    fn a_phase_is_wrapped_to_its_true_angle() {
+        let true_angle = |x: f32| {
+            let turn = std::f64::consts::TAU;
+            x as f64 - turn * (x as f64 / turn).round()
+        };
+        let mut x = -2_000.0_f32;
+        while x < 2_000.0 {
+            let a = wrap_pi(x);
+            assert!((-PI..=PI).contains(&a), "{x} wrapped to {a}");
+            let off = (a as f64 - true_angle(x)).abs();
+            // Right at ±π either end is the same angle.
+            let off = off.min((off - std::f64::consts::TAU).abs());
+            assert!(off < 1e-6, "{x}: {a} is {off} off");
+            x += 0.0137;
+        }
+        assert!((wrap_by_turns(-2_000.0) - wrap_pi(-2_000.0)).abs() > 3e-3);
+    }
+
+    /// Wrapped in one step, a stretch sounds as it did a turn at a time:
+    /// the same level in every band of its spectrum, for a chord stretched
+    /// and squeezed. The samples themselves are not the same: each frame's
+    /// phases now drift less, which a vocoder's output never depended on.
+    #[test]
+    fn a_stretch_with_the_one_step_wrap_sounds_as_it_did() {
+        use rustfft::{num_complex::Complex32, FftPlanner};
+        let sr = 48_000.0;
+        let input: Vec<f32> = sine(220.0, sr, 48_000)
+            .iter()
+            .zip(sine(331.0, sr, 48_000))
+            .zip(sine(1_250.0, sr, 48_000))
+            .map(|((a, b), c)| 0.4 * a + 0.3 * b + 0.2 * c)
+            .collect();
+        // Energy in bands of 64 bins, about 24 Hz each at these lengths.
+        let bands = |v: &[f32]| -> Vec<f64> {
+            let mut buf: Vec<Complex32> = v.iter().map(|&s| Complex32::new(s, 0.0)).collect();
+            FftPlanner::<f32>::new()
+                .plan_fft_forward(buf.len())
+                .process(&mut buf);
+            buf[..buf.len() / 2]
+                .chunks(64)
+                .map(|c| c.iter().map(|z| z.norm_sqr() as f64).sum())
+                .collect()
+        };
+        for ratio in [0.8_f32, 1.07, 1.5, 2.0] {
+            let now = bands(&stretch_with(&input, ratio, 2048, wrap_pi));
+            let before = bands(&stretch_with(&input, ratio, 2048, wrap_by_turns));
+            assert_eq!(now.len(), before.len());
+            let loudest = before.iter().copied().fold(0.0, f64::max);
+            // The bands within `below` dB of the loudest, at most how far
+            // apart.
+            let worst = |below: f64| {
+                now.iter()
+                    .zip(&before)
+                    .filter(|(_, b)| **b > loudest * 10f64.powf(-below / 10.0))
+                    .map(|(a, b)| (10.0 * (a / b).log10()).abs())
+                    .fold(0.0, f64::max)
+            };
+            let (near, far) = (worst(20.0), worst(40.0));
+            // The notes stay put; the vocoder's own faint smear around them
+            // moves a little with the phases.
+            assert!(near < 0.05, "ratio {ratio}: a band moved {near:.3} dB");
+            assert!(far < 2.0, "ratio {ratio}: a quiet band moved {far:.3} dB");
+        }
     }
 
     #[test]
