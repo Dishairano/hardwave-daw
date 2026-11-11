@@ -292,15 +292,21 @@ pub fn slices_to_playlist(
     Ok(track_id)
 }
 
+/// The track's clips as the playlist gets them. `rows` is where the
+/// playlist draws each (`layout::shown_rows`), so a clip saved without a
+/// row is drawn on the row its mute and solo follow in the engine.
 pub(crate) fn track_clips_to_info(
     track: &hardwave_project::Track,
+    rows: &[u32],
     pool: &hardwave_engine::audio_pool::AudioPool,
     tempo: &hardwave_project::tempo::TempoMap,
 ) -> Vec<ClipInfo> {
     track
         .clips
         .iter()
-        .map(|clip| match &clip.content {
+        .enumerate()
+        .map(|(i, clip)| (clip, rows.get(i).copied().or(clip.row)))
+        .map(|(clip, row)| match &clip.content {
             hardwave_project::clip::ClipContent::Audio(ac) => {
                 // The loaded file's length and rate, so the playlist can
                 // draw the part of the file the clip plays, at the speed it
@@ -343,7 +349,7 @@ pub(crate) fn track_clips_to_info(
                         false,
                     ),
                     note_preview: Vec::new(),
-                    row: clip.row,
+                    row,
                 }
             }
             hardwave_project::clip::ClipContent::Midi(mc) => ClipInfo {
@@ -375,7 +381,7 @@ pub(crate) fn track_clips_to_info(
                 fade_in_ms: 0.0,
                 fade_out_ms: 0.0,
                 note_preview: note_preview(&mc.clip.notes),
-                row: clip.row,
+                row,
             },
         })
         .collect()
@@ -624,10 +630,16 @@ pub(crate) fn apply_sample_settings(
 pub fn get_track_clips(state: State<AppState>, track_id: String) -> Vec<ClipInfo> {
     let engine = state.engine.lock();
     let project = engine.project.lock();
-    match project.track(&track_id) {
-        Some(t) => track_clips_to_info(t, &engine.audio_pool, &project.tempo_map),
-        None => vec![],
-    }
+    let Some(index) = project.tracks.iter().position(|t| t.id == track_id) else {
+        return vec![];
+    };
+    let rows = hardwave_project::layout::shown_rows(&project.tracks);
+    track_clips_to_info(
+        &project.tracks[index],
+        &rows[index].clips,
+        &engine.audio_pool,
+        &project.tempo_map,
+    )
 }
 
 #[derive(Serialize)]

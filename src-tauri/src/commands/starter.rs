@@ -231,6 +231,9 @@ fn build_into(project: &mut hardwave_project::Project, genre: &Genre, plan: &[Se
     for (row, name) in [(6, "Vocals"), (7, "FX")] {
         claim_row(project, row, name, false);
     }
+    // Every clip on the row it is drawn on, its track's: the kick's on the
+    // Kick row, so that row's mute and solo hold for them.
+    project.settle_rows();
 }
 
 /// Take over playlist row `row` for a starter part.
@@ -463,6 +466,158 @@ mod tests {
                 .position(|(a, b)| a.to_bits() != b.to_bits());
             assert_eq!(differs, None, "{id}: the same sound, sample for sample");
         }
+    }
+
+    /// Two seconds of `project` from the start.
+    fn render(project: hardwave_project::Project) -> Vec<f32> {
+        let engine = hardwave_engine::DawEngine::new();
+        *engine.project.lock() = project;
+        engine.rebuild_graph();
+        let mut out = Vec::new();
+        engine
+            .render_offline(48_000, 96_000, |block| {
+                out.extend_from_slice(block);
+                true
+            })
+            .expect("the starter renders");
+        out
+    }
+
+    /// The hardstyle starter with the bass's first clip moved to the
+    /// start, so the first two seconds hold the kick (row 0) and the bass
+    /// (row 1). `saved_rows` false leaves every clip without a row, as
+    /// 0.266.43 made and saved them.
+    fn kick_and_bass(saved_rows: bool) -> hardwave_project::Project {
+        let mut p = hardwave_project::Project::default();
+        build_into(&mut p, &genre("hardstyle").unwrap(), &sections());
+        p.track_mut("insert-002").unwrap().clips[0].position_ticks = 0;
+        if !saved_rows {
+            for track in &mut p.tracks {
+                for clip in &mut track.clips {
+                    clip.row = None;
+                }
+            }
+        }
+        p
+    }
+
+    /// `p` without the clips of the track `id`.
+    fn without(mut p: hardwave_project::Project, id: &str) -> hardwave_project::Project {
+        p.track_mut(id).unwrap().clips.clear();
+        p
+    }
+
+    fn same(a: &[f32], b: &[f32], what: &str) {
+        assert_eq!(a.len(), b.len(), "{what}");
+        let differs = a
+            .iter()
+            .zip(b)
+            .position(|(x, y)| x.to_bits() != y.to_bits());
+        assert_eq!(differs, None, "{what}: the same sound, sample for sample");
+    }
+
+    fn peak(out: &[f32]) -> f32 {
+        out.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+    }
+
+    #[test]
+    fn the_starter_puts_every_clip_on_its_tracks_row() {
+        let p = kick_and_bass(true);
+        assert!(p
+            .track("insert-001")
+            .unwrap()
+            .clips
+            .iter()
+            .all(|c| c.row == Some(0)));
+        assert!(p
+            .track("insert-002")
+            .unwrap()
+            .clips
+            .iter()
+            .all(|c| c.row == Some(1)));
+    }
+
+    #[test]
+    fn a_starter_rows_mute_and_solo_silence_what_is_drawn_on_them() {
+        // With rows kept, and as 0.266.43 left them: no row on any clip,
+        // each drawn on its track's row. That build played them anyway.
+        for saved_rows in [true, false] {
+            let song = kick_and_bass(saved_rows);
+            let full = render(song.clone());
+            let only_bass = render(without(song.clone(), "insert-001"));
+            let only_kick = render(without(song.clone(), "insert-002"));
+            assert!(peak(&only_bass) > 0.01 && peak(&only_kick) > 0.05);
+
+            let mut muted = song.clone();
+            muted.set_row_mute(0, true).unwrap();
+            same(&render(muted), &only_bass, "the Kick row muted");
+
+            let mut solo = song.clone();
+            solo.set_row_solo(1, true).unwrap();
+            same(&render(solo), &only_bass, "the Bass row soloed");
+
+            let mut solo = song.clone();
+            solo.set_row_solo(0, true).unwrap();
+            same(&render(solo), &only_kick, "the Kick row soloed");
+
+            let mut both = song;
+            both.set_row_mute(0, true).unwrap();
+            both.set_row_mute(1, true).unwrap();
+            assert_eq!(peak(&render(both)), 0.0, "both rows muted");
+            assert!(peak(&full) > 0.05);
+        }
+    }
+
+    #[test]
+    fn copies_pieces_and_new_clips_on_a_muted_row_stay_silent() {
+        for saved_rows in [true, false] {
+            let mut song = kick_and_bass(saved_rows);
+            song.track_mut("insert-002").unwrap().clips.clear();
+            let kick = song.track_mut("insert-001").unwrap();
+            // A duplicate and the right half of a split clone the clip
+            // they come from; a new clip has no row at all.
+            let mut copy = kick.clips[0].clone();
+            if let ClipContent::Midi(m) = &mut copy.content {
+                m.id = "copy".into();
+            }
+            copy.position_ticks = PPQ;
+            let mut fresh = midi_clip("insert-001", "new", 2 * PPQ, BAR, kick_notes(1, 36, false));
+            fresh.row = None;
+            kick.clips.push(copy);
+            kick.clips.push(fresh);
+            assert!(peak(&render(song.clone())) > 0.05);
+            song.set_row_mute(0, true).unwrap();
+            assert_eq!(peak(&render(song)), 0.0, "rows kept: {saved_rows}");
+        }
+    }
+
+    #[test]
+    fn a_muted_row_stays_muted_after_save_and_open() {
+        let mut song = kick_and_bass(false);
+        song.set_row_mute(0, true).unwrap();
+        let only_bass = render(without(song.clone(), "insert-001"));
+        let back = hardwave_project::Project::from_bytes(&song.to_bytes().unwrap()).unwrap();
+        assert!(back.rows[0].muted);
+        assert!(
+            back.tracks
+                .iter()
+                .all(|t| t.clips.iter().all(|c| c.row.is_some())),
+            "opening a 0.266.43 song writes each clip's row down"
+        );
+        assert!(back
+            .track("insert-001")
+            .unwrap()
+            .clips
+            .iter()
+            .all(|c| c.row == Some(0)));
+        same(&render(back), &only_bass, "saved and opened");
+    }
+
+    #[test]
+    fn a_format_3_starter_opens_and_plays_as_it_did() {
+        let song = kick_and_bass(true);
+        let back = hardwave_project::Project::from_bytes(&song.bytes_as_format(3)).unwrap();
+        same(&render(back), &render(song), "format 3, opened now");
     }
 
     #[test]

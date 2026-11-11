@@ -114,7 +114,7 @@ pub struct AutomationLaneInfo {
     pub target: AutomationTargetInfo,
     pub points: Vec<AutomationPointInfo>,
     pub visible: bool,
-    /// The playlist row it is drawn on. Not drawn there yet.
+    /// The playlist row it is drawn on (`layout::shown_rows`).
     pub row: Option<u32>,
 }
 
@@ -156,7 +156,7 @@ pub struct AutomationClipInfo {
     #[serde(rename = "colorArgb")]
     pub color_argb: u32,
     pub points: Vec<AutomationPointInfo>,
-    /// The playlist row it is drawn on. Not drawn there yet.
+    /// The playlist row it is drawn on (`layout::shown_rows`).
     pub row: Option<u32>,
     /// The track whose knob it moves, when not the one it sits on.
     #[serde(rename = "targetTrack")]
@@ -196,6 +196,7 @@ pub(crate) fn sampler_sample_path(
 
 pub(crate) fn track_to_info(
     t: &hardwave_project::Track,
+    rows: &hardwave_project::layout::ShownRows,
     plugin_name_lookup: &dyn Fn(&str) -> String,
     sample_path: &dyn Fn(&hardwave_project::track::PluginSlot) -> Option<String>,
 ) -> TrackInfo {
@@ -242,7 +243,8 @@ pub(crate) fn track_to_info(
         automation_lanes: t
             .automation_lanes
             .iter()
-            .map(|l| AutomationLaneInfo {
+            .enumerate()
+            .map(|(i, l)| AutomationLaneInfo {
                 id: l.id.clone(),
                 target: match &l.target {
                     hardwave_project::automation::AutomationTarget::TrackVolume => {
@@ -278,13 +280,14 @@ pub(crate) fn track_to_info(
                     })
                     .collect(),
                 visible: l.visible,
-                row: l.row,
+                row: rows.lanes.get(i).copied().or(l.row),
             })
             .collect(),
         automation_clips: t
             .automation_clips
             .iter()
-            .map(|c| AutomationClipInfo {
+            .enumerate()
+            .map(|(i, c)| AutomationClipInfo {
                 id: c.id.clone(),
                 target: target_to_info(&c.target),
                 start_tick: c.start_tick,
@@ -301,7 +304,7 @@ pub(crate) fn track_to_info(
                         tension: p.tension,
                     })
                     .collect(),
-                row: c.row,
+                row: rows.automation_clips.get(i).copied().or(c.row),
                 target_track: c.target_track.clone(),
             })
             .collect(),
@@ -376,10 +379,16 @@ pub fn get_tracks(state: State<AppState>) -> Vec<TrackInfo> {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| id.to_string())
     };
+    let rows = hardwave_project::layout::shown_rows(&project.tracks);
     project
         .tracks
         .iter()
-        .map(|t| track_to_info(t, &name_of, &|slot| sampler_sample_path(&project, slot)))
+        .zip(&rows)
+        .map(|(t, rows)| {
+            track_to_info(t, rows, &name_of, &|slot| {
+                sampler_sample_path(&project, slot)
+            })
+        })
         .collect()
 }
 
@@ -406,13 +415,18 @@ pub fn get_tracks_with_clips(state: State<AppState>) -> Vec<TrackWithClipsPayloa
             .map(|p| p.name.clone())
             .unwrap_or_else(|| id.to_string())
     };
+    let rows = hardwave_project::layout::shown_rows(&project.tracks);
     project
         .tracks
         .iter()
-        .map(|t| TrackWithClipsPayload {
-            track: track_to_info(t, &name_of, &|slot| sampler_sample_path(&project, slot)),
+        .zip(&rows)
+        .map(|(t, rows)| TrackWithClipsPayload {
+            track: track_to_info(t, rows, &name_of, &|slot| {
+                sampler_sample_path(&project, slot)
+            }),
             clips: crate::commands::audio::track_clips_to_info(
                 t,
+                &rows.clips,
                 &engine.audio_pool,
                 &project.tempo_map,
             ),
@@ -440,18 +454,20 @@ pub fn get_track_with_clips(
             .map(|p| p.name.clone())
             .unwrap_or_else(|| id.to_string())
     };
-    project
-        .tracks
-        .iter()
-        .find(|t| t.id == track_id)
-        .map(|t| TrackWithClipsPayload {
-            track: track_to_info(t, &name_of, &|slot| sampler_sample_path(&project, slot)),
-            clips: crate::commands::audio::track_clips_to_info(
-                t,
-                &engine.audio_pool,
-                &project.tempo_map,
-            ),
-        })
+    let index = project.tracks.iter().position(|t| t.id == track_id)?;
+    let rows = hardwave_project::layout::shown_rows(&project.tracks);
+    let (t, rows) = (&project.tracks[index], &rows[index]);
+    Some(TrackWithClipsPayload {
+        track: track_to_info(t, rows, &name_of, &|slot| {
+            sampler_sample_path(&project, slot)
+        }),
+        clips: crate::commands::audio::track_clips_to_info(
+            t,
+            &rows.clips,
+            &engine.audio_pool,
+            &project.tempo_map,
+        ),
+    })
 }
 
 #[tauri::command]

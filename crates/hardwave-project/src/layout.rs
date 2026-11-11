@@ -9,6 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::automation::AutomationLane;
+use crate::automation_clip::AutomationClip;
+use crate::clip::ClipPlacement;
 use crate::track::{Track, TrackKind};
 
 /// One row of the playlist: FL's playlist track. Rows hold no sound of
@@ -30,36 +33,201 @@ pub struct PlaylistRow {
     pub soloed: bool,
 }
 
+/// Where the playlist draws one track's things: a row for each of its
+/// clips, automation clips and automation lanes, in the order they are
+/// listed on the track.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShownRows {
+    pub clips: Vec<u32>,
+    pub automation_clips: Vec<u32>,
+    pub lanes: Vec<u32>,
+}
+
+/// The row most of these clips sit on, the lowest of equals; none when no
+/// clip has a row.
+fn most_used_row(clips: &[ClipPlacement]) -> Option<u32> {
+    let mut counts = std::collections::BTreeMap::<u32, usize>::new();
+    for row in clips.iter().filter_map(|c| c.row) {
+        *counts.entry(row).or_default() += 1;
+    }
+    let mut best: Option<(u32, usize)> = None;
+    for (row, count) in counts {
+        if best.is_none_or(|(_, most)| count > most) {
+            best = Some((row, count));
+        }
+    }
+    best.map(|(row, _)| row)
+}
+
+/// Each track's place in the playlist: its position among the tracks that
+/// are not the master (none for the master). A song built row by row (a
+/// new song, a starter, a template) has each track's clips on this row.
+fn track_places(tracks: &[Track]) -> Vec<Option<u32>> {
+    let mut next = 0u32;
+    tracks
+        .iter()
+        .map(|t| {
+            if matches!(t.kind, TrackKind::Master) {
+                None
+            } else {
+                next += 1;
+                Some(next - 1)
+            }
+        })
+        .collect()
+}
+
+/// Where the playlist draws everything on these tracks (the open
+/// arrangement's), one entry per track.
+///
+/// The one rule for a thing with no row of its own (`row: None`), shared
+/// by the playlist, the engine's row mute and solo, and `settle_rows`: a
+/// clip is drawn on the row most of its channel's other clips sit on, else
+/// on its track's place in the playlist; an automation clip or lane, or a
+/// clip of the master, on the first row nothing else is on, in track
+/// order. The playlist's row index (`rowIndex.ts`, `buildRowIndex`) gets
+/// these rows from the app and follows the same rule for anything else,
+/// so the two cannot disagree.
+pub fn shown_rows(tracks: &[Track]) -> Vec<ShownRows> {
+    if !any_unplaced(tracks) {
+        // Every song once its rows are settled: each on its own row.
+        return tracks
+            .iter()
+            .map(|t| ShownRows {
+                clips: t.clips.iter().filter_map(|c| c.row).collect(),
+                automation_clips: t.automation_clips.iter().filter_map(|c| c.row).collect(),
+                lanes: t.automation_lanes.iter().filter_map(|l| l.row).collect(),
+            })
+            .collect();
+    }
+    #[derive(Clone, Copy)]
+    enum Part {
+        Clip,
+        AutomationClip,
+        Lane,
+    }
+    let places = track_places(tracks);
+    let mut taken = std::collections::HashSet::<u32>::new();
+    // What still needs the first empty row once everything with a place
+    // of its own is in, in the order the playlist hands those rows out.
+    let mut homeless: Vec<(usize, Part, usize)> = Vec::new();
+    let mut out: Vec<ShownRows> = Vec::with_capacity(tracks.len());
+    for (t, track) in tracks.iter().enumerate() {
+        let home = most_used_row(&track.clips).or(places[t]);
+        let mut place = |row: Option<u32>, part: Part, i: usize| match row {
+            Some(r) => {
+                taken.insert(r);
+                r
+            }
+            None => {
+                homeless.push((t, part, i));
+                0
+            }
+        };
+        let shown = ShownRows {
+            clips: (track.clips.iter().enumerate())
+                .map(|(i, c)| place(c.row.or(home), Part::Clip, i))
+                .collect(),
+            automation_clips: (track.automation_clips.iter().enumerate())
+                .map(|(i, c)| place(c.row, Part::AutomationClip, i))
+                .collect(),
+            lanes: (track.automation_lanes.iter().enumerate())
+                .map(|(i, l)| place(l.row, Part::Lane, i))
+                .collect(),
+        };
+        out.push(shown);
+    }
+    let mut next = 0u32;
+    for (t, part, i) in homeless {
+        while taken.contains(&next) {
+            next += 1;
+        }
+        taken.insert(next);
+        let slot = match part {
+            Part::Clip => &mut out[t].clips[i],
+            Part::AutomationClip => &mut out[t].automation_clips[i],
+            Part::Lane => &mut out[t].lanes[i],
+        };
+        *slot = next;
+    }
+    out
+}
+
+/// Whether anything on these tracks has no row of its own.
+fn any_unplaced(tracks: &[Track]) -> bool {
+    tracks.iter().any(|t| {
+        t.clips.iter().any(|c| c.row.is_none())
+            || t.automation_clips.iter().any(|c| c.row.is_none())
+            || t.automation_lanes.iter().any(|l| l.row.is_none())
+    })
+}
+
 /// Which playlist rows are silent while the song plays: the muted ones,
 /// and while any row is soloed every row that is not. Worked out once
-/// when the engine builds its graph; a clip with no row is never silent.
+/// when the engine builds its graph. Something with no row of its own is
+/// judged by the row the playlist draws it on (`shown_rows`).
 #[derive(Debug, Default)]
 pub struct SilentRows {
     /// Per row, from the top; empty when no row is muted or soloed.
     silent: Vec<bool>,
     /// A row past the end of the list is silent while any row is soloed.
     any_solo: bool,
+    /// The rows things without one of their own are drawn on, by id:
+    /// clips, automation clips and lanes. Filled only while a row is
+    /// muted or soloed.
+    unplaced_clips: std::collections::HashMap<String, u32>,
+    unplaced_automation_clips: std::collections::HashMap<String, u32>,
+    unplaced_lanes: std::collections::HashMap<String, u32>,
 }
 
 impl SilentRows {
     /// Nothing is silent (and nothing is allocated) unless a row is muted
     /// or soloed.
-    pub fn of(rows: &[PlaylistRow]) -> Self {
+    pub fn of(project: &crate::Project) -> Self {
+        let rows = &project.rows;
         let any_solo = rows.iter().any(|r| r.soloed);
         if !any_solo && !rows.iter().any(|r| r.muted) {
             return Self::default();
         }
-        Self {
+        let mut silent = Self {
             silent: rows
                 .iter()
                 .map(|r| r.muted || (any_solo && !r.soloed))
                 .collect(),
             any_solo,
+            ..Self::default()
+        };
+        // A song made in a build that kept no rows for its clips (every
+        // clip of a starter, an import or a recording): each is silent or
+        // not by the row it is drawn on, as the playlist shows it.
+        if any_unplaced(&project.tracks) {
+            let shown = shown_rows(&project.tracks);
+            for (track, rows) in project.tracks.iter().zip(&shown) {
+                for (clip, row) in track.clips.iter().zip(&rows.clips) {
+                    if clip.row.is_none() {
+                        let id = crate::row_edit::clip_id(clip).to_string();
+                        silent.unplaced_clips.insert(id, *row);
+                    }
+                }
+                for (clip, row) in track.automation_clips.iter().zip(&rows.automation_clips) {
+                    if clip.row.is_none() {
+                        silent
+                            .unplaced_automation_clips
+                            .insert(clip.id.clone(), *row);
+                    }
+                }
+                for (lane, row) in track.automation_lanes.iter().zip(&rows.lanes) {
+                    if lane.row.is_none() {
+                        silent.unplaced_lanes.insert(lane.id.clone(), *row);
+                    }
+                }
+            }
         }
+        silent
     }
 
     /// Whether what sits on `row` stays quiet.
-    pub fn has(&self, row: Option<u32>) -> bool {
+    fn row(&self, row: Option<u32>) -> bool {
         match row {
             Some(r) => self
                 .silent
@@ -68,6 +236,32 @@ impl SilentRows {
                 .unwrap_or(self.any_solo),
             None => false,
         }
+    }
+
+    /// Whether this clip of the song's tracks stays quiet. A clip that is
+    /// not one of them (the rack's pattern in pattern mode) never does.
+    pub fn clip(&self, clip: &ClipPlacement) -> bool {
+        self.row(clip.row.or_else(|| {
+            self.unplaced_clips
+                .get(crate::row_edit::clip_id(clip))
+                .copied()
+        }))
+    }
+
+    /// Whether this automation clip stays still.
+    pub fn automation_clip(&self, clip: &AutomationClip) -> bool {
+        self.row(
+            clip.row
+                .or_else(|| self.unplaced_automation_clips.get(&clip.id).copied()),
+        )
+    }
+
+    /// Whether this automation lane stays still.
+    pub fn lane(&self, lane: &AutomationLane) -> bool {
+        self.row(
+            lane.row
+                .or_else(|| self.unplaced_lanes.get(&lane.id).copied()),
+        )
     }
 }
 
@@ -246,6 +440,38 @@ impl crate::Project {
             }
             arrangement.rows = rows;
         }
+    }
+
+    /// Put everything on the open arrangement's tracks that has no row of
+    /// its own on the row the playlist draws it on (`shown_rows`), as FL
+    /// gives every clip the row it was put on. Nothing moves on screen and
+    /// nothing sounds different; from then on the clip stays on its row
+    /// when its channel's other clips move, and row edits (insert, delete,
+    /// mute, solo) treat it like any other. Returns how many got a row.
+    pub fn settle_rows(&mut self) -> usize {
+        if !any_unplaced(&self.tracks) {
+            return 0;
+        }
+        let shown = shown_rows(&self.tracks);
+        let mut n = 0;
+        let mut settle = |slot: &mut Option<u32>, row: u32| {
+            if slot.is_none() {
+                *slot = Some(row);
+                n += 1;
+            }
+        };
+        for (track, rows) in self.tracks.iter_mut().zip(shown) {
+            for (clip, row) in track.clips.iter_mut().zip(rows.clips) {
+                settle(&mut clip.row, row);
+            }
+            for (clip, row) in track.automation_clips.iter_mut().zip(rows.automation_clips) {
+                settle(&mut clip.row, row);
+            }
+            for (lane, row) in track.automation_lanes.iter_mut().zip(rows.lanes) {
+                settle(&mut lane.row, row);
+            }
+        }
+        n
     }
 
     /// Clear every field FL's three lists added: what a song read from
@@ -484,6 +710,14 @@ mod tests {
         assert_eq!(row.color, None);
     }
 
+    /// A new song whose playlist rows are `rows`.
+    fn song_with_rows(rows: Vec<PlaylistRow>) -> Project {
+        Project {
+            rows,
+            ..Project::default()
+        }
+    }
+
     #[test]
     fn a_muted_row_is_silent_and_a_solo_silences_every_other_row() {
         let row = |muted, soloed| PlaylistRow {
@@ -491,18 +725,154 @@ mod tests {
             soloed,
             ..PlaylistRow::default()
         };
-        let none = SilentRows::of(&[row(false, false), row(false, false)]);
-        assert!(!none.has(Some(0)) && !none.has(Some(7)) && !none.has(None));
-        let muted = SilentRows::of(&[row(false, false), row(true, false)]);
-        assert!(!muted.has(Some(0)));
-        assert!(muted.has(Some(1)));
-        assert!(!muted.has(Some(9)), "a row past the list is on");
-        assert!(!muted.has(None), "a clip with no row always plays");
-        let solo = SilentRows::of(&[row(false, true), row(false, false), row(true, true)]);
-        assert!(!solo.has(Some(0)));
-        assert!(solo.has(Some(1)));
-        assert!(solo.has(Some(2)), "muted wins over soloed, as in FL");
-        assert!(solo.has(Some(9)), "a row past the list is not soloed");
-        assert!(!solo.has(None));
+        let on = |r: Option<u32>| {
+            let mut c = clip("x", 0);
+            c.row = r;
+            c
+        };
+        let none = SilentRows::of(&song_with_rows(vec![row(false, false), row(false, false)]));
+        assert!(!none.clip(&on(Some(0))) && !none.clip(&on(Some(7))));
+        let muted = SilentRows::of(&song_with_rows(vec![row(false, false), row(true, false)]));
+        assert!(!muted.clip(&on(Some(0))));
+        assert!(muted.clip(&on(Some(1))));
+        assert!(!muted.clip(&on(Some(9))), "a row past the list is on");
+        let solo = SilentRows::of(&song_with_rows(vec![
+            row(false, true),
+            row(false, false),
+            row(true, true),
+        ]));
+        assert!(!solo.clip(&on(Some(0))));
+        assert!(solo.clip(&on(Some(1))));
+        assert!(solo.clip(&on(Some(2))), "muted wins over soloed, as in FL");
+        assert!(solo.clip(&on(Some(9))), "a row past the list is not soloed");
+        assert!(
+            !solo.clip(&on(None)),
+            "a clip that is not on the song's tracks (the rack's pattern) always plays"
+        );
+    }
+
+    /// The tracks of `shownRows.cases.json`, the cases the playlist's row
+    /// index is tested on too, and the rows it says each thing is drawn on.
+    fn shared_cases() -> (Vec<Track>, std::collections::HashMap<String, u32>) {
+        let json: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../packages/daw-ui/src/components/arrangement/shownRows.cases.json"
+        ))
+        .unwrap();
+        let row = |v: &serde_json::Value| v["row"].as_u64().map(|r| r as u32);
+        let id = |v: &serde_json::Value| v["id"].as_str().unwrap().to_string();
+        let tracks = json["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                let tid = id(t);
+                let mut track = match t["kind"].as_str().unwrap() {
+                    "Master" => Track::new_master(tid.clone()),
+                    "Midi" => Track::new_midi(tid.clone(), tid.clone()),
+                    _ => Track::new_audio(tid.clone(), tid.clone()),
+                };
+                for c in t["clips"].as_array().unwrap() {
+                    let mut placed = clip(&tid, 0);
+                    if let ClipContent::Midi(m) = &mut placed.content {
+                        m.id = id(c);
+                    }
+                    placed.row = row(c);
+                    track.clips.push(placed);
+                }
+                for c in t["automationClips"].as_array().unwrap() {
+                    let mut ac = AutomationClip::new(id(c), AutomationTarget::TrackVolume, 0, 960);
+                    ac.row = row(c);
+                    track.automation_clips.push(ac);
+                }
+                for l in t["automationLanes"].as_array().unwrap() {
+                    let mut al = lane(&id(l));
+                    al.row = row(l);
+                    track.automation_lanes.push(al);
+                }
+                track
+            })
+            .collect();
+        let shown = json["shown"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_u64().unwrap() as u32))
+            .collect();
+        (tracks, shown)
+    }
+
+    /// Every id on these tracks with the row `shown_rows` gives it.
+    fn rows_by_id(tracks: &[Track]) -> std::collections::HashMap<String, u32> {
+        let mut out = std::collections::HashMap::new();
+        for (track, rows) in tracks.iter().zip(shown_rows(tracks)) {
+            for (c, r) in track.clips.iter().zip(rows.clips) {
+                out.insert(crate::row_edit::clip_id(c).to_string(), r);
+            }
+            for (c, r) in track.automation_clips.iter().zip(rows.automation_clips) {
+                out.insert(c.id.clone(), r);
+            }
+            for (l, r) in track.automation_lanes.iter().zip(rows.lanes) {
+                out.insert(l.id.clone(), r);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn things_without_a_row_are_placed_where_the_playlist_draws_them() {
+        let (tracks, shown) = shared_cases();
+        assert_eq!(rows_by_id(&tracks), shown);
+    }
+
+    #[test]
+    fn settling_writes_down_the_rows_things_are_drawn_on() {
+        let (tracks, shown) = shared_cases();
+        let mut p = Project {
+            tracks,
+            ..Project::default()
+        };
+        assert_eq!(p.settle_rows(), 7, "the seven without a row");
+        assert_eq!(rows_by_id(&p.tracks), shown, "nothing moved");
+        assert!(!any_unplaced(&p.tracks));
+        let before = p.clone();
+        assert_eq!(p.settle_rows(), 0);
+        assert_eq!(p, before, "settling twice changes nothing");
+    }
+
+    #[test]
+    fn a_muted_row_silences_the_clips_drawn_on_it_that_have_no_row() {
+        let (tracks, _) = shared_cases();
+        let mut p = Project {
+            tracks,
+            rows: vec![PlaylistRow::default(); 10],
+            ..Project::default()
+        };
+        let find = |p: &Project, id: &str| {
+            p.tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .find(|c| crate::row_edit::clip_id(c) == id)
+                .unwrap()
+                .clone()
+        };
+        // b's clips have no row and are drawn on its place, row 1.
+        p.rows[1].muted = true;
+        let silent = SilentRows::of(&p);
+        assert!(silent.clip(&find(&p, "b1")) && silent.clip(&find(&p, "b2")));
+        assert!(!silent.clip(&find(&p, "a4")), "drawn on row 3");
+        // a4 has none and is drawn with most of a's clips, on row 3.
+        p.rows[1].muted = false;
+        p.rows[3].soloed = true;
+        let silent = SilentRows::of(&p);
+        assert!(!silent.clip(&find(&p, "a4")) && !silent.clip(&find(&p, "a1")));
+        assert!(silent.clip(&find(&p, "a3")) && silent.clip(&find(&p, "b1")));
+        let lane_al = p.tracks[1].automation_lanes[0].clone();
+        assert!(silent.lane(&lane_al), "the lane is drawn on row 6");
+        let bac = p.tracks[2].automation_clips[0].clone();
+        assert!(silent.automation_clip(&bac), "drawn on row 8");
+        p.rows[3].soloed = false;
+        p.rows[8].muted = true;
+        assert!(SilentRows::of(&p).automation_clip(&bac));
+        assert!(!SilentRows::of(&p).lane(&lane_al));
     }
 }

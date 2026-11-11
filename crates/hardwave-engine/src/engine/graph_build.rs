@@ -231,12 +231,12 @@ impl GraphBuilder {
         // Playlist rows switched off, or not soloed while one is: what sits
         // on them (clips, notes, automation) is left out below. Rows never
         // route sound, so the channels and their effects keep running.
-        let silent_rows = hardwave_project::layout::SilentRows::of(&project.rows);
+        let silent_rows = hardwave_project::layout::SilentRows::of(project);
         let audible_lanes = |track: &hardwave_project::track::Track| {
             track
                 .automation_lanes
                 .iter()
-                .filter(|lane| !silent_rows.has(lane.row))
+                .filter(|lane| !silent_rows.lane(lane))
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -249,7 +249,7 @@ impl GraphBuilder {
         for source in &project.tracks {
             for clip in &source.automation_clips {
                 if let Some(target) = clip.target_track.as_deref() {
-                    if target != source.id && !silent_rows.has(clip.row) {
+                    if target != source.id && !silent_rows.automation_clip(clip) {
                         handed.entry(target).or_default().push(clip);
                     }
                 }
@@ -258,7 +258,7 @@ impl GraphBuilder {
         let audible_automation_clips = |track: &hardwave_project::track::Track| {
             let own = track.automation_clips.iter().filter(|clip| {
                 clip.target_track.as_deref().is_none_or(|t| t == track.id)
-                    && !silent_rows.has(clip.row)
+                    && !silent_rows.automation_clip(clip)
             });
             let theirs = handed.get(track.id.as_str()).into_iter().flatten().copied();
             own.chain(theirs).cloned().collect::<Vec<_>>()
@@ -486,7 +486,7 @@ impl GraphBuilder {
                     };
                     // A muted clip contributes nothing, the same way a muted
                     // audio clip is skipped; nor does one on a silent row.
-                    if midi_ref.clip.muted || silent_rows.has(clip.row) {
+                    if midi_ref.clip.muted || silent_rows.clip(clip) {
                         continue;
                     }
                     // MIDI effects sit between the clip and the
@@ -1280,7 +1280,7 @@ impl GraphBuilder {
         let clips_to_play = track.clips.iter().filter(|clip| {
             let is_freeze = clip.lane == hardwave_project::clip::FREEZE_LANE;
             let on_track = if track.frozen { is_freeze } else { !is_freeze };
-            on_track && !silent_rows.has(clip.row)
+            on_track && !silent_rows.clip(clip)
         });
         clips_to_play
             .filter_map(|clip| match &clip.content {

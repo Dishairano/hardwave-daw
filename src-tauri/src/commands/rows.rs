@@ -440,6 +440,44 @@ mod tests {
     }
 
     #[test]
+    fn a_clip_made_without_a_row_stays_where_it_is_drawn_through_row_edits() {
+        let e = engine();
+        // As a recording or an import leaves it: no row, so it is drawn
+        // with the lead's other clip, on row 0.
+        let mut late = note_clip("insert-001", "lead-2", 4 * PPQ, 72, 0);
+        late.row = None;
+        e.project
+            .lock()
+            .track_mut("insert-001")
+            .unwrap()
+            .clips
+            .push(late);
+        let theirs = in_a_room(&e, |e| {
+            let moves = vec![ClipRow {
+                track_id: "insert-001".into(),
+                clip_id: "lead-1".into(),
+                row: 7,
+            }];
+            set_clip_rows_on(e, moves).unwrap();
+        });
+        assert_eq!(
+            row_of(&e, "insert-001", "lead-2"),
+            Some(0),
+            "it stays on its row and does not follow the clip that moved"
+        );
+        same_layout(&e.project.lock(), &theirs);
+        edit(&e, true, no_check, |p| p.insert_rows(0, 2)).unwrap();
+        assert_eq!(row_of(&e, "insert-001", "lead-2"), Some(2), "moved down");
+        assert!(e.undo() && e.undo());
+        assert_eq!(row_of(&e, "insert-001", "lead-1"), Some(0));
+        assert_eq!(
+            row_of(&e, "insert-001", "lead-2"),
+            Some(0),
+            "undone, it is still where it was drawn"
+        );
+    }
+
+    #[test]
     fn a_row_drag_changes_nothing_in_the_sound() {
         let e = engine();
         let before = render(&e);
@@ -592,7 +630,9 @@ mod tests {
                 p.track("insert-001").unwrap().automation_clips[0].row
             )
         };
-        undoes(&e, look, "None", "Some(12)");
+        // Made with no row, it was drawn on the first empty row (2); the
+        // edit wrote that down first, so undo puts it back there.
+        undoes(&e, look, "Some(2)", "Some(12)");
         assert!(set_automation_clip_row_on(&e, "insert-001".into(), "zz".into(), 1).is_err());
     }
 

@@ -1,0 +1,68 @@
+{
+  "about": "Where the playlist draws things that have no row of their own. Read by rowIndex.test.ts (the playlist) and by crates/hardwave-project/src/layout.rs (the engine's row mute and solo), so the two follow one rule.",
+  "tracks": [
+    {
+      "id": "master",
+      "kind": "Master",
+      "clips": [{ "id": "m1", "row": null }],
+      "automationClips": [],
+      "automationLanes": []
+    },
+    {
+      "id": "a",
+      "kind": "Midi",
+      "clips": [
+        { "id": "a1", "row": 3 },
+        { "id": "a2", "row": 3 },
+        { "id": "a3", "row": 5 },
+        { "id": "a4", "row": null }
+      ],
+      "automationClips": [],
+      "automationLanes": [{ "id": "al", "row": null }]
+    },
+    {
+      "id": "b",
+      "kind": "Audio",
+      "clips": [
+        { "id": "b1", "row": null },
+        { "id": "b2", "row": null }
+      ],
+      "automationClips": [{ "id": "bac", "row": null }],
+      "automationLanes": []
+    },
+    {
+      "id": "c",
+      "kind": "Midi",
+      "clips": [
+        { "id": "c1", "row": 7 },
+        { "id": "c2", "row": 2 },
+        { "id": "c3", "row": null }
+      ],
+      "automationClips": [{ "id": "cac", "row": 9 }],
+      "automationLanes": []
+    },
+    {
+      "id": "d",
+      "kind": "Audio",
+      "clips": [],
+      "automationClips": [],
+      "automationLanes": [{ "id": "dl", "row": 0 }]
+    }
+  ],
+  "shown": {
+    "m1": 4,
+    "a1": 3,
+    "a2": 3,
+    "a3": 5,
+    "a4": 3,
+    "al": 6,
+    "b1": 1,
+    "b2": 1,
+    "bac": 8,
+    "c1": 7,
+    "c2": 2,
+    "c3": 2,
+    "cac": 9,
+    "dl": 0
+  }
+}

@@ -12,6 +12,10 @@
  * drawn on the row most of its channel's other clips sit on, else on its
  * track's place in the playlist (where a song built row by row put it),
  * and an automation clip or lane without one on the first empty row.
+ * The engine's row mute and solo follow the same rule (`shown_rows` in
+ * crates/hardwave-project/src/layout.rs), the app sends every clip with
+ * the row that rule gives it, and both are tested on the same cases
+ * (shownRows.cases.json), so what a muted row looks like is what it does.
  */
 
 export interface RowClipLike {
