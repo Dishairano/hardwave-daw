@@ -1580,6 +1580,13 @@ impl AudioNode for MidiTrackNode {
             }
         }
 
+        // A plug-in instrument on the chain is the track's sound, and the
+        // built-in synth's is thrown away below. Its voices still start and
+        // end as before, but nothing is played on them.
+        let builtin_heard = !self.chain.slots.iter().any(|s| {
+            s.plugin.descriptor().category
+                == hardwave_plugin_host::types::PluginCategory::Instrument
+        });
         let mut hit_idx = 0usize;
         for i in 0..block_size {
             let global_sample = block_start.saturating_add(i as u64);
@@ -1674,6 +1681,27 @@ impl AudioNode for MidiTrackNode {
 
             // Sample the synth.
             let (sample_l_raw, sample_r_raw) = match self.instrument {
+                Instrument::BuiltinSine if !builtin_heard => {
+                    // Thrown away below: the voices only move on, so each
+                    // ends when it would have. Every note of a plug-in
+                    // instrument's track ran an oscillator nobody heard.
+                    for v in self.voices.iter_mut() {
+                        if matches!(v.stage, EnvStage::Idle) {
+                            continue;
+                        }
+                        Self::step_envelope(v, sr);
+                        let voice_bend = if mpe {
+                            bend_mul * self.channel_bend[v.channel as usize]
+                        } else {
+                            bend_mul
+                        };
+                        v.phase += TWO_PI * v.freq * voice_bend / sr;
+                        if v.phase >= TWO_PI {
+                            v.phase -= TWO_PI;
+                        }
+                    }
+                    (0.0, 0.0)
+                }
                 Instrument::BuiltinSine => {
                     // Sum every active voice (polyphony). Idle voices are
                     // pruned after the block.
@@ -2668,6 +2696,62 @@ mod tests {
         assert!(
             flat < 1e-4,
             "instrument (DC) should replace the built-in sine, got delta={flat}"
+        );
+    }
+
+    /// Under a plug-in instrument nothing is played on the built-in synth's
+    /// voices, but they still start, are let go and end when they did, so
+    /// the track keeps running for as long as before.
+    #[test]
+    fn under_a_plug_in_instrument_the_built_in_voices_end_when_they_did() {
+        let notes = vec![
+            MidiNoteRegion {
+                note_on_sample: 100,
+                note_off_sample: 3_000,
+                pitch: 48,
+                ..Default::default()
+            },
+            MidiNoteRegion {
+                note_on_sample: 900,
+                note_off_sample: 1_500,
+                pitch: 67,
+                ..Default::default()
+            },
+        ];
+        let mut plain = make_node();
+        plain.set_notes(notes.clone());
+        let mut hosted = make_node();
+        hosted.set_notes(notes);
+        hosted.push_offline_slot(scaling_slot("inst", true, 1.0), 48_000.0, 256);
+        let inputs: [&[f32]; 0] = [];
+        let mut most = 0;
+        for b in 0..200u64 {
+            let ctx = ctx_at(48_000.0, 256, b * 256, true);
+            plain.process(&inputs, &mut block_outputs(256), &[], &mut Vec::new(), &ctx);
+            hosted.process(&inputs, &mut block_outputs(256), &[], &mut Vec::new(), &ctx);
+            let stages = |n: &MidiTrackNode| -> Vec<(u8, bool, u32, u32)> {
+                n.voices
+                    .iter()
+                    .map(|v| {
+                        (
+                            v.pitch,
+                            matches!(v.stage, EnvStage::Release),
+                            v.env_value.to_bits(),
+                            v.phase.to_bits(),
+                        )
+                    })
+                    .collect()
+            };
+            assert_eq!(stages(&plain), stages(&hosted), "block {b}");
+            most = most.max(hosted.voices.len());
+        }
+        assert_eq!(most, 2, "both notes started a voice");
+        assert!(
+            hosted
+                .voices
+                .iter()
+                .all(|v| matches!(v.stage, EnvStage::Release | EnvStage::Idle)),
+            "and both were let go"
         );
     }
 
