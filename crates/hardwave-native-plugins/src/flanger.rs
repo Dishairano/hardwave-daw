@@ -327,4 +327,80 @@ mod tests {
             );
         }
     }
+
+    /// One click through a still comb (no sweep): the first echo comes
+    /// back 1 ms later, the second 2 ms later through the feedback. With
+    /// Invert on, the feedback flips polarity, so the second echo comes
+    /// back upside down. Invert used to do nothing: the delay line threw
+    /// the negative feedback away and set it to zero.
+    #[test]
+    fn invert_flips_the_feedback() {
+        let echo_after_feedback = |invert: f64| {
+            let mut p = NativeFlanger::new();
+            p.activate(48_000.0, 512).unwrap();
+            p.set_parameter_value(PARAM_DEPTH, 0.0);
+            p.set_parameter_value(PARAM_FEEDBACK, 0.6);
+            p.set_parameter_value(PARAM_MIX, 1.0);
+            p.set_parameter_value(PARAM_INVERT, invert);
+            let mut click = vec![0.0_f32; 200];
+            click[0] = 1.0;
+            let mut out = vec![Vec::new(), Vec::new()];
+            p.process(&[&click, &click], &mut out, &[], &mut Vec::new(), 200);
+            // 1 ms at 48 kHz is 48 samples: the first echo at 48, the
+            // one round the feedback at 96.
+            assert!((out[0][48] - 1.0).abs() < 1e-4, "first echo {}", out[0][48]);
+            out[0][96]
+        };
+        let plain = echo_after_feedback(0.0);
+        let inverted = echo_after_feedback(1.0);
+        assert!((plain - 0.6).abs() < 1e-4, "plain feedback echo {plain}");
+        assert!(
+            (inverted + 0.6).abs() < 1e-4,
+            "inverted feedback echo {inverted}, expected -0.6"
+        );
+    }
+
+    /// Turning a knob does not restart the sweep. Two instances play the
+    /// same music; halfway, one has Feedback set again to the value it
+    /// already had. Nothing about the sound changed, so both must go on
+    /// giving the same samples, bit for bit. The chorus used to restart its LFOs on every change; the flanger shares the delay line, so it is held to the same.
+    #[test]
+    fn a_knob_turn_keeps_the_sweep_going() {
+        let make = || {
+            let mut p = NativeFlanger::new();
+            p.activate(48_000.0, 512).unwrap();
+            p
+        };
+        let (mut turned, mut left_alone) = (make(), make());
+        let block = |n: usize| -> Vec<f32> {
+            (0..512)
+                .map(|i| (std::f32::consts::TAU * 330.0 * (n * 512 + i) as f32 / 48_000.0).sin())
+                .collect()
+        };
+        let run = |p: &mut NativeFlanger, x: &[f32]| {
+            let mut out = vec![Vec::new(), Vec::new()];
+            p.process(&[x, x], &mut out, &[], &mut Vec::new(), x.len());
+            out
+        };
+        for n in 0..20 {
+            let x = block(n);
+            run(&mut turned, &x);
+            run(&mut left_alone, &x);
+        }
+        let value = turned.get_parameter_value(PARAM_FEEDBACK);
+        turned.set_parameter_value(PARAM_FEEDBACK, value);
+        for n in 20..30 {
+            let x = block(n);
+            let (a, b) = (run(&mut turned, &x), run(&mut left_alone, &x));
+            for ch in 0..2 {
+                for (i, (s, t)) in a[ch].iter().zip(&b[ch]).enumerate() {
+                    assert_eq!(
+                        s.to_bits(),
+                        t.to_bits(),
+                        "block {n} channel {ch} sample {i}"
+                    );
+                }
+            }
+        }
+    }
 }
