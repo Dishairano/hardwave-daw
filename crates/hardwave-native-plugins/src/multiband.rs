@@ -3,10 +3,11 @@
 //! Multiband Compressor / Maximus' "3 band" mode.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::multiband::{BandCompressor, MultibandCompressor3};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -416,6 +417,18 @@ impl HostedPlugin for NativeMultiband {
         }
         self.rebuild();
         Ok(())
+    }
+
+    /// The crossovers ring out at the lowest split, and every band's
+    /// detector falls back to rest.
+    fn tail(&self) -> Tail {
+        let ring = tail::filter_ring_secs(self.lo_mid_hz as f64, 0.707, 2);
+        let release = self
+            .bands
+            .iter()
+            .map(|b| tail::release_secs(b.release_ms as f64 / 1000.0))
+            .fold(0.0_f64, f64::max);
+        tail::from_secs(ring.max(release), self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

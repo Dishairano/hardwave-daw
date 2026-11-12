@@ -4,11 +4,12 @@
 //! features level: pick a space, set mix, pre-delay, tail tone.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::convolution::{ConvolutionReverb, PreparedIr};
 use hardwave_dsp::ir_library::{synthesize_ir, IrPreset};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -413,6 +414,18 @@ impl HostedPlugin for NativeConvReverb {
         self.rebuild_ir();
         self.refresh();
         Ok(())
+    }
+
+    /// The pre-delay, the impulse as far as it is kept, a block of the
+    /// partitioned engine, and the tail filters ringing out.
+    fn tail(&self) -> Tail {
+        let sr = self.sample_rate as f64;
+        let ir =
+            hardwave_dsp::convolution::MAX_IR_SAMPLES as f64 * self.low_cpu.clamp(0.1, 1.0) as f64;
+        let secs = self.pre_delay_ms.clamp(0.0, 1_000.0) as f64 / 1000.0
+            + (ir + 512.0) / sr
+            + tail::filter_ring_secs(self.low_cut_hz as f64, 0.707, 1);
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

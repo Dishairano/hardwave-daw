@@ -66,6 +66,14 @@ pub struct PluginSlot {
     /// Dry/wet mix for this slot in [0, 1]. 1.0 = fully processed, 0.0 = bypass audible effect.
     #[serde(default = "default_wet")]
     pub wet: f32,
+    /// The producer's "Allow smart disable" for this plug-in, when they
+    /// chose: ticked lets smart disable leave it out while its input is
+    /// silent and its sound has died away even when it does not say how
+    /// long it rings; unticked never leaves it out. `None` (not saved)
+    /// follows the default, which may change: built-in plug-ins and those
+    /// that say when they have finished are left out, others are not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_smart_disable: Option<bool>,
 }
 
 fn default_wet() -> f32 {

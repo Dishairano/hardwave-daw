@@ -277,6 +277,7 @@ pub fn rescan_and_restore_missing_plugins(
                 let cmd = InsertCommand::Add {
                     track_id,
                     slot: LiveSlot {
+                        sleep: Default::default(),
                         param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
                         levels: slot_levels.clone(),
                         slot_id,
@@ -941,6 +942,7 @@ pub(crate) fn add_plugin_without_undo_step(
             .ok_or_else(|| format!("Track not found: {}", track_id))?;
         let slot_id = uuid::Uuid::new_v4().to_string();
         track.inserts.push(hardwave_project::track::PluginSlot {
+            allow_smart_disable: None,
             id: slot_id.clone(),
             plugin_id: descriptor.id.clone(),
             enabled: true,
@@ -1016,6 +1018,7 @@ pub(crate) fn add_plugin_without_undo_step(
     let cmd = InsertCommand::Add {
         track_id: track_id.clone(),
         slot: LiveSlot {
+            sleep: Default::default(),
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             levels: slot_levels.clone(),
             slot_id: slot_id.clone(),
@@ -1104,6 +1107,38 @@ fn set_insert_enabled_body(
         enabled,
     };
     let _ = state.engine.lock().try_send_insert_command(cmd);
+    Ok(())
+}
+
+fn set_insert_smart_disable_body(
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    allowed: bool,
+) -> Result<(), String> {
+    state.engine.lock().snapshot_before_mutation();
+    {
+        let engine = state.engine.lock();
+        let mut project = engine.project.lock();
+        let track = project
+            .track_mut(&track_id)
+            .ok_or_else(|| format!("Track not found: {}", track_id))?;
+        let slot = track
+            .inserts
+            .iter_mut()
+            .find(|s| s.id == slot_id)
+            .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
+        slot.allow_smart_disable = Some(allowed);
+    }
+    let cmd = InsertCommand::SetSmartDisable {
+        track_id: track_id.clone(),
+        slot_id: slot_id.clone(),
+        allowed: Some(allowed),
+    };
+    // The song holds the choice now; a full queue rebuilds the graph,
+    // which sets it on the live chain from the song, so the two never
+    // disagree.
+    state.engine.lock().send_insert_command_or_resync(cmd);
     Ok(())
 }
 
@@ -2162,6 +2197,24 @@ pub fn set_insert_enabled(
     result
 }
 
+/// The "Allow smart disable" box of one plug-in slot, saved with the song.
+/// Off, the plug-in is called every block even when it has nothing to do,
+/// for one that makes sound out of silence without saying so.
+#[tauri::command]
+pub fn set_insert_smart_disable(
+    app: AppHandle,
+    state: State<AppState>,
+    track_id: String,
+    slot_id: String,
+    allowed: bool,
+) -> Result<(), String> {
+    let result = set_insert_smart_disable_body(state, track_id.clone(), slot_id, allowed);
+    if result.is_ok() {
+        tell_windows_track_changed(&app, &track_id);
+    }
+    result
+}
+
 #[tauri::command]
 pub fn reorder_insert(
     app: AppHandle,
@@ -2372,6 +2425,7 @@ fn live_slot(
     ));
     state.slot_levels.lock().insert(key, levels.clone());
     LiveSlot {
+        sleep: Default::default(),
         param_ranges: ranges,
         levels,
         slot_id,
@@ -2593,6 +2647,7 @@ mod reopened_song_tests {
                 .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
                 .unwrap();
             master.inserts.push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: None,
                 id: "shape".into(),
                 plugin_id: hardwave_native_plugins::gain::NativeGain::ID.into(),
                 enabled: true,

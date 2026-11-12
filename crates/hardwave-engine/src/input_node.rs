@@ -897,6 +897,7 @@ mod input_tests {
 
     fn ctx(frames: u32) -> ProcessContext {
         ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: frames,
             tempo: 120.0,

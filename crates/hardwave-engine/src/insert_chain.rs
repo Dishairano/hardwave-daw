@@ -64,6 +64,202 @@ pub struct LiveSlot {
     /// The level going into and coming out of this slot, for the IN and
     /// OUT meters of the plug-in's window.
     pub levels: std::sync::Arc<SlotLevels>,
+    /// Smart disable: whether this slot may be left out while it has
+    /// nothing to do, and how long it has had nothing to do. Boxed, as it
+    /// is a few hundred bytes and a slot travels in a command.
+    pub sleep: Box<SlotSleep>,
+}
+
+/// Below this a sample counts as silence: about -150 dBFS, far under what
+/// any converter plays, so leaving out a plug-in whose input and output
+/// stay under it changes nothing anyone can hear or measure in a render.
+pub const SILENCE: f32 = 3.2e-8;
+
+/// How long a plug-in that does not say how long it rings is given, in
+/// seconds, after its input falls silent.
+const UNKNOWN_TAIL_SECS: f64 = 3.0;
+
+/// The longest a plug-in's output must have been silent before it is left
+/// out, in seconds. Shorter tails wait as long as the tail.
+const MAX_QUIET_OUT_SECS: f64 = 1.5;
+
+/// Smart disable state of one slot.
+///
+/// A plug-in whose input has been silent for longer than its tail, and
+/// whose output has died away, is not called: the slot outputs silence
+/// until sound, notes or a knob move arrive, and then calls it again from
+/// that block on, so no sample of the new sound is lost. On an empty track
+/// a reverb used to run for the whole song.
+#[derive(Clone, Debug)]
+pub struct SlotSleep {
+    /// The producer's "Allow smart disable" for this slot, when they set
+    /// it: `Some(false)` never leaves the plug-in out, `Some(true)` also
+    /// leaves out one that does not say how long it rings (after
+    /// [`UNKNOWN_TAIL_SECS`]). `None` is the default: a plug-in is left out
+    /// only on its own word (a stated tail, or CLAP's sleep or
+    /// continue-if-not-quiet), never on a guess, as a third-party effect
+    /// may make sound of its own out of silence (a gate, a sequencer).
+    pub allowed: Option<bool>,
+    asleep: bool,
+    /// Something happened that the plug-in should hear even though its
+    /// input is silent (a knob moved, a preset or state loaded): it is
+    /// called for the next block, then may sleep again.
+    poked: bool,
+    /// Samples since the input last had sound, a note or MIDI in it.
+    quiet_in: u64,
+    /// Samples since the plug-in's output last had sound in it.
+    quiet_out: u64,
+    /// Keys held down on this slot, one bit per key on each channel. An
+    /// instrument holding a note is never left out, even while silent.
+    held: [u128; 16],
+    /// The last value set on the most recent parameters, as (id, f64
+    /// bits), so automation that sets the same value every block does not
+    /// keep the plug-in awake. Fixed size: a parameter that falls out
+    /// counts as moved the next time it is set.
+    params: [(u32, u64); PARAM_MEMORY],
+    next_param: usize,
+}
+
+/// How many parameters per slot smart disable remembers the value of.
+const PARAM_MEMORY: usize = 16;
+
+impl Default for SlotSleep {
+    fn default() -> Self {
+        Self::allowed(None)
+    }
+}
+
+impl SlotSleep {
+    /// Fresh state, with the producer's choice if they made one.
+    pub fn allowed(allowed: Option<bool>) -> Self {
+        Self {
+            allowed,
+            asleep: false,
+            poked: false,
+            quiet_in: 0,
+            quiet_out: 0,
+            held: [0; 16],
+            params: [(u32::MAX, f64::NAN.to_bits()); PARAM_MEMORY],
+            next_param: 0,
+        }
+    }
+
+    /// A parameter was set: the plug-in is called on the next block if the
+    /// value is new.
+    fn param_set(&mut self, id: u32, value: f64) {
+        let bits = value.to_bits();
+        if let Some(entry) = self.params.iter_mut().find(|(p, _)| *p == id) {
+            if entry.1 == bits {
+                return;
+            }
+            entry.1 = bits;
+        } else {
+            self.params[self.next_param] = (id, bits);
+            self.next_param = (self.next_param + 1) % PARAM_MEMORY;
+        }
+        self.poke();
+    }
+
+    /// Whether the plug-in is being left out.
+    pub fn is_asleep(&self) -> bool {
+        self.asleep
+    }
+
+    /// Call the plug-in on the next block, whatever its input.
+    fn poke(&mut self) {
+        self.poked = true;
+    }
+
+    fn wake(&mut self) {
+        self.asleep = false;
+    }
+
+    /// Note keys going down and up, so a held note keeps an instrument on.
+    fn note_events(&mut self, events: &[MidiEvent]) {
+        for ev in events {
+            match *ev {
+                MidiEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                    ..
+                } => {
+                    let bit = 1u128 << (note & 0x7F);
+                    let keys = &mut self.held[(channel & 0x0F) as usize];
+                    if velocity > 0.0 {
+                        *keys |= bit;
+                    } else {
+                        *keys &= !bit;
+                    }
+                }
+                MidiEvent::NoteOff { channel, note, .. } => {
+                    self.held[(channel & 0x0F) as usize] &= !(1u128 << (note & 0x7F));
+                }
+                // All sound off, all notes off.
+                MidiEvent::ControlChange { channel, cc, .. } if cc == 120 || cc == 123 => {
+                    self.held[(channel & 0x0F) as usize] = 0;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn notes_held(&self) -> bool {
+        self.held.iter().any(|k| *k != 0)
+    }
+}
+
+/// Whether every sample of every channel is silence (at or under
+/// [`SILENCE`]), and whether every one is exactly zero. Stops at the first
+/// sample with sound in it. NaN counts as sound.
+fn quietness(channels: &[&[f32]]) -> (bool, bool) {
+    let mut zero = true;
+    for ch in channels {
+        for &x in ch.iter() {
+            let a = x.abs();
+            if a.is_nan() || a > SILENCE {
+                return (false, false);
+            }
+            zero &= a == 0.0;
+        }
+    }
+    (true, zero)
+}
+
+/// A plug-in that makes its own sound (an instrument, or anything without
+/// an audio input): silence in does not mean silence out.
+fn is_generator(plugin: &dyn HostedPlugin) -> bool {
+    let d = plugin.descriptor();
+    d.category == hardwave_plugin_host::types::PluginCategory::Instrument || d.num_inputs == 0
+}
+
+/// Whether a slot whose input and output were silent this block may now be
+/// left out, from what the plug-in says about itself.
+fn may_sleep(slot: &LiveSlot, sample_rate: f64) -> bool {
+    use hardwave_plugin_host::types::{ProcessHint, Tail};
+    match slot.plugin.process_hint() {
+        // It asked to be called whatever comes in.
+        ProcessHint::Continue => return false,
+        // It says it needs nothing until input or events arrive, or that
+        // it may stop once its output is quiet, which it is.
+        ProcessHint::Sleep | ProcessHint::ContinueIfNotQuiet => return true,
+        _ => {}
+    }
+    let tail = match slot.plugin.tail() {
+        Tail::Infinite => return false,
+        Tail::Samples(n) => n as u64,
+        // A plug-in that makes its own sound and does not say how long it
+        // rings is never left out: silence in tells nothing about it.
+        Tail::Unknown if is_generator(slot.plugin.as_ref()) => return false,
+        // An effect that does not say: only when the producer ticked the
+        // box for it.
+        Tail::Unknown if slot.sleep.allowed == Some(true) => {
+            (UNKNOWN_TAIL_SECS * sample_rate) as u64
+        }
+        Tail::Unknown => return false,
+    };
+    let hold = tail.min((MAX_QUIET_OUT_SECS * sample_rate) as u64);
+    slot.sleep.quiet_in >= tail && slot.sleep.quiet_out >= hold
 }
 
 /// Peak levels in and out of one slot since the window last read them
@@ -298,6 +494,16 @@ pub struct InsertChain {
     /// away from the music and a delay cannot be set in beats.
     transport: hardwave_plugin_host::types::TransportInfo,
     pub slots: Vec<LiveSlot>,
+    /// Smart disable on for the whole engine (Settings > Audio). Off, every
+    /// enabled slot is called every block, as before.
+    smart: bool,
+    /// The length of the last block the chain saw, so the next one can
+    /// tell whether the playhead went straight on.
+    last_len: u64,
+    /// The playhead did not go straight on into this block (a loop, a
+    /// jump, play or stop): every sleeping plug-in is called for it once,
+    /// so one that follows the song hears where it is.
+    jumped: bool,
 }
 
 impl InsertChain {
@@ -305,6 +511,78 @@ impl InsertChain {
         Self {
             transport: hardwave_plugin_host::types::TransportInfo::default(),
             slots: Vec::new(),
+            smart: true,
+            last_len: 0,
+            jumped: false,
+        }
+    }
+
+    /// Turn smart disable on or off for this chain. Read from the engine's
+    /// setting every block by the node that owns the chain.
+    pub fn set_smart_disable(&mut self, on: bool) {
+        self.smart = on;
+    }
+
+    /// Whether every slot that would be called this block is asleep and
+    /// stays asleep through a block of silence with these MIDI events, so
+    /// the owner may write silence for the whole chain without calling
+    /// [`InsertChain::process`] (then calling [`InsertChain::pass_asleep`]).
+    /// An empty chain, or one whose slots are all off, is asleep. A slot
+    /// keyed from a sidechain wakes when the sidechain has sound in it.
+    pub fn asleep_through(
+        &self,
+        midi_in: &[MidiEvent],
+        sidechain: Option<(&[f32], &[f32])>,
+    ) -> bool {
+        let key_quiet = sidechain.is_none_or(|(l, r)| quietness(&[l, r]).0);
+        let mut any_active = false;
+        for s in &self.slots {
+            if !s.enabled || s.wet <= 0.0 {
+                continue;
+            }
+            any_active = true;
+            if s.sidechain_active && !key_quiet {
+                return false;
+            }
+            if !self.smart || s.sleep.allowed == Some(false) || !s.sleep.asleep || s.sleep.poked {
+                return false;
+            }
+        }
+        !any_active || (!self.jumped && midi_in.is_empty())
+    }
+
+    /// A block of `num_samples` went by with the chain asleep and its
+    /// input silent (see [`InsertChain::asleep_through`]): each sleeping
+    /// plug-in's clock moves on and the counts go on.
+    pub fn pass_asleep(
+        &mut self,
+        transport: hardwave_plugin_host::types::TransportInfo,
+        num_samples: usize,
+    ) {
+        self.transport = transport;
+        for s in self.slots.iter_mut() {
+            if !s.enabled || s.wet <= 0.0 || !s.sleep.asleep {
+                continue;
+            }
+            s.plugin.skip_silence(num_samples);
+            s.sleep.quiet_in = s.sleep.quiet_in.saturating_add(num_samples as u64);
+            s.sleep.quiet_out = s.sleep.quiet_out.saturating_add(num_samples as u64);
+        }
+        self.last_len = num_samples as u64;
+        self.jumped = false;
+    }
+
+    /// Set one slot's "Allow smart disable" box: ticked, unticked, or back
+    /// to the default (`None`). Forbidding wakes it at once.
+    pub fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) -> bool {
+        if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            s.sleep.allowed = allowed;
+            if allowed == Some(false) {
+                s.sleep.wake();
+            }
+            true
+        } else {
+            false
         }
     }
 
@@ -322,6 +600,10 @@ impl InsertChain {
     /// Tell the chain where the song is. Called once per block by the
     /// node that owns it.
     pub fn set_transport(&mut self, transport: hardwave_plugin_host::types::TransportInfo) {
+        let was = self.transport;
+        let expected = was.position_samples.saturating_add(self.last_len);
+        self.jumped = transport.playing != was.playing
+            || (transport.playing && transport.position_samples != expected);
         self.transport = transport;
     }
 
@@ -364,6 +646,10 @@ impl InsertChain {
         // out of range, so fall back to no sidechain.
         let sidechain = sidechain.filter(|(l, r)| l.len() >= n && r.len() >= n);
         scratch.prepare(n);
+        self.last_len = n as u64;
+        let jumped = self.jumped;
+        let smart = self.smart;
+        let sample_rate = self.transport.sample_rate;
         // All plug-ins in the chain see the same incoming MIDI buffer.
         // A real DAW would route midi_out of slot N into midi_in of
         // slot N+1 so MIDI-effect plug-ins (arpeggiators, chord
@@ -371,9 +657,59 @@ impl InsertChain {
         // initial wiring we just give every slot the external events
         // so a synth plug-in becomes audible from a hardware controller.
         for slot in self.slots[start..end].iter_mut() {
+            // Keys go down and up whether the slot is on or not, so one let
+            // go while it was off does not keep it awake once it is back.
+            if !midi_in.is_empty() {
+                slot.sleep.note_events(midi_in);
+            }
             if !slot.enabled || slot.wet <= 0.0 {
                 continue;
             }
+            // Smart disable. What comes in: sound, MIDI, or a key still
+            // held down. A slot with a sidechain hears that too.
+            let sc = match (slot.sidechain_active, sidechain) {
+                (true, Some((sc_l, sc_r))) => Some((&sc_l[..n], &sc_r[..n])),
+                _ => None,
+            };
+            let (main_quiet, main_zero) = quietness(&[&left[..n], &right[..n]]);
+            let (sc_quiet, sc_zero) = match sc {
+                Some((l, r)) => quietness(&[l, r]),
+                None => (true, true),
+            };
+            let input_quiet =
+                main_quiet && sc_quiet && midi_in.is_empty() && !slot.sleep.notes_held();
+            let may = smart && slot.sleep.allowed != Some(false);
+            if may && slot.sleep.asleep && input_quiet && !slot.sleep.poked && !jumped {
+                // Still nothing to do: silence out, and the plug-in's own
+                // clock moves on as if it had run.
+                slot.plugin.skip_silence(n);
+                slot.sleep.quiet_in = slot.sleep.quiet_in.saturating_add(n as u64);
+                slot.sleep.quiet_out = slot.sleep.quiet_out.saturating_add(n as u64);
+                let dry = 1.0 - slot.wet.clamp(0.0, 1.0);
+                if dry == 0.0 {
+                    left[..n].fill(0.0);
+                    right[..n].fill(0.0);
+                } else {
+                    left[..n].iter_mut().for_each(|x| *x *= dry);
+                    right[..n].iter_mut().for_each(|x| *x *= dry);
+                }
+                // A compressor asleep is pulling nothing down: its meter
+                // would otherwise hold the last reading.
+                slot.gain_reduction_db
+                    .store(0.0, std::sync::atomic::Ordering::Relaxed);
+                slot.levels.record_scope(&left[..n], &right[..n]);
+                slot.levels
+                    .record_spec_out(&left[..n], &right[..n], self.transport.sample_rate);
+                continue;
+            }
+            // Something to do: from this block on it is called again, with
+            // the whole block, so the first sample of the new sound is not
+            // lost.
+            slot.sleep.wake();
+            slot.sleep.poked = false;
+            // Only with smart disable on for it: off, the plug-in sees
+            // exactly what it saw before smart disable existed.
+            slot.plugin.set_input_silent(may && main_zero && sc_zero);
             // Reuse the pre-allocated channel vecs; clear() preserves
             // capacity so the plug-in's `extend_from_slice` / `push`
             // calls land back into the same heap allocation.
@@ -425,6 +761,36 @@ impl InsertChain {
             // returned length as authoritative; samples past it stay dry.
             let valid_l = scratch.channels[0].len().min(n);
             let valid_r = scratch.channels[1].len().min(n);
+            // Whether it can be left out from the next block on: input and
+            // output silent for long enough, by what it says of itself.
+            if may {
+                // The buffer is what is heard: a plug-in flagging its
+                // output silent (VST3) is believed only when the buffer is.
+                let output_quiet = quietness(&[
+                    &scratch.channels[0][..valid_l],
+                    &scratch.channels[1][..valid_r],
+                ])
+                .0;
+                let s = &mut slot.sleep;
+                s.quiet_in = if input_quiet {
+                    s.quiet_in.saturating_add(n as u64)
+                } else {
+                    0
+                };
+                s.quiet_out = if output_quiet {
+                    s.quiet_out.saturating_add(n as u64)
+                } else {
+                    0
+                };
+                if input_quiet && output_quiet && may_sleep(slot, sample_rate) {
+                    slot.sleep.asleep = true;
+                }
+            } else {
+                // Counted from scratch once it is allowed again, so a slot
+                // is never left out on silence it was not watched through.
+                slot.sleep.quiet_in = 0;
+                slot.sleep.quiet_out = 0;
+            }
             for (l, s) in left
                 .iter_mut()
                 .zip(scratch.channels[0].iter())
@@ -529,6 +895,9 @@ impl InsertChain {
 
     pub fn set_enabled(&mut self, slot_id: &str, enabled: bool) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            if enabled && !s.enabled {
+                s.sleep.poke();
+            }
             s.enabled = enabled;
             true
         } else {
@@ -581,6 +950,7 @@ impl InsertChain {
     /// Switch a slot to one of its own presets.
     pub fn load_factory_preset(&mut self, slot_id: &str, index: usize) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            s.sleep.poke();
             s.plugin.load_factory_preset(index).is_ok()
         } else {
             false
@@ -598,6 +968,7 @@ impl InsertChain {
             };
             s.plugin.set_parameter_value(param_id, value);
             s.levels.note_param(param_id, value);
+            s.sleep.param_set(param_id, value);
             true
         } else {
             false
@@ -608,6 +979,7 @@ impl InsertChain {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
             s.plugin.set_parameter_value(param_id, value);
             s.levels.note_param(param_id, value);
+            s.sleep.param_set(param_id, value);
             true
         } else {
             false
@@ -628,6 +1000,7 @@ impl InsertChain {
     /// existing on-audio-thread `get_state`.
     pub fn set_state(&mut self, slot_id: &str, bytes: &[u8]) -> bool {
         if let Some(s) = self.slots.iter_mut().find(|s| s.slot_id == slot_id) {
+            s.sleep.poke();
             if let Err(e) = s.plugin.set_state(bytes) {
                 log::warn!("insert_chain::set_state for slot {slot_id}: {e}");
                 return false;
@@ -739,6 +1112,12 @@ pub enum InsertCommand {
         slot_id: String,
         index: usize,
     },
+    /// The slot's "Allow smart disable" box (`None`: the default).
+    SetSmartDisable {
+        track_id: String,
+        slot_id: String,
+        allowed: Option<bool>,
+    },
     /// A different song came in (opened, imported or new): every live
     /// plug-in on every track leaves for the graveyard. Sent down the same
     /// queue as the new song's `Add`s, so it lands before them. Without it
@@ -781,7 +1160,8 @@ impl InsertCommand {
             | InsertCommand::SetParameter { track_id, .. }
             | InsertCommand::SetParameterNormalized { track_id, .. }
             | InsertCommand::SetState { track_id, .. }
-            | InsertCommand::LoadFactoryPreset { track_id, .. } => track_id,
+            | InsertCommand::LoadFactoryPreset { track_id, .. }
+            | InsertCommand::SetSmartDisable { track_id, .. } => track_id,
         })
     }
 }
@@ -968,6 +1348,15 @@ impl InsertRouter {
             } => {
                 if let Some(chain) = self.chains.get_mut(&track_id) {
                     chain.load_factory_preset(&slot_id, index);
+                }
+            }
+            InsertCommand::SetSmartDisable {
+                track_id,
+                slot_id,
+                allowed,
+            } => {
+                if let Some(chain) = self.chains.get_mut(&track_id) {
+                    chain.set_slot_smart_disable(&slot_id, allowed);
                 }
             }
             InsertCommand::ClearAll => {
@@ -1200,6 +1589,7 @@ pub(crate) mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let plugin: Box<dyn HostedPlugin> = Box::new(GainPlugin::new(gain, counter.clone()));
         let slot = LiveSlot {
+            sleep: Default::default(),
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             levels: Default::default(),
             slot_id: id.into(),
@@ -1307,6 +1697,7 @@ pub(crate) mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    sleep: Default::default(),
                     param_ranges: Vec::new(),
                     levels: Default::default(),
                     slot_id: "sc".into(),
@@ -1324,6 +1715,7 @@ pub(crate) mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    sleep: Default::default(),
                     param_ranges: Vec::new(),
                     levels: Default::default(),
                     slot_id: "plain".into(),
@@ -1373,6 +1765,7 @@ pub(crate) mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    sleep: Default::default(),
                     param_ranges: Vec::new(),
                     levels: Default::default(),
                     slot_id: "sink".into(),
@@ -1428,6 +1821,7 @@ pub(crate) mod tests {
         chain
             .push_slot(
                 LiveSlot {
+                    sleep: Default::default(),
                     param_ranges: Vec::new(),
                     levels: Default::default(),
                     slot_id: "sink".into(),
@@ -1863,5 +2257,553 @@ pub(crate) mod tests {
         );
         chain.set_parameter("g", 0, 3.0);
         assert_eq!(levels.take_param_changes(), vec![(0, 3.0)]);
+    }
+
+    /// A reverb in miniature for smart disable: each channel feeds back on
+    /// itself at `feedback` per sample, so an impulse dies away over its
+    /// tail. Counts its calls and the samples it was told it skipped, and
+    /// can say what a CLAP plug-in would (`hint`) or have no tail at all.
+    /// A note-on strikes it: an impulse at the note's own sample.
+    pub(crate) struct Ringer {
+        pub(crate) descriptor: PluginDescriptor,
+        state: [f32; 2],
+        feedback: f32,
+        pub(crate) tail: hardwave_plugin_host::types::Tail,
+        pub(crate) hint: hardwave_plugin_host::types::ProcessHint,
+        calls: Arc<AtomicU32>,
+        skipped: Arc<AtomicU32>,
+        /// Added to every output sample: sound of its own.
+        pub(crate) hum: f32,
+        /// What the host last said of the input's silence.
+        pub(crate) told_silent: Arc<std::sync::atomic::AtomicBool>,
+        /// Where the song was, as the host last said.
+        pub(crate) heard_pos: Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl Ringer {
+        pub(crate) fn new(calls: Arc<AtomicU32>, skipped: Arc<AtomicU32>) -> Self {
+            Self {
+                descriptor: PluginDescriptor {
+                    id: "test.ringer".into(),
+                    name: "Ringer".into(),
+                    vendor: "Hardwave Tests".into(),
+                    version: "0.0.1".into(),
+                    format: PluginFormat::Clap,
+                    path: PathBuf::from("<test>"),
+                    category: PluginCategory::Effect,
+                    num_inputs: 2,
+                    num_outputs: 2,
+                    has_midi_input: false,
+                    has_editor: false,
+                },
+                state: [0.0; 2],
+                feedback: 0.999,
+                // 0.999^n falls under -150 dB after about 17,250 samples.
+                tail: hardwave_plugin_host::types::Tail::Samples(18_000),
+                hint: hardwave_plugin_host::types::ProcessHint::None,
+                calls,
+                skipped,
+                hum: 0.0,
+                told_silent: Default::default(),
+                heard_pos: Default::default(),
+            }
+        }
+    }
+
+    impl HostedPlugin for Ringer {
+        fn descriptor(&self) -> &PluginDescriptor {
+            &self.descriptor
+        }
+        fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
+            Ok(())
+        }
+        fn deactivate(&mut self) {}
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            num_samples: usize,
+        ) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            for (ch, out) in outputs.iter_mut().enumerate().take(2) {
+                out.clear();
+                for i in 0..num_samples {
+                    let mut x = inputs
+                        .get(ch)
+                        .and_then(|c| c.get(i))
+                        .copied()
+                        .unwrap_or(0.0);
+                    for ev in midi_in {
+                        if let MidiEvent::NoteOn { timing, .. } = ev {
+                            if *timing as usize == i {
+                                x += 1.0;
+                            }
+                        }
+                    }
+                    self.state[ch] = x + self.state[ch] * self.feedback;
+                    out.push(self.state[ch] + self.hum);
+                }
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            1
+        }
+        fn get_parameter_info(&self, _id: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _id: u32) -> f64 {
+            self.feedback as f64
+        }
+        fn set_parameter_value(&mut self, _id: u32, value: f64) {
+            self.feedback = value as f32;
+        }
+        fn get_state(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn set_state(&mut self, _bytes: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _parent: RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+        fn tail(&self) -> hardwave_plugin_host::types::Tail {
+            self.tail
+        }
+        fn process_hint(&self) -> hardwave_plugin_host::types::ProcessHint {
+            self.hint
+        }
+        fn set_input_silent(&mut self, silent: bool) {
+            self.told_silent.store(silent, Ordering::Relaxed);
+        }
+        fn set_transport(&mut self, t: hardwave_plugin_host::types::TransportInfo) {
+            self.heard_pos.store(t.position_samples, Ordering::Relaxed);
+        }
+        fn skip_silence(&mut self, num_samples: usize) {
+            self.skipped
+                .fetch_add(num_samples as u32, Ordering::Relaxed);
+        }
+    }
+
+    struct Probe {
+        calls: Arc<AtomicU32>,
+        skipped: Arc<AtomicU32>,
+    }
+
+    fn ringer_chain(edit: impl FnOnce(&mut Ringer)) -> (InsertChain, Probe) {
+        let calls = Arc::new(AtomicU32::new(0));
+        let skipped = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), skipped.clone());
+        edit(&mut ringer);
+        let mut chain = InsertChain::new();
+        chain.slots.push(LiveSlot {
+            sleep: Default::default(),
+            param_ranges: Vec::new(),
+            levels: Default::default(),
+            slot_id: "verb".into(),
+            plugin: Box::new(ringer),
+            enabled: true,
+            wet: 1.0,
+            sidechain_active: false,
+            gain_reduction_db: LiveSlot::new_gain_reduction(),
+        });
+        (chain, Probe { calls, skipped })
+    }
+
+    const BLOCK: usize = 256;
+
+    /// One block through the chain at `pos`, playing, with `input` on both
+    /// channels and these MIDI events; returns the left channel.
+    fn run(chain: &mut InsertChain, pos: u64, input: &[f32], midi: &[MidiEvent]) -> Vec<f32> {
+        let mut left = input.to_vec();
+        let mut right = input.to_vec();
+        let mut scratch = Scratch::with_capacity(BLOCK);
+        chain.set_transport(hardwave_plugin_host::types::TransportInfo {
+            playing: true,
+            position_samples: pos,
+            ..Default::default()
+        });
+        chain.process(&mut left, &mut right, BLOCK, &mut scratch, midi, None);
+        left
+    }
+
+    /// The song for the reverb: an impulse, four seconds of silence, a
+    /// block of sound, and more silence (1000 blocks).
+    fn song_block(k: usize) -> Vec<f32> {
+        let mut b = vec![0.0; BLOCK];
+        if k == 0 {
+            b[0] = 1.0;
+        }
+        if k == 760 {
+            for (i, x) in b.iter_mut().enumerate() {
+                *x = ((i as f32) * 0.05).sin() * 0.5;
+            }
+        }
+        b
+    }
+
+    /// A reverb on an empty track stops being called once its tail has
+    /// passed and its output has died away, is called again on the very
+    /// block sound comes back, and the song sounds the same as with smart
+    /// disable off: every sample within -140 dBFS.
+    #[test]
+    fn a_ringing_plugin_sleeps_after_its_tail_and_wakes_sample_exact() {
+        let (mut smart, probe) = ringer_chain(|_| {});
+        let (mut plain, plain_probe) = ringer_chain(|_| {});
+        plain.set_smart_disable(false);
+        let mut calls_at = Vec::new();
+        let mut worst = 0.0_f32;
+        for k in 0..1000 {
+            let input = song_block(k);
+            let pos = (k * BLOCK) as u64;
+            let a = run(&mut smart, pos, &input, &[]);
+            let b = run(&mut plain, pos, &input, &[]);
+            for (x, y) in a.iter().zip(&b) {
+                worst = worst.max((x - y).abs());
+            }
+            calls_at.push(probe.calls.load(Ordering::Relaxed));
+            if k == 760 {
+                assert_eq!(
+                    calls_at[759] + 1,
+                    calls_at[760],
+                    "called on the block the sound came back"
+                );
+                // What the sleeping plug-in still held was under -300 dB.
+                let off = a
+                    .iter()
+                    .zip(&b)
+                    .fold(0.0_f32, |m, (x, y)| m.max((x - y).abs()));
+                assert!(off < 1e-12, "nothing of the new sound is lost ({off})");
+            }
+        }
+        assert!(worst < 1e-7, "the song differs by {worst}, over -140 dBFS");
+        assert_eq!(plain_probe.calls.load(Ordering::Relaxed), 1000);
+        // The tail is 18,000 samples and the output must be quiet for as
+        // long again: asleep well before block 300, called all through the
+        // decay before that.
+        assert!(calls_at[100] == 101, "called through its tail");
+        assert_eq!(calls_at[300], calls_at[700], "asleep through the silence");
+        assert!(calls_at[300] < 200, "slept after {} calls", calls_at[300]);
+        // Its clock was told about every block it slept through.
+        let slept = (760 - calls_at[700] as usize) * BLOCK;
+        assert!(probe.skipped.load(Ordering::Relaxed) as usize >= slept);
+        // And it went back to sleep after the new sound's tail.
+        assert_eq!(calls_at[990], calls_at[999], "asleep again");
+        assert!(calls_at[999] - calls_at[760] < 200);
+    }
+
+    /// Automation that moves a sleeping plug-in's knob gets it called for
+    /// that block; the same value every block does not keep it awake.
+    #[test]
+    fn a_moved_knob_wakes_a_sleeping_plugin_for_a_block() {
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = hardwave_plugin_host::types::Tail::Samples(0);
+        });
+        let silence = vec![0.0; BLOCK];
+        run(&mut chain, 0, &silence, &[]);
+        run(&mut chain, BLOCK as u64, &silence, &[]);
+        let asleep = probe.calls.load(Ordering::Relaxed);
+        assert!(chain.slots[0].sleep.is_asleep(), "nothing to do");
+        let mut pos = 2 * BLOCK as u64;
+        for value in [0.5, 0.5, 0.5, 0.25, 0.25] {
+            chain.set_parameter_normalized("verb", 0, value);
+            run(&mut chain, pos, &silence, &[]);
+            pos += BLOCK as u64;
+        }
+        assert_eq!(
+            probe.calls.load(Ordering::Relaxed),
+            asleep + 2,
+            "called once for each new value, not for the repeats"
+        );
+        assert!(chain.slots[0].sleep.is_asleep());
+    }
+
+    /// A playhead jump, MIDI or a state load each get a sleeping plug-in
+    /// called for one block.
+    #[test]
+    fn a_jump_or_midi_wakes_a_sleeping_plugin() {
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = hardwave_plugin_host::types::Tail::Samples(0);
+        });
+        let silence = vec![0.0; BLOCK];
+        run(&mut chain, 0, &silence, &[]);
+        run(&mut chain, BLOCK as u64, &silence, &[]);
+        let base = probe.calls.load(Ordering::Relaxed);
+        run(&mut chain, 2 * BLOCK as u64, &silence, &[]);
+        assert_eq!(probe.calls.load(Ordering::Relaxed), base, "asleep");
+        // A loop back to the start.
+        run(&mut chain, 0, &silence, &[]);
+        assert_eq!(probe.calls.load(Ordering::Relaxed), base + 1, "jump");
+        let cc = MidiEvent::ControlChange {
+            timing: 0,
+            channel: 0,
+            cc: 1,
+            value: 0.5,
+        };
+        run(&mut chain, BLOCK as u64, &silence, &[cc]);
+        assert_eq!(probe.calls.load(Ordering::Relaxed), base + 2, "MIDI");
+        chain.set_state("verb", &[]);
+        run(&mut chain, 2 * BLOCK as u64, &silence, &[]);
+        assert_eq!(probe.calls.load(Ordering::Relaxed), base + 3, "state");
+        run(&mut chain, 3 * BLOCK as u64, &silence, &[]);
+        assert_eq!(
+            probe.calls.load(Ordering::Relaxed),
+            base + 3,
+            "asleep again"
+        );
+    }
+
+    /// What keeps a plug-in called whatever its input: its own box off,
+    /// smart disable off, an infinite tail, a CLAP plug-in asking to go
+    /// on, or a generator that does not say how long it rings.
+    #[test]
+    fn what_keeps_a_plugin_awake() {
+        use hardwave_plugin_host::types::{ProcessHint, Tail};
+        let silence = vec![0.0; BLOCK];
+        let blocks = 1000;
+        let awake = |mut chain: InsertChain, probe: Probe| {
+            for k in 0..blocks {
+                run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+            }
+            probe.calls.load(Ordering::Relaxed) as usize == blocks
+        };
+        let (mut chain, probe) = ringer_chain(|_| {});
+        chain.set_slot_smart_disable("verb", Some(false));
+        assert!(awake(chain, probe), "its own box off");
+        let (mut chain, probe) = ringer_chain(|_| {});
+        chain.set_smart_disable(false);
+        assert!(awake(chain, probe), "smart disable off");
+        let (chain, probe) = ringer_chain(|r| r.tail = Tail::Infinite);
+        assert!(awake(chain, probe), "an infinite tail");
+        let (chain, probe) = ringer_chain(|r| {
+            r.tail = Tail::Samples(0);
+            r.hint = ProcessHint::Continue;
+        });
+        assert!(awake(chain, probe), "CLAP_PROCESS_CONTINUE");
+        let (chain, probe) = ringer_chain(|r| {
+            r.tail = Tail::Unknown;
+            r.descriptor.category = PluginCategory::Instrument;
+        });
+        assert!(awake(chain, probe), "a generator with no tail");
+        // An effect with no stated tail sleeps after three seconds only
+        // when the producer ticked its box.
+        let (mut chain, probe) = ringer_chain(|r| r.tail = Tail::Unknown);
+        chain.set_slot_smart_disable("verb", Some(true));
+        assert!(
+            !awake(chain, probe),
+            "ticked, an effect with no tail sleeps"
+        );
+        // A CLAP plug-in saying it may sleep is believed at once.
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = Tail::Infinite;
+            r.hint = ProcessHint::Sleep;
+        });
+        for k in 0..4 {
+            run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+        }
+        assert_eq!(probe.calls.load(Ordering::Relaxed), 1, "CLAP_PROCESS_SLEEP");
+    }
+
+    /// An instrument holding a note is never left out, even while it makes
+    /// no sound; let go, it sleeps once its tail has passed.
+    #[test]
+    fn a_held_note_keeps_an_instrument_called() {
+        use hardwave_plugin_host::types::Tail;
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = Tail::Samples(0);
+            r.descriptor.category = PluginCategory::Instrument;
+            // A click on each note, with nothing after it.
+            r.feedback = 0.0;
+        });
+        let silence = vec![0.0; BLOCK];
+        let on = MidiEvent::NoteOn {
+            timing: 0,
+            channel: 2,
+            note: 60,
+            velocity: 0.8,
+        };
+        let off = MidiEvent::NoteOff {
+            timing: 0,
+            channel: 2,
+            note: 60,
+            velocity: 0.0,
+        };
+        run(&mut chain, 0, &silence, &[on]);
+        for k in 1..50 {
+            run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+        }
+        assert_eq!(
+            probe.calls.load(Ordering::Relaxed),
+            50,
+            "held: always called"
+        );
+        run(&mut chain, 50 * BLOCK as u64, &silence, &[off]);
+        for k in 51..60 {
+            run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+        }
+        assert_eq!(
+            probe.calls.load(Ordering::Relaxed),
+            52,
+            "let go: one more block, then asleep"
+        );
+    }
+
+    /// A chain whose every plug-in sleeps says so, so the track can write
+    /// silence without calling it, and the sleeping plug-ins' clocks still
+    /// move on by the blocks it was left out for.
+    #[test]
+    fn a_sleeping_chain_can_be_passed_over() {
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = hardwave_plugin_host::types::Tail::Samples(0);
+        });
+        let silence = vec![0.0; BLOCK];
+        assert!(!chain.asleep_through(&[], None), "awake until it has run");
+        run(&mut chain, 0, &silence, &[]);
+        run(&mut chain, BLOCK as u64, &silence, &[]);
+        assert!(chain.asleep_through(&[], None));
+        let note = MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 1,
+            velocity: 1.0,
+        };
+        assert!(!chain.asleep_through(&[note], None), "MIDI would wake it");
+        let before = probe.skipped.load(Ordering::Relaxed);
+        chain.pass_asleep(
+            hardwave_plugin_host::types::TransportInfo {
+                playing: true,
+                position_samples: 2 * BLOCK as u64,
+                ..Default::default()
+            },
+            BLOCK,
+        );
+        assert_eq!(probe.skipped.load(Ordering::Relaxed), before + BLOCK as u32);
+        // The next block follows on: no jump, still asleep.
+        chain.set_transport(hardwave_plugin_host::types::TransportInfo {
+            playing: true,
+            position_samples: 3 * BLOCK as u64,
+            ..Default::default()
+        });
+        assert!(chain.asleep_through(&[], None));
+        chain.set_smart_disable(false);
+        assert!(!chain.asleep_through(&[], None), "smart disable off");
+    }
+
+    /// A third-party effect that does not say how long it rings may make
+    /// sound of its own out of silence (a gate, a sequencer) after a long
+    /// quiet stretch: by default it is never left out on a guess.
+    #[test]
+    fn an_effect_with_no_stated_tail_is_not_left_out_by_default() {
+        use hardwave_plugin_host::types::Tail;
+        let (mut chain, probe) = ringer_chain(|r| r.tail = Tail::Unknown);
+        let silence = vec![0.0; BLOCK];
+        for k in 0..1000 {
+            run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+        }
+        assert_eq!(probe.calls.load(Ordering::Relaxed), 1000);
+    }
+
+    /// With smart disable off, or the slot opted out, a plug-in is told
+    /// nothing about its input's silence, as before smart disable.
+    #[test]
+    fn with_smart_disable_off_a_plugin_is_not_told_its_input_is_silent() {
+        let silence = vec![0.0; BLOCK];
+        for off_globally in [true, false] {
+            let told = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let seen = told.clone();
+            let (mut chain, _) = ringer_chain(|r| r.told_silent = seen);
+            if off_globally {
+                chain.set_smart_disable(false);
+            } else {
+                chain.slots[0].sleep.allowed = false.into();
+            }
+            for k in 0..4 {
+                run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+                assert!(!told.load(Ordering::Relaxed), "block {k}");
+            }
+        }
+    }
+
+    /// A plug-in that flags its output silent while its buffer has sound in
+    /// it is not believed: the buffer is what is heard.
+    #[test]
+    fn a_silence_flag_over_sound_does_not_put_a_plugin_to_sleep() {
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = hardwave_plugin_host::types::Tail::Samples(0);
+            r.hint = hardwave_plugin_host::types::ProcessHint::OutputSilent;
+            r.hum = 0.1;
+        });
+        let silence = vec![0.0; BLOCK];
+        for k in 0..20 {
+            let out = run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+            assert!(out[7] > 0.09, "its sound is heard at block {k}");
+        }
+        assert_eq!(probe.calls.load(Ordering::Relaxed), 20);
+    }
+
+    /// A key let go while the slot was switched off is let go on the slot
+    /// too, so the instrument can sleep once it is back on.
+    #[test]
+    fn a_note_let_go_while_the_slot_was_off_does_not_keep_it_awake() {
+        use hardwave_plugin_host::types::Tail;
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = Tail::Samples(0);
+            r.descriptor.category = PluginCategory::Instrument;
+            r.feedback = 0.0;
+        });
+        let silence = vec![0.0; BLOCK];
+        let on = MidiEvent::NoteOn {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.8,
+        };
+        let off = MidiEvent::NoteOff {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.0,
+        };
+        run(&mut chain, 0, &silence, &[on]);
+        chain.set_enabled("verb", false);
+        run(&mut chain, BLOCK as u64, &silence, &[off]);
+        chain.set_enabled("verb", true);
+        for k in 2..20 {
+            run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+        }
+        assert!(
+            probe.calls.load(Ordering::Relaxed) < 5,
+            "asleep, not held: {} calls",
+            probe.calls.load(Ordering::Relaxed)
+        );
+    }
+
+    /// Woken after a sleep, a plug-in is told where the song really is, not
+    /// where it fell asleep.
+    #[test]
+    fn a_woken_plugin_hears_the_true_song_position() {
+        let heard = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let pos_seen = heard.clone();
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = hardwave_plugin_host::types::Tail::Samples(0);
+            r.heard_pos = pos_seen;
+        });
+        let silence = vec![0.0; BLOCK];
+        for k in 0..40 {
+            run(&mut chain, (k * BLOCK) as u64, &silence, &[]);
+        }
+        assert!(probe.calls.load(Ordering::Relaxed) < 5, "asleep");
+        let mut sound = silence.clone();
+        sound[3] = 0.5;
+        run(&mut chain, (40 * BLOCK) as u64, &sound, &[]);
+        assert_eq!(heard.load(Ordering::Relaxed), (40 * BLOCK) as u64);
     }
 }

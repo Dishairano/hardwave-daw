@@ -3,12 +3,13 @@
 //! Aural Exciter / Waves Vitamin baseline.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::oversample::{OversampleFactor, Oversampler};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -293,6 +294,14 @@ impl HostedPlugin for NativeExciter {
             .map(|v| OversampleFactor::from_normalised(v as f64))
             .unwrap_or(OversampleFactor::Off);
         Ok(())
+    }
+
+    /// The high-pass ahead of the saturation rings out, then the
+    /// oversampler's filters.
+    fn tail(&self) -> Tail {
+        let secs = tail::filter_ring_secs(self.frequency_hz as f64, 0.707, 1)
+            + tail::oversampler_secs(self.oversample);
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {
