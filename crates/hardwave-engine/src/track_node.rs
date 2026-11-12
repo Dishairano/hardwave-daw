@@ -596,6 +596,12 @@ pub struct TrackNode {
     wrote_silence: bool,
     /// Cached Arc references to audio buffers, refreshed when clips change.
     cached_buffers: Vec<Option<Arc<AudioBuffer>>>,
+    /// Buffers a reset replaced with the pool's newer ones. Kept here, not
+    /// dropped: the last reference to a sample going on the audio thread
+    /// frees its memory there. They go with the node, which is dropped on
+    /// the graph builder's thread. Room for one per clip, made off the
+    /// audio thread.
+    retired_buffers: Vec<Arc<AudioBuffer>>,
     /// The clips in this track's row of the launcher grid, and the
     /// buffers behind them. A launched slot loops on top of the song
     /// instead of the timeline clips, which is what a launcher is.
@@ -824,6 +830,7 @@ impl TrackNode {
             gain_ramp: GainRamp::default(),
             wrote_silence: false,
             cached_buffers: Vec::new(),
+            retired_buffers: Vec::new(),
             meter,
             rms_smooth: 0.0,
             chain: crate::insert_chain::InsertChain::new(),
@@ -890,6 +897,7 @@ impl TrackNode {
     /// when the project state changes.
     pub fn set_clips(&mut self, clips: Vec<ClipRegion>) {
         self.cached_buffers = clips.iter().map(|c| self.pool.get(&c.source_id)).collect();
+        self.retired_buffers = Vec::with_capacity(clips.len());
         self.clips = clips;
     }
 
@@ -1766,10 +1774,27 @@ impl AudioNode for TrackNode {
         // graph build picks up the new one). Waiting here put the audio
         // thread behind the loader on every stop or jump made while samples
         // were loading.
+        //
+        // Nor does it free a sample here: a buffer the pool let go of stays
+        // (the clip went silent after a stop when the pool's cache had moved
+        // it out), and one the pool replaced is retired, not dropped (see
+        // `retired_buffers`); with no room left to retire it, the clip keeps
+        // the old one until the next graph build.
         self.cached_buffers.resize(self.clips.len(), None);
         for (cached, clip) in self.cached_buffers.iter_mut().zip(&self.clips) {
-            if let Ok(buffer) = self.pool.try_get(&clip.source_id) {
-                *cached = buffer;
+            let Ok(Some(fresh)) = self.pool.try_get(&clip.source_id) else {
+                continue;
+            };
+            if cached.as_ref().is_some_and(|c| Arc::ptr_eq(c, &fresh)) {
+                continue;
+            }
+            match cached.take() {
+                None => *cached = Some(fresh),
+                Some(old) if self.retired_buffers.len() < self.retired_buffers.capacity() => {
+                    self.retired_buffers.push(old);
+                    *cached = Some(fresh);
+                }
+                Some(old) => *cached = Some(old),
             }
         }
     }
@@ -2658,5 +2683,63 @@ mod silence_tests {
         let mut node = node;
         node.reset();
         assert!(node.cached_buffers[0].is_some());
+    }
+
+    /// A reset frees no sample on the audio thread: one the pool replaced is
+    /// kept aside for the node's own drop, off the audio thread, and one
+    /// the pool let go of keeps playing instead of going silent.
+    #[test]
+    fn a_reset_never_frees_a_sample() {
+        let pool = AudioPool::new();
+        let buffer = |v: f32| crate::audio_pool::AudioBuffer {
+            channels: vec![vec![v; 480], vec![v; 480]],
+            sample_rate: 48_000,
+            num_frames: 480,
+        };
+        pool.insert("s".to_string(), buffer(0.5));
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool.clone(), meter);
+        node.set_clips(vec![ClipRegion {
+            source_id: "s".into(),
+            timeline_start: 0,
+            timeline_end: 480,
+            source_offset: 0,
+            gain: 1.0,
+            muted: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            reversed: false,
+            source_step: 1.0,
+            warp: Vec::new(),
+            treat: ClipTreat::default(),
+        }]);
+        let first = Arc::downgrade(node.cached_buffers[0].as_ref().unwrap());
+
+        // Replaced in the pool: the node holds the only reference left.
+        pool.insert("s".to_string(), buffer(0.25));
+        node.reset();
+        assert_eq!(
+            node.cached_buffers[0].as_ref().unwrap().channels[0][0],
+            0.25
+        );
+        assert!(
+            first.upgrade().is_some(),
+            "the old sample is not freed in reset"
+        );
+        assert_eq!(node.retired_buffers.len(), 1);
+
+        // Let go of by the pool: the clip keeps it.
+        pool.remove("s");
+        node.reset();
+        assert_eq!(
+            node.cached_buffers[0].as_ref().unwrap().channels[0][0],
+            0.25
+        );
+
+        // Freed with the node, on whichever thread drops it.
+        drop(node);
+        assert!(first.upgrade().is_none());
     }
 }
