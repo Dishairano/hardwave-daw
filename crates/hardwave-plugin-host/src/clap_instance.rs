@@ -267,7 +267,15 @@ struct OutputSink {
     log: SharedEditLog,
     /// Sorted.
     read_only: Vec<u32>,
+    /// The parameter values the host handed the plug-in this block, sorted
+    /// by id: a value the plug-in reports that only repeats one of these is
+    /// an echo (automation playing back), not a knob move, and automation
+    /// write must not record it. Room for a whole block, made up front.
+    sent: Vec<(u32, f64)>,
 }
+
+/// How close a reported value has to be to the one sent to be an echo.
+const ECHO_TOLERANCE: f64 = 1e-6;
 
 /// CLAP_PARAM_IS_AUTOMATABLE.
 const CLAP_PARAM_IS_AUTOMATABLE: u32 = 1 << 5;
@@ -361,6 +369,7 @@ impl ClapPluginInstance {
         let out_sink = Box::new(OutputSink {
             log: Arc::clone(&gui_edit_log),
             read_only: Vec::new(),
+            sent: Vec::with_capacity(MAX_BLOCK_EVENTS),
         });
         let mut host = Box::new(build_static_host());
         host.host_data = &*host_ctx as *const ClapHostContext as *mut c_void;
@@ -469,8 +478,13 @@ impl ClapPluginInstance {
     fn take_param_events(&mut self) {
         let events = &mut self.event_queue.events;
         events.clear();
+        // What this block hands the plug-in, for telling an echo from a move
+        // in what it reports back (see `OutputSink`).
+        let sent = &mut self.out_sink.sent;
+        sent.clear();
         self.pending_params
             .drain(MAX_BLOCK_EVENTS, |param_id, value| {
+                sent.push((param_id, value));
                 events.push(EncodedEvent::ParamValue(ClapEventParamValue {
                     header: ClapEventHeader {
                         size: std::mem::size_of::<ClapEventParamValue>() as u32,
@@ -488,6 +502,7 @@ impl ClapPluginInstance {
                     value,
                 }));
             });
+        sent.sort_unstable_by_key(|e| e.0);
     }
 
     fn params_ext(&self) -> Option<*const ClapPluginParams> {
@@ -1365,7 +1380,11 @@ unsafe extern "C" fn output_sink_push(
     let header = &*event;
     if header.space_id == CLAP_CORE_EVENT_SPACE_ID && header.event_type == CLAP_EVENT_PARAM_VALUE {
         let pv = &*(event as *const ClapEventParamValue);
-        if sink.read_only.binary_search(&pv.param_id).is_err() {
+        let echo = sink
+            .sent
+            .binary_search_by_key(&pv.param_id, |e| e.0)
+            .is_ok_and(|i| (sink.sent[i].1 - pv.value).abs() < ECHO_TOLERANCE);
+        if !echo && sink.read_only.binary_search(&pv.param_id).is_err() {
             sink.log.push(pv.param_id, pv.value);
         }
     }
@@ -2068,6 +2087,7 @@ mod flush_tests {
             out_sink: Box::new(OutputSink {
                 log: Arc::clone(&gui_edit_log),
                 read_only: Vec::new(),
+                sent: Vec::with_capacity(MAX_BLOCK_EVENTS),
             }),
             cached_params: Vec::new(),
             latency: 0,
@@ -2252,23 +2272,23 @@ mod flush_tests {
         drop(instance);
     }
 
-    /// CLAP_PARAM_IS_AUTOMATABLE is bit 5. Bit 0, read before, is
-    /// CLAP_PARAM_IS_STEPPED.
+    /// The plug-in repeating, from its audio side, the value the host sent
+    /// it this block (automation playing back) is not a knob move:
+    /// automation write would record it as one.
     #[test]
-    fn a_clap_parameter_is_automatable_by_its_own_flag() {
+    fn an_echo_of_what_the_host_sent_is_not_recorded() {
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
-        let read = |instance: &mut ClapPluginInstance, flags: u32| {
-            FLAGS.store(flags, Ordering::SeqCst);
-            instance.refresh_params();
-            instance.cached_params[0].automatable
-        };
-        assert!(read(&mut instance, 1 << 5));
-        assert!(!read(&mut instance, 1), "stepped alone is not automatable");
-        assert!(read(&mut instance, (1 << 5) | 1));
-        assert!(instance.out_sink.read_only.is_empty());
-        read(&mut instance, 1 << 3);
-        assert_eq!(instance.out_sink.read_only, vec![7], "read-only is listed");
+        let input = vec![0.25f32; 16];
+        let mut outputs = vec![vec![0.0f32; 16]; 2];
+        // The fake reports parameter 42 at 0.66 every block.
+        instance.set_parameter_value(42, 0.66);
+        instance.process(&[&input, &input], &mut outputs, &[], &mut Vec::new(), 16);
+        assert!(logged(&instance).is_empty(), "an echo");
+        instance.set_parameter_value(42, 0.5);
+        instance.process(&[&input, &input], &mut outputs, &[], &mut Vec::new(), 16);
+        assert_eq!(logged(&instance), vec![(42, 0.66)], "a move of its own");
+        instance.event_queue.events.clear();
         drop(instance);
     }
 
@@ -2287,6 +2307,26 @@ mod flush_tests {
         assert!(instance.has_pending_changes());
         instance.flush_parameters();
         assert!(!instance.has_pending_changes());
+        drop(instance);
+    }
+
+    /// CLAP_PARAM_IS_AUTOMATABLE is bit 5. Bit 0, read before, is
+    /// CLAP_PARAM_IS_STEPPED.
+    #[test]
+    fn a_clap_parameter_is_automatable_by_its_own_flag() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let read = |instance: &mut ClapPluginInstance, flags: u32| {
+            FLAGS.store(flags, Ordering::SeqCst);
+            instance.refresh_params();
+            instance.cached_params[0].automatable
+        };
+        assert!(read(&mut instance, 1 << 5));
+        assert!(!read(&mut instance, 1), "stepped alone is not automatable");
+        assert!(read(&mut instance, (1 << 5) | 1));
+        assert!(instance.out_sink.read_only.is_empty());
+        read(&mut instance, 1 << 3);
+        assert_eq!(instance.out_sink.read_only, vec![7], "read-only is listed");
         drop(instance);
     }
 }

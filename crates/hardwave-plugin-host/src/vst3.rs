@@ -719,6 +719,10 @@ impl Vst3Inner {
     /// Hand the app the parameter changes the processor reported in the
     /// block just run, the automatable ones, as knob moves for automation
     /// recording and the window. Lock-free and allocation-free.
+    ///
+    /// A value that only repeats what the host sent the same parameter in
+    /// this block is left out: an echo of automation playing back is not a
+    /// knob move, and automation write would record it as one.
     fn report_output_changes(&self) {
         let count = self.out_changes.count();
         for i in 0..count {
@@ -726,9 +730,15 @@ impl Vst3Inner {
             let Some(&(_, value)) = data.points.last() else {
                 continue;
             };
-            if self.automatable_ids.binary_search(&data.id).is_ok() {
-                self.gui_edit_log.push(data.id, value);
+            if self.automatable_ids.binary_search(&data.id).is_err()
+                || self
+                    .in_changes
+                    .sent(data.id)
+                    .is_some_and(|sent| (sent - value).abs() < ECHO_TOLERANCE)
+            {
+                continue;
             }
+            self.gui_edit_log.push(data.id, value);
         }
     }
 }
@@ -1801,6 +1811,10 @@ impl IEventListTrait for HostEventList {
 /// Most events and parameter queues one block carries; preallocated so
 /// processing never allocates.
 const MAX_EVENTS: usize = 512;
+/// How close a value a plug-in reports has to be to the one the host sent
+/// it to count as an echo rather than a move (plug-ins round normalized
+/// values through their own steps).
+const ECHO_TOLERANCE: f64 = 1e-6;
 const MAX_CHANNELS: usize = 8;
 const MAX_QUEUES: usize = 128;
 const MAX_POINTS: usize = 64;
@@ -2145,6 +2159,15 @@ impl HostParameterChanges {
         Some(i)
     }
 
+    /// The last value this block hands a parameter, if it hands it one.
+    fn sent(&self, id: ParamID) -> Option<f64> {
+        let used = *self.used.lock();
+        self.queues[..used].iter().find_map(|q| {
+            let d = q.data.lock();
+            (d.id == id).then(|| d.points.last().map(|p| p.1)).flatten()
+        })
+    }
+
     /// Add a value for a parameter at a sample offset in this block.
     fn add(&self, id: ParamID, offset: i32, value: f64) {
         if let Some(i) = self.queue_for(id) {
@@ -2363,6 +2386,21 @@ mod tests {
             .gui_edit_log
             .drain(usize::MAX, |id, v| got.push((id, v)));
         assert_eq!(got, vec![(1, 0.4)]);
+
+        // The processor repeating what automation sent it this block is not
+        // a knob move; a different value is.
+        p.inner.out_changes.clear();
+        p.inner.in_changes.add(1, 0, 0.6);
+        p.inner.out_changes.add(1, 0, 0.6);
+        p.inner.report_output_changes();
+        assert!(
+            !p.inner.gui_edit_log.has_pending(),
+            "an echo is not recorded"
+        );
+        p.inner.out_changes.clear();
+        p.inner.out_changes.add(1, 0, 0.65);
+        p.inner.report_output_changes();
+        assert!(p.inner.gui_edit_log.has_pending());
     }
 
     /// Points stay in time order per parameter, and a block starts empty.
