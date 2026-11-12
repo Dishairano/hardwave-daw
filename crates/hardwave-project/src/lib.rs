@@ -35,6 +35,7 @@ pub mod tempo;
 pub mod tempo_follow;
 pub mod track;
 pub mod vca;
+pub mod win_path;
 
 pub use arrangement::{Arrangement, TrackTimeline};
 pub use automation::{AutomationLane, AutomationPoint, AutomationTarget};

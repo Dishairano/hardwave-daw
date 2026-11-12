@@ -399,6 +399,7 @@ impl Project {
             self.lay_out_as_before();
         }
         self.settle_rows();
+        self.plain_sample_files();
         self.version = FORMAT_VERSION;
     }
 
@@ -480,6 +481,34 @@ impl Project {
             "Could not find a free name for a new version in {}",
             dir.display()
         ))
+    }
+
+    /// Name every sample's file without Windows' verbatim prefix
+    /// (`\\?\C:\...` reads `C:\...`) where it means the same file. Songs
+    /// saved before the prefix was dropped where paths are made carried it
+    /// for every sample from the DAW's own drums folder. Only
+    /// `source_file` changes: `source_path` is the clip's id in the audio
+    /// pool, not a place on disk.
+    pub fn plain_sample_files(&mut self) {
+        use crate::clip::ClipContent;
+        let plain = |content: &mut ClipContent| {
+            if let ClipContent::Audio(a) = content {
+                if let Some(p) = crate::win_path::without_verbatim_prefix(&a.source_file) {
+                    a.source_file = p;
+                }
+            }
+        };
+        for track in &mut self.tracks {
+            track.clips.iter_mut().for_each(|c| plain(&mut c.content));
+        }
+        for arrangement in &mut self.arrangements {
+            for timeline in arrangement.timelines.values_mut() {
+                timeline
+                    .clips
+                    .iter_mut()
+                    .for_each(|c| plain(&mut c.content));
+            }
+        }
     }
 
     /// Turn every sample named relative to the song's folder into a full
@@ -1027,6 +1056,27 @@ impl Project {
         }
     }
 
+    /// What a playing plug-in answered when asked for its settings, in
+    /// place of the saved ones. An empty answer (a VST3 or CLAP that failed
+    /// to hand its state over, a sampler that lost its sample) leaves saved
+    /// settings alone: written over them, the next load or render had
+    /// nothing to give the plug-in, and an export of a sampler with a saved
+    /// sample came out silent.
+    pub fn take_live_plugin_state(
+        &mut self,
+        plugin_instance_id: impl Into<String>,
+        chunk: Vec<u8>,
+    ) {
+        let id = plugin_instance_id.into();
+        let saved = self
+            .plugin_state(&id)
+            .is_some_and(|entry| !entry.chunk.is_empty());
+        if chunk.is_empty() && saved {
+            return;
+        }
+        self.set_plugin_state(id, "unknown", chunk);
+    }
+
     pub fn plugin_state(&self, plugin_instance_id: &str) -> Option<&PluginStateEntry> {
         self.plugin_states
             .iter()
@@ -1388,6 +1438,54 @@ mod tests {
     }
 
     #[test]
+    fn a_song_saved_with_verbatim_windows_paths_opens_with_plain_ones() {
+        use crate::arrangement::{Arrangement, TrackTimeline};
+        let mut p = Project::default();
+        let track = p.track_mut("insert-001").unwrap();
+        track.clips.push(sample_clip(
+            "9f2c",
+            r"\\?\C:\Program Files\Hardwave DAW\drums\Clap 1.wav",
+        ));
+        track
+            .clips
+            .push(sample_clip("41ab", r"\\?\UNC\nas\packs\snare.wav"));
+        track.clips.push(sample_clip("77cd", r"D:\Packs\hat.wav"));
+        let mut other = TrackTimeline::default();
+        other
+            .clips
+            .push(sample_clip("5e01", r"\\?\E:\Vocals\take.wav"));
+        p.arrangements.push(Arrangement {
+            id: "arr-2".into(),
+            name: "Radio edit".into(),
+            timelines: [("insert-001".to_string(), other)].into_iter().collect(),
+            rows: Vec::new(),
+        });
+
+        let opened = Project::from_bytes(&p.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            files_of(&opened.track("insert-001").unwrap().clips),
+            vec![
+                (
+                    "9f2c".into(),
+                    r"C:\Program Files\Hardwave DAW\drums\Clap 1.wav".into()
+                ),
+                ("41ab".into(), r"\\nas\packs\snare.wav".into()),
+                ("77cd".into(), r"D:\Packs\hat.wav".into()),
+            ],
+            "the pool ids stay as they were"
+        );
+        let stored = &opened
+            .arrangements
+            .iter()
+            .find(|a| a.id == "arr-2")
+            .unwrap();
+        assert_eq!(
+            files_of(&stored.timelines["insert-001"].clips),
+            vec![("5e01".into(), r"E:\Vocals\take.wav".into())]
+        );
+    }
+
+    #[test]
     fn a_collected_songs_samples_become_full_paths_and_keep_their_pool_ids() {
         use crate::arrangement::{Arrangement, TrackTimeline};
         let song_dir = std::env::temp_dir().join("Anthem");
@@ -1605,6 +1703,19 @@ mod tests {
             p.save(&path).is_err(),
             "save into missing dir must error, not panic"
         );
+    }
+
+    #[test]
+    fn an_empty_live_state_keeps_the_saved_one() {
+        let mut p = Project::default();
+        p.set_plugin_state("smp", "native-sampler", vec![1, 2, 3]);
+        p.take_live_plugin_state("smp", Vec::new());
+        assert_eq!(p.plugin_state("smp").unwrap().chunk, vec![1, 2, 3]);
+        p.take_live_plugin_state("smp", vec![4, 5]);
+        assert_eq!(p.plugin_state("smp").unwrap().chunk, vec![4, 5]);
+        // A slot with nothing saved takes what it answered, even nothing.
+        p.take_live_plugin_state("new", Vec::new());
+        assert!(p.plugin_state("new").is_some());
     }
 
     #[test]

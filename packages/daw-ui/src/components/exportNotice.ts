@@ -27,3 +27,16 @@ export function describeExport(result: ExportOutcome): { title: string; detail: 
   const warning = over ? ' The true peak is over 0 dB: a limiter ceiling of -1 dB on the master keeps it clean on streaming services.' : ''
   return { title, detail: result.path + warning, over }
 }
+
+/**
+ * Where an export's answer goes. A render the person cancelled is not a
+ * failure: the dialog closes with nothing said. It went to the error box,
+ * which read "Export failed: Export cancelled".
+ */
+export async function settleExport<R extends { cancelled: boolean }>(
+  result: R,
+  on: { finished: (result: R) => void | Promise<void>; cancelled: () => void },
+): Promise<void> {
+  if (result.cancelled) on.cancelled()
+  else await on.finished(result)
+}

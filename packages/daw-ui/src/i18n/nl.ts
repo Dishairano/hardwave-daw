@@ -120,6 +120,7 @@ export const nl: Record<string, string> = {
   'Paste': 'Plakken',
   'Delete': 'Verwijderen',
   'Select all': 'Alles selecteren',
+  'Auto-crossfade overlaps': 'Overlappingen automatisch laten overvloeien',
 
   // Panels
   'Playlist': 'Playlist',

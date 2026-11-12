@@ -1249,6 +1249,8 @@ pub fn reorder_track(state: State<AppState>, track_id: String, new_index: usize)
     engine.rebuild_graph();
 }
 
+/// Rename a track. The playlist row made for it, still showing its old
+/// name, takes the new one too (`Project::rename_track`).
 #[tauri::command]
 pub fn set_track_name(state: State<AppState>, track_id: String, name: String) {
     let trimmed = name.trim();
@@ -1257,12 +1259,7 @@ pub fn set_track_name(state: State<AppState>, track_id: String, name: String) {
     }
     state.engine.lock().snapshot_before_mutation();
     let engine = state.engine.lock();
-    {
-        let mut project = engine.project.lock();
-        if let Some(track) = project.track_mut(&track_id) {
-            track.name = trimmed.to_string();
-        }
-    }
+    engine.project.lock().rename_track(&track_id, trimmed);
 }
 
 #[tauri::command]

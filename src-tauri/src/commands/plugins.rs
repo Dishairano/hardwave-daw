@@ -2336,6 +2336,35 @@ fn live_slot(
     sidechain_active: bool,
 ) -> LiveSlot {
     let key = (track_id.to_string(), slot_id.clone());
+    // The window and the knob queues belong to this instance now. A song
+    // opened again in the same session has the same slot ids as before:
+    // the old instance's window stayed listed for them, and asked for its
+    // window, the gone instance had none ("has no window this host can
+    // show"), while knobs turned in it went to the gone instance too.
+    match plugin.editor() {
+        Some(editor) => {
+            state.slot_editors.lock().insert(key.clone(), editor);
+        }
+        None => {
+            state.slot_editors.lock().remove(&key);
+        }
+    }
+    match plugin.pending_params() {
+        Some(queue) => {
+            state.slot_param_queues.lock().insert(key.clone(), queue);
+        }
+        None => {
+            state.slot_param_queues.lock().remove(&key);
+        }
+    }
+    match plugin.gui_edit_log() {
+        Some(log) => {
+            state.slot_gui_edit_logs.lock().insert(key.clone(), log);
+        }
+        None => {
+            state.slot_gui_edit_logs.lock().remove(&key);
+        }
+    }
     let gain_reduction_db = LiveSlot::new_gain_reduction();
     state
         .slot_gain_reduction
@@ -2528,5 +2557,73 @@ mod sampler_window_tests {
         let empty = sampler::decode_sample_state(&sampler::encode_sample_state(48_000, 60, vec![]))
             .unwrap();
         assert!(sampler_sample_info(&empty, 8).peaks.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod reopened_song_tests {
+    use super::*;
+    use hardwave_plugin_host::types::PluginEditor;
+
+    /// The window of an instance that is gone: it has nothing to show.
+    struct GoneEditor;
+    impl PluginEditor for GoneEditor {
+        fn open(&self, _parent: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn size(&self) -> Option<(u32, u32)> {
+            None
+        }
+        fn close(&self) {}
+    }
+
+    /// A song opened again in the same session has the same slot ids. The
+    /// plug-ins loaded for it take over their slots' window and knob
+    /// queues; the old instances' ones are not kept for them, or opening
+    /// the window asks a plug-in that is gone ("has no window this host
+    /// can show").
+    #[test]
+    fn a_reopened_song_s_plug_ins_do_not_keep_the_old_instances_window() {
+        let engine = hardwave_engine::DawEngine::new();
+        engine
+            .plugin_scanner
+            .lock()
+            .register_natives(hardwave_native_plugins::native_plugin_descriptors());
+        let master = {
+            let mut project = engine.project.lock();
+            let master = project
+                .tracks
+                .iter_mut()
+                .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
+                .unwrap();
+            master.inserts.push(hardwave_project::track::PluginSlot {
+                id: "shape".into(),
+                plugin_id: hardwave_native_plugins::gain::NativeGain::ID.into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+            master.id.clone()
+        };
+        let state = AppState::for_test(engine);
+        let key = (master, "shape".to_string());
+        // What the song's first opening left behind.
+        state
+            .slot_editors
+            .lock()
+            .insert(key.clone(), std::sync::Arc::new(GoneEditor));
+        state
+            .slot_param_queues
+            .lock()
+            .insert(key.clone(), Default::default());
+
+        hydrate_chains_from_project(&state).unwrap();
+
+        assert!(
+            !state.slot_editors.lock().contains_key(&key),
+            "the gone instance's window must not stay listed for the slot"
+        );
+        assert!(!state.slot_param_queues.lock().contains_key(&key));
     }
 }

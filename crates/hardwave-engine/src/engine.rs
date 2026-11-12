@@ -1855,7 +1855,7 @@ impl DawEngine {
         {
             let mut project = self.project.lock();
             for ((_, slot_id), bytes) in states {
-                project.set_plugin_state(slot_id, "unknown", bytes);
+                project.take_live_plugin_state(slot_id, bytes);
             }
         } else {
             log::warn!(
@@ -3668,7 +3668,7 @@ impl DawEngine {
         let mut project_snapshot = self.project.lock().clone();
         if let Some(states) = live_plugin_states {
             for ((_track_id, slot_id), bytes) in states {
-                project_snapshot.set_plugin_state(slot_id, "unknown", bytes);
+                project_snapshot.take_live_plugin_state(slot_id, bytes);
             }
         }
         prepare(&mut project_snapshot);
@@ -4608,6 +4608,22 @@ impl EngineCallback {
             }
             return;
         };
+        // A plug-in still waiting for its track's node goes first: what is
+        // sent to that track after it (a sampler's sample, a knob) waits
+        // behind it. The node can be in while the next graph is still being
+        // made, and a sample sent to it then found no sampler, was lost, and
+        // the sampler joined without it and played nothing.
+        let behind_parked = !replay
+            && self
+                .deferred_insert_commands
+                .iter()
+                .any(|parked| parked.target_track_id() == Some(target));
+        if behind_parked
+            && self.deferred_insert_commands.len() < self.deferred_insert_commands.capacity()
+        {
+            self.deferred_insert_commands.push(cmd);
+            return;
+        }
         // Borrow the target id just long enough to look it up; after
         // `.copied()` the NodeId is owned and the borrow on `cmd`
         // ends, freeing it to move into apply_insert_command below.
@@ -7943,6 +7959,71 @@ mod rt_safety_tests {
         let node = cb.graph.node_mut(node_id).unwrap();
         let chain = node.take_chain().expect("a chain");
         assert_eq!(chain.slots.len(), 1, "the plug-in is on it");
+        assert!(cb.deferred_insert_commands.is_empty());
+    }
+
+    /// A sampler put on a new track waits for the track's node. Its
+    /// sample, sent right after it, waits behind it, also when the node
+    /// arrives while the next graph is still being made: before, the
+    /// sample went to the node at once, found no sampler there yet and was
+    /// lost, and the sampler then joined without it and stayed silent.
+    #[test]
+    fn a_state_sent_after_a_waiting_plug_in_reaches_it() {
+        use crate::insert_chain::{tests::make_gain_slot, InsertCommand};
+        let project_arc = Arc::new(Mutex::new(Project::default()));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+
+        // A new instrument track, and a plug-in on it before its node is
+        // built: the plug-in waits.
+        let id = project_arc.lock().add_midi_track("Smp".into());
+        let (slot, _) = make_gain_slot("smp", 1.0, true);
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: id.clone(),
+                slot,
+            })
+            .ok()
+            .unwrap();
+        // The song is busy, so no graph is made in this block.
+        {
+            let _busy = project_arc.lock();
+            cb.process(&mut out, 256, 2);
+        }
+        assert_eq!(cb.deferred_insert_commands.len(), 1, "the plug-in waits");
+
+        // The graph with the track's node goes in, and another edit has
+        // already asked for the next one.
+        cb.rebuild_graph();
+        assert!(cb.track_id_to_node.contains_key(&id));
+        cb.needs_rebuild = true;
+
+        // The sample arrives while that next graph is not in yet.
+        cmd_tx
+            .try_send(InsertCommand::SetState {
+                track_id: id.clone(),
+                slot_id: "smp".into(),
+                bytes: 0.25f32.to_le_bytes().to_vec(),
+            })
+            .ok()
+            .unwrap();
+        {
+            let _busy = project_arc.lock();
+            cb.process(&mut out, 256, 2);
+        }
+        cb.process(&mut out, 256, 2);
+        cb.process(&mut out, 256, 2);
+
+        let node_id = cb.track_id_to_node[&id];
+        let node = cb.graph.node_mut(node_id).unwrap();
+        let chain = node.take_chain().expect("the plug-in is on the track");
+        assert_eq!(chain.slots.len(), 1);
+        assert_eq!(
+            chain.slots[0].plugin.get_parameter_value(0),
+            0.25,
+            "the state sent after the plug-in must reach it"
+        );
         assert!(cb.deferred_insert_commands.is_empty());
     }
 

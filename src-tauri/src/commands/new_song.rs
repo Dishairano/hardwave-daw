@@ -67,10 +67,28 @@ pub(crate) const NEW_SONG_CHANNELS: [NewSongChannel; 4] = [
 ];
 
 /// The drums folder installed with the app.
+///
+/// On Windows the app's folder comes back in the verbatim form
+/// (`\\?\C:\...`), which the browser showed and every sample taken from
+/// the folder carried into the song. It is given in the plain form.
 pub(crate) fn drum_folder(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
+    let folder = app
+        .path()
         .resolve(DRUM_FOLDER, tauri::path::BaseDirectory::Resource)
-        .map_err(|e| format!("The drums folder was not found: {e}"))
+        .map_err(|e| format!("The drums folder was not found: {e}"))?;
+    Ok(plain_folder(folder))
+}
+
+/// A folder without Windows' verbatim prefix, where it means the same
+/// folder without it.
+fn plain_folder(folder: PathBuf) -> PathBuf {
+    match folder
+        .to_str()
+        .and_then(hardwave_project::win_path::without_verbatim_prefix)
+    {
+        Some(plain) => PathBuf::from(plain),
+        None => folder,
+    }
 }
 
 /// Where the drums installed with the DAW are, for the browser's
@@ -181,6 +199,18 @@ pub fn add_new_song_channels(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The drums folder, and so every sample taken from it, is named
+    /// without Windows' verbatim prefix.
+    #[test]
+    fn the_drums_folder_is_named_as_people_read_it() {
+        assert_eq!(
+            plain_folder(PathBuf::from(r"\\?\C:\Program Files\Hardwave DAW\drums")),
+            PathBuf::from(r"C:\Program Files\Hardwave DAW\drums")
+        );
+        let elsewhere = shipped_drums();
+        assert_eq!(plain_folder(elsewhere.clone()), elsewhere);
+    }
 
     /// The drums as they ship: the folder tauri.conf.json bundles.
     fn shipped_drums() -> PathBuf {

@@ -4,6 +4,7 @@ import React, { Suspense, useEffect, useState, useRef, useCallback, useMemo } fr
 import { SplashScreen } from './components/SplashScreen'
 import { HwApp } from './components/HwApp'
 import type { MenuDef, MenuItem } from './components/HwTopMenu'
+import { autoCrossfadeMenuItem } from './components/arrangement/autoCrossfadeMenu'
 import { usePatternStore } from './stores/patternStore'
 import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from './stores/uiPreferencesStore'
 import { Roadmap } from './components/roadmap/Roadmap'
@@ -18,6 +19,7 @@ import { AboutDialog } from './components/AboutDialog'
 import { FloatingWindow, DetachButton } from './components/FloatingWindow'
 import { SaveChangesDialog, type SaveChangesChoice } from './components/SaveChangesDialog'
 import { TemplateDialog, type StarterId, type TemplateId } from './components/TemplateDialog'
+import { createStarterSong } from './lib/starterSong'
 import { ExportDialog } from './components/ExportDialog'
 import { useUserTemplateStore } from './stores/userTemplateStore'
 import { TrackTemplateManager } from './components/TrackTemplateManager'
@@ -1498,9 +1500,7 @@ export function App() {
       // A song that plays straight away: the engine builds the tracks
       // and clips, the window puts the sections on the ruler.
       const genreId = id.slice('starter:'.length)
-      const song = await invoke<{ genre: string; bpm: number; sections: { name: string; startTick: number; bars: number }[] }>(
-        'create_starter_song', { genreId },
-      )
+      const song = await createStarterSong(genreId)
       // The engine already set the tempo; setting it again here was a
       // second undo step that made the first Ctrl+Z appear to do nothing.
       const markers = useMarkerStore.getState()
@@ -2383,6 +2383,7 @@ export function App() {
           { label: 'Duplicate', shortcut: 'Ctrl+D', action: duplicateSelection },
           { separator: true, label: '' },
           { label: 'Select all', shortcut: 'Ctrl+A', action: () => useTrackStore.getState().selectAllClips() },
+          autoCrossfadeMenuItem(),
           { separator: true, label: '' },
           { label: 'Play selection', shortcut: 'Shift+Space', action: playSelection },
           { separator: true, label: '' },
