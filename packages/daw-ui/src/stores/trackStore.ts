@@ -6,6 +6,7 @@ import { rippleShifts } from './ripple'
 import { useHistoryStore } from './historyStore'
 import { usePatternStore } from './patternStore'
 import { usePlaylistRowsStore } from './playlistRowsStore'
+import { overlapFades, type FadeEdit } from './autoCrossfade'
 
 /**
  * True while a gesture is being grouped into one undo step.
@@ -874,6 +875,8 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const prev = get().tracks.find(t => t.id === id)?.name ?? ''
     await mut('set_track_name', { trackId: id, name: trimmed }, `Rename "${prev}" to "${trimmed}"`)
     await get().refreshTrack(id)
+    // The playlist row made for the track follows the new name.
+    void usePlaylistRowsStore.getState().fetch()
   },
 
   setTrackColor: async (id, color) => {
@@ -1448,35 +1451,30 @@ export const useTrackStore = create<TrackState>((set, get) => ({
   autoCrossfadeOverlaps: async (trackId) => {
     const { tracks } = get()
     const targets = trackId ? tracks.filter(t => t.id === trackId) : tracks
-    let pairs = 0
-    let firstLabel = true
+    const edits: (FadeEdit & { trackId: string })[] = []
+    let overlaps = 0
     for (const track of targets) {
       if (track.kind === 'Master') continue
-      const clips = [...track.clips].sort((a, b) => a.position_ticks - b.position_ticks)
-      for (let j = 1; j < clips.length; j++) {
-        const prev = clips[j - 1]
-        const cur = clips[j]
-        const prevEnd = prev.position_ticks + prev.length_ticks
-        if (cur.position_ticks < prevEnd) {
-          const overlap = prevEnd - cur.position_ticks
-          const fadeOut = Math.min(overlap, prev.length_ticks)
-          const fadeIn = Math.min(overlap, cur.length_ticks)
-          await mut(
-            'set_clip_fades',
-            { trackId: track.id, clipId: prev.id, fadeInTicks: prev.fadeInTicks, fadeOutTicks: fadeOut },
-            firstLabel ? 'Auto-crossfade overlaps' : undefined,
-          )
-          firstLabel = false
-          await mut(
-            'set_clip_fades',
-            { trackId: track.id, clipId: cur.id, fadeInTicks: fadeIn, fadeOutTicks: cur.fadeOutTicks },
-          )
-          pairs++
-        }
-      }
+      const found = overlapFades(track.clips)
+      overlaps += found.overlaps
+      for (const e of found.edits) edits.push({ trackId: track.id, ...e })
     }
-    if (pairs > 0) await get().fetchTracks()
-    return pairs
+    if (edits.length === 0) return 0
+    // One undo step for all of them. Each fade used to be a step of its
+    // own under one history entry, and a clip between two overlaps lost
+    // its fade-in when its fade-out was set.
+    await get().beginHistoryGroup()
+    try {
+      for (const e of edits) {
+        await mut('set_clip_fades', {
+          trackId: e.trackId, clipId: e.clipId, fadeInTicks: e.fadeInTicks, fadeOutTicks: e.fadeOutTicks,
+        })
+      }
+    } finally {
+      await get().endHistoryGroup('Auto-crossfade overlaps')
+    }
+    await get().fetchTracks()
+    return overlaps
   },
 
   undo: async () => {

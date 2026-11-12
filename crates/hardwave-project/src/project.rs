@@ -399,6 +399,7 @@ impl Project {
             self.lay_out_as_before();
         }
         self.settle_rows();
+        self.plain_sample_files();
         self.version = FORMAT_VERSION;
     }
 
@@ -480,6 +481,34 @@ impl Project {
             "Could not find a free name for a new version in {}",
             dir.display()
         ))
+    }
+
+    /// Name every sample's file without Windows' verbatim prefix
+    /// (`\\?\C:\...` reads `C:\...`) where it means the same file. Songs
+    /// saved before the prefix was dropped where paths are made carried it
+    /// for every sample from the DAW's own drums folder. Only
+    /// `source_file` changes: `source_path` is the clip's id in the audio
+    /// pool, not a place on disk.
+    pub fn plain_sample_files(&mut self) {
+        use crate::clip::ClipContent;
+        let plain = |content: &mut ClipContent| {
+            if let ClipContent::Audio(a) = content {
+                if let Some(p) = crate::win_path::without_verbatim_prefix(&a.source_file) {
+                    a.source_file = p;
+                }
+            }
+        };
+        for track in &mut self.tracks {
+            track.clips.iter_mut().for_each(|c| plain(&mut c.content));
+        }
+        for arrangement in &mut self.arrangements {
+            for timeline in arrangement.timelines.values_mut() {
+                timeline
+                    .clips
+                    .iter_mut()
+                    .for_each(|c| plain(&mut c.content));
+            }
+        }
     }
 
     /// Turn every sample named relative to the song's folder into a full
@@ -1385,6 +1414,54 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_song_saved_with_verbatim_windows_paths_opens_with_plain_ones() {
+        use crate::arrangement::{Arrangement, TrackTimeline};
+        let mut p = Project::default();
+        let track = p.track_mut("insert-001").unwrap();
+        track.clips.push(sample_clip(
+            "9f2c",
+            r"\\?\C:\Program Files\Hardwave DAW\drums\Clap 1.wav",
+        ));
+        track
+            .clips
+            .push(sample_clip("41ab", r"\\?\UNC\nas\packs\snare.wav"));
+        track.clips.push(sample_clip("77cd", r"D:\Packs\hat.wav"));
+        let mut other = TrackTimeline::default();
+        other
+            .clips
+            .push(sample_clip("5e01", r"\\?\E:\Vocals\take.wav"));
+        p.arrangements.push(Arrangement {
+            id: "arr-2".into(),
+            name: "Radio edit".into(),
+            timelines: [("insert-001".to_string(), other)].into_iter().collect(),
+            rows: Vec::new(),
+        });
+
+        let opened = Project::from_bytes(&p.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            files_of(&opened.track("insert-001").unwrap().clips),
+            vec![
+                (
+                    "9f2c".into(),
+                    r"C:\Program Files\Hardwave DAW\drums\Clap 1.wav".into()
+                ),
+                ("41ab".into(), r"\\nas\packs\snare.wav".into()),
+                ("77cd".into(), r"D:\Packs\hat.wav".into()),
+            ],
+            "the pool ids stay as they were"
+        );
+        let stored = &opened
+            .arrangements
+            .iter()
+            .find(|a| a.id == "arr-2")
+            .unwrap();
+        assert_eq!(
+            files_of(&stored.timelines["insert-001"].clips),
+            vec![("5e01".into(), r"E:\Vocals\take.wav".into())]
+        );
     }
 
     #[test]
