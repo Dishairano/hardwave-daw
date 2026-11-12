@@ -34,11 +34,23 @@ pub struct PreviewRequest {
     /// thread takes for writing; the audio thread clones the string once when
     /// a start is pending, not per block.
     source_id: Arc<parking_lot::Mutex<String>>,
+    /// Buffers the audio thread is done with, handed here to be freed on
+    /// the UI thread (see `PreviewPlayer::retire`). The audio side's end is
+    /// taken by the player that is built with this request.
+    retired_tx: Arc<parking_lot::Mutex<Option<rtrb::Producer<Arc<AudioBuffer>>>>>,
+    retired_rx: Arc<parking_lot::Mutex<rtrb::Consumer<Arc<AudioBuffer>>>>,
 }
+
+/// Finished auditions waiting to be freed: far more than the clicks a
+/// producer makes between two of them.
+const RETIRED_ROOM: usize = 16;
 
 impl PreviewRequest {
     pub fn new() -> Self {
+        let (tx, rx) = rtrb::RingBuffer::new(RETIRED_ROOM);
         Self {
+            retired_tx: Arc::new(parking_lot::Mutex::new(Some(tx))),
+            retired_rx: Arc::new(parking_lot::Mutex::new(rx)),
             speed: Arc::new(std::sync::atomic::AtomicU64::new(1.0f64.to_bits())),
             start: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),
@@ -59,6 +71,7 @@ impl PreviewRequest {
     /// pitch: this is varispeed, the way a turntable is, not time
     /// stretching. It is what a preview needs, and it is honest about it.
     pub fn play_at_speed(&self, source_id: &str, speed: f64) {
+        self.free_finished();
         *self.source_id.lock() = source_id.to_string();
         self.speed
             .store(speed.clamp(0.25, 4.0).to_bits(), Ordering::Relaxed);
@@ -71,7 +84,17 @@ impl PreviewRequest {
     }
 
     pub fn stop_playing(&self) {
+        self.free_finished();
         self.stop.store(true, Ordering::Release);
+    }
+
+    /// Free the buffers of finished auditions here, on the UI thread: the
+    /// audio thread hands them over instead of dropping them, since the last
+    /// reference to a sample going there would free its memory there.
+    pub fn free_finished(&self) {
+        if let Some(mut rx) = self.retired_rx.try_lock() {
+            while rx.pop().is_ok() {}
+        }
     }
 
     pub fn set_volume(&self, linear: f32) {
@@ -94,6 +117,22 @@ impl Default for PreviewRequest {
 pub struct PreviewPlayer {
     request: PreviewRequest,
     playing: Option<Playing>,
+    /// Where finished auditions' buffers go (see `retire`). None for a
+    /// second player built with the same request (the offline renderer's),
+    /// which is not on a real-time thread.
+    retired: Option<rtrb::Producer<Arc<AudioBuffer>>>,
+    /// One that found the hand-over full, kept until there is room.
+    held: Option<Arc<AudioBuffer>>,
+}
+
+/// The hand-over goes back to the request, for the player the next audio
+/// start builds (every device or buffer change makes a new one).
+impl Drop for PreviewPlayer {
+    fn drop(&mut self) {
+        if let Some(tx) = self.retired.take() {
+            *self.request.retired_tx.lock() = Some(tx);
+        }
+    }
 }
 
 struct Playing {
@@ -106,9 +145,39 @@ struct Playing {
 
 impl PreviewPlayer {
     pub fn new(request: PreviewRequest) -> Self {
+        let retired = request.retired_tx.lock().take();
         Self {
             request,
             playing: None,
+            retired,
+            held: None,
+        }
+    }
+
+    /// Stop what plays, handing its buffer to the UI thread to free.
+    fn stop_now(&mut self) {
+        if let Some(done) = self.playing.take() {
+            self.retire(done.buffer);
+        }
+    }
+
+    /// Hand a buffer over to be freed off the audio thread. Never blocks and
+    /// never allocates; only if the hand-over is full twice over (the UI
+    /// thread has not started or stopped an audition for 17 of them) is one
+    /// dropped here.
+    fn retire(&mut self, buffer: Arc<AudioBuffer>) {
+        let Some(tx) = self.retired.as_mut() else {
+            return;
+        };
+        if let Some(held) = self.held.take() {
+            if let Err(rtrb::PushError::Full(held)) = tx.push(held) {
+                self.held = Some(held);
+            }
+        }
+        if let Err(rtrb::PushError::Full(buffer)) = tx.push(buffer) {
+            if self.held.is_none() {
+                self.held = Some(buffer);
+            }
         }
     }
 
@@ -129,7 +198,7 @@ impl PreviewPlayer {
         device_rate: f64,
     ) {
         if self.request.stop.swap(false, Ordering::Acquire) {
-            self.playing = None;
+            self.stop_now();
         }
         if self.request.start.swap(false, Ordering::Acquire) {
             // Never wait here, and make no copy of the id: when the window
@@ -146,6 +215,7 @@ impl PreviewPlayer {
                 self.request.start.store(true, Ordering::Release);
                 return self.mix_into(output, num_frames);
             };
+            self.stop_now();
             self.playing = found.map(|buffer| {
                 let source_rate = if buffer.sample_rate > 0 {
                     buffer.sample_rate as f64
@@ -175,7 +245,7 @@ impl PreviewPlayer {
         let volume = self.request.volume();
         let frames = state.buffer.num_frames;
         if frames == 0 || state.buffer.channels.is_empty() {
-            self.playing = None;
+            self.stop_now();
             return;
         }
 
@@ -185,7 +255,7 @@ impl PreviewPlayer {
                 // Ran off the end: stop rather than looping, because an
                 // audition that loops forever is a stuck sound the user has
                 // to hunt for.
-                self.playing = None;
+                self.stop_now();
                 return;
             }
             let left = state.buffer.channels[0][idx];
@@ -387,5 +457,43 @@ mod tests {
         let mut out = vec![0.0f32; 64 * 2];
         player.render(&mut out, 64, &pool, 48_000.0);
         assert!(peak(&out) > 0.0, "the start was kept and plays now");
+    }
+
+    /// A finished audition's sample is not freed on the audio thread, even
+    /// when the player held the last reference to it: it is handed to the
+    /// UI thread, which frees it on its next start or stop.
+    #[test]
+    fn a_finished_audition_is_freed_on_the_ui_thread() {
+        let pool = pool_with("s", 4_800, 48_000, 2);
+        let req = PreviewRequest::new();
+        let mut player = PreviewPlayer::new(req.clone());
+        req.play("s");
+        let mut out = vec![0.0f32; 64 * 2];
+        player.render(&mut out, 64, &pool, 48_000.0);
+        let buffer = Arc::downgrade(&pool.get("s").unwrap());
+        pool.remove("s");
+        assert!(
+            buffer.upgrade().is_some(),
+            "the player holds the last reference"
+        );
+
+        req.stop_playing();
+        player.render(&mut out, 64, &pool, 48_000.0);
+        assert!(!player.is_playing());
+        assert!(buffer.upgrade().is_some(), "not freed on the audio thread");
+
+        req.free_finished();
+        assert!(buffer.upgrade().is_none(), "freed on the UI thread");
+    }
+
+    /// The next audio start's player gets the hand-over back.
+    #[test]
+    fn a_new_player_for_the_same_request_can_hand_over_too() {
+        let req = PreviewRequest::new();
+        let first = PreviewPlayer::new(req.clone());
+        assert!(first.retired.is_some());
+        drop(first);
+        let second = PreviewPlayer::new(req.clone());
+        assert!(second.retired.is_some());
     }
 }
