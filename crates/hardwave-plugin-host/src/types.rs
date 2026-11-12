@@ -228,6 +228,14 @@ pub trait HostedPlugin: Send {
         ProcessHint::None
     }
 
+    /// Whether a change waits to reach the plug-in's audio side: a knob
+    /// moved in its own window, or a flush it asked for. A sleeping
+    /// plug-in (smart disable) is then called anyway, so the change is
+    /// heard and reported. Audio thread: cheap, lock-free.
+    fn has_pending_changes(&self) -> bool {
+        false
+    }
+
     /// Whether every input channel of the next block is exact silence, so
     /// a plug-in that can tell (VST3 silence flags, CLAP constant mask)
     /// may skip its own work on it. Set before `process`.

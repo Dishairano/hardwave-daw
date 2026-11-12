@@ -1456,6 +1456,10 @@ impl HostedPlugin for Vst3PluginInstance {
         Some(Arc::clone(&self.inner.pending_params))
     }
 
+    fn has_pending_changes(&self) -> bool {
+        self.inner.pending_params.has_pending()
+    }
+
     fn gui_edit_log(&self) -> Option<crate::types::SharedEditLog> {
         Some(Arc::clone(&self.inner.gui_edit_log))
     }

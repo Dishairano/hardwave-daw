@@ -1103,6 +1103,11 @@ impl HostedPlugin for ClapPluginInstance {
         self.descriptor.has_editor
     }
 
+    fn has_pending_changes(&self) -> bool {
+        self.pending_params.has_pending()
+            || self.host_ctx.flush_requested.load(AtomicOrdering::Relaxed)
+    }
+
     fn gui_edit_log(&self) -> Option<SharedEditLog> {
         Some(Arc::clone(&self.gui_edit_log))
     }
@@ -2264,6 +2269,24 @@ mod flush_tests {
         assert!(instance.out_sink.read_only.is_empty());
         read(&mut instance, 1 << 3);
         assert_eq!(instance.out_sink.read_only, vec![7], "read-only is listed");
+        drop(instance);
+    }
+
+    /// A knob moved in the window, or a flush asked for, makes a sleeping
+    /// plug-in be called (smart disable asks this).
+    #[test]
+    fn a_waiting_change_is_reported_to_smart_disable() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        assert!(!instance.has_pending_changes());
+        instance.pending_params.push(3, 0.5);
+        assert!(instance.has_pending_changes());
+        instance.flush_parameters();
+        assert!(!instance.has_pending_changes());
+        unsafe { host_params_request_flush(&*instance.host) };
+        assert!(instance.has_pending_changes());
+        instance.flush_parameters();
+        assert!(!instance.has_pending_changes());
         drop(instance);
     }
 }
