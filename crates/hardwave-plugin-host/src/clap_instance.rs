@@ -269,6 +269,9 @@ struct OutputSink {
     read_only: Vec<u32>,
 }
 
+/// CLAP_PARAM_IS_AUTOMATABLE.
+const CLAP_PARAM_IS_AUTOMATABLE: u32 = 1 << 5;
+
 /// CLAP_PARAM_IS_READONLY.
 const CLAP_PARAM_IS_READONLY: u32 = 1 << 3;
 
@@ -550,7 +553,10 @@ impl ClapPluginInstance {
                 min: info.min_value,
                 max: info.max_value,
                 unit: String::new(),
-                automatable: (info.flags & 1) != 0, // CLAP_PARAM_IS_AUTOMATABLE
+                // Bit 5. Bit 0 (read before) is CLAP_PARAM_IS_STEPPED, so
+                // every stepped switch counted as automatable and every
+                // knob did not.
+                automatable: info.flags & CLAP_PARAM_IS_AUTOMATABLE != 0,
             });
         }
         self.out_sink.read_only.sort_unstable();
@@ -1887,8 +1893,12 @@ mod flush_tests {
     unsafe extern "C" fn count(_: *const ClapPlugin) -> u32 {
         1
     }
-    unsafe extern "C" fn get_info(_: *const ClapPlugin, _: u32, _: *mut ClapParamInfo) -> bool {
-        false
+    /// The flags the fake gives its one parameter (id 7).
+    static FLAGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    unsafe extern "C" fn get_info(_: *const ClapPlugin, _: u32, info: *mut ClapParamInfo) -> bool {
+        (*info).id = 7;
+        (*info).flags = FLAGS.load(Ordering::SeqCst);
+        true
     }
     unsafe extern "C" fn get_value(_: *const ClapPlugin, _: u32, out: *mut f64) -> bool {
         *out = f64::from_bits(TAKEN.load(Ordering::SeqCst));
@@ -2234,6 +2244,26 @@ mod flush_tests {
             instance.pending_params.has_pending(),
             "a change after it stays"
         );
+        drop(instance);
+    }
+
+    /// CLAP_PARAM_IS_AUTOMATABLE is bit 5. Bit 0, read before, is
+    /// CLAP_PARAM_IS_STEPPED.
+    #[test]
+    fn a_clap_parameter_is_automatable_by_its_own_flag() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let read = |instance: &mut ClapPluginInstance, flags: u32| {
+            FLAGS.store(flags, Ordering::SeqCst);
+            instance.refresh_params();
+            instance.cached_params[0].automatable
+        };
+        assert!(read(&mut instance, 1 << 5));
+        assert!(!read(&mut instance, 1), "stepped alone is not automatable");
+        assert!(read(&mut instance, (1 << 5) | 1));
+        assert!(instance.out_sink.read_only.is_empty());
+        read(&mut instance, 1 << 3);
+        assert_eq!(instance.out_sink.read_only, vec![7], "read-only is listed");
         drop(instance);
     }
 }
