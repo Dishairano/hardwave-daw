@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-insert-smart-disable"
+description = "Enables the set_insert_smart_disable command without any pre-configured scope."
+commands.allow = ["set_insert_smart_disable"]
+
+[[permission]]
+identifier = "deny-set-insert-smart-disable"
+description = "Denies the set_insert_smart_disable command without any pre-configured scope."
+commands.deny = ["set_insert_smart_disable"]

@@ -897,6 +897,7 @@ mod input_tests {
 
     fn ctx(frames: u32) -> ProcessContext {
         ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: frames,
             tempo: 120.0,
@@ -912,6 +913,21 @@ mod input_tests {
         let mut midi = Vec::new();
         node.process(&[], &mut outputs, &[], &mut midi, &ctx(frames as u32));
         (outputs[0].clone(), outputs[1].clone())
+    }
+
+    /// The short-block contract (see `AudioNode::process`), as every node
+    /// keeps it.
+    #[test]
+    fn a_short_block_keeps_the_node_contract() {
+        let block = InputBlock::shared(8);
+        let mut node = InputNode::new(
+            Arc::clone(&block),
+            InputChannel {
+                first: 0,
+                mono: false,
+            },
+        );
+        crate::graph::run_short_block_after_a_full_one(&mut node, 8, 3);
     }
 
     /// The graph's buffers are the largest block; a driver handing over 3

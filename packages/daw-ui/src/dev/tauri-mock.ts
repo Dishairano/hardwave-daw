@@ -765,6 +765,8 @@ const mock: TauriInternals = {
         return false
       case 'set_reset_on_transport':
       case 'set_play_truncated_notes':
+      case 'set_smart_disable':
+      case 'set_insert_smart_disable':
         return null
       case 'set_midi_master_enabled':
       case 'set_midi_velocity_curve':

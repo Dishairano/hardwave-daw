@@ -4,7 +4,7 @@
 use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::f32::consts::FRAC_PI_4;
@@ -227,6 +227,12 @@ impl HostedPlugin for NativeGain {
             self.muted = v >= 0.5;
         }
         Ok(())
+    }
+
+    /// Nothing is left once the input stops: every sample out comes from
+    /// the sample in at the same moment.
+    fn tail(&self) -> Tail {
+        Tail::Samples(0)
     }
 
     fn latency_samples(&self) -> u32 {

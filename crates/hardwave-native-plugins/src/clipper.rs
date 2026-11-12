@@ -3,11 +3,12 @@
 //! (multi-mode coloured) by being literal: drive, ceiling, instant clip.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::distortion::hard_clip;
 use hardwave_dsp::dynamics::linear_to_db;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -269,6 +270,12 @@ impl HostedPlugin for NativeClipper {
             self.auto_gain = v >= 0.5;
         }
         Ok(())
+    }
+
+    /// Only the oversampler's filters hold anything, and only while it is
+    /// on.
+    fn tail(&self) -> Tail {
+        tail::from_secs(tail::oversampler_secs(self.oversample), self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

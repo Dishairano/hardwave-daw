@@ -11,9 +11,11 @@
 //! `HW_DEVICE_FRAMES` sets the device block, `HW_PLAY_SECONDS` plays only
 //! the start of the song, `HW_PLAY_DUMP=<file>` writes the sound played
 //! (raw little-endian f32 stereo) and `HW_PLAY_COMPARE=<file>` compares
-//! the sound with one written before, sample for sample. `HW_WORKERS`
-//! sets the helper threads, and `HW_BUSY_THREADS` runs that many busy
-//! loops beside, standing in for other programs, and `HW_PACED=1`
+//! the sound with one written before, sample for sample.
+//! `HW_SMART_DISABLE=0` plays with smart disable off (it is on by default),
+//! so its cost and its sound can be set against smart disable on.
+//! `HW_WORKERS` sets the helper threads, `HW_BUSY_THREADS` runs that many
+//! busy loops beside, standing in for other programs, and `HW_PACED=1`
 //! starts each block when a sound card would rather than at once. A
 //! second test
 //! plays the song and counts every allocation and free made on the thread
@@ -120,6 +122,7 @@ fn open_song() -> Option<(DawEngine, hardwave_project::Project)> {
             track.inserts.insert(
                 0,
                 PluginSlot {
+                    allow_smart_disable: None,
                     id: slot_id.clone(),
                     plugin_id: NativeSampler::ID.to_string(),
                     enabled: true,
@@ -217,6 +220,9 @@ fn an_fl_songs_playback_block_by_block() {
         song_samples as f64 / rate as f64,
     );
     *engine.project.lock() = song;
+    let smart = std::env::var("HW_SMART_DISABLE").map_or(true, |v| v != "0");
+    engine.audio_prefs().set_smart_disable(smart);
+    eprintln!("smart disable {}", if smart { "on" } else { "off" });
     // Helper threads beside the playing thread, as the audio settings set
     // them, and busy threads standing in for other programs on the machine.
     let workers = env_num("HW_WORKERS", 0.0) as usize;

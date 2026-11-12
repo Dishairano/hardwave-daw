@@ -22,7 +22,7 @@ use std::sync::{mpsc, Arc, Mutex};
 
 use hardwave_plugin_host::bridge_protocol::*;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginDescriptor, SharedParamQueue, TransportInfo,
+    HostedPlugin, ParameterInfo, PluginDescriptor, SharedEditLog, SharedParamQueue, TransportInfo,
 };
 use raw_window_handle::RawWindowHandle;
 
@@ -232,7 +232,7 @@ struct Shared {
     /// window moved it.
     values: parking_lot::Mutex<Vec<(u32, f64)>>,
     /// Knob moves in the plug-in's window, for the app to record.
-    gui_log: SharedParamQueue,
+    gui_log: SharedEditLog,
     /// The plug-in's state, as last fetched or set.
     state: parking_lot::Mutex<Vec<u8>>,
     /// Its window is open, or its knobs moved since the state was fetched.
@@ -734,7 +734,7 @@ impl HostedPlugin for SandboxedPlugin {
         None
     }
 
-    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+    fn gui_edit_log(&self) -> Option<SharedEditLog> {
         Some(Arc::clone(&self.shared.gui_log))
     }
 
@@ -1044,7 +1044,9 @@ fn take_aside(frame: &Frame, shared: &Shared) -> bool {
             for (id, value) in &moves {
                 shared.set_value(*id, *value);
             }
-            shared.gui_log.lock().extend(moves);
+            for (id, value) in moves {
+                shared.gui_log.push(id, value);
+            }
             shared.state_stale.store(true, Ordering::Relaxed);
             true
         }
@@ -1362,10 +1364,12 @@ while True:
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(plugin.get_parameter_value(3), 0.9);
-        assert_eq!(
-            plugin.gui_edit_log().unwrap().lock().as_slice(),
-            &[(3, 0.9)]
-        );
+        let mut recorded = Vec::new();
+        plugin
+            .gui_edit_log()
+            .unwrap()
+            .drain(usize::MAX, |id, v| recorded.push((id, v)));
+        assert_eq!(recorded, vec![(3, 0.9)]);
 
         // Its window opens from its own process, and while it is open the
         // state is fetched, so a save has what was done in it.

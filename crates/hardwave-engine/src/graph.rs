@@ -17,6 +17,9 @@ pub struct ProcessContext {
     /// one tempo: with a tempo change or a ramp the curve slid off the music.
     pub position_ticks: u64,
     pub playing: bool,
+    /// Smart disable (Settings > Audio): plug-ins with nothing to do are
+    /// left out, and nodes with nothing to play skip their work.
+    pub smart_disable: bool,
 }
 
 /// Trait implemented by all nodes in the audio graph.
@@ -25,6 +28,13 @@ pub trait AudioNode: Send {
 
     /// Process audio. Reads from `inputs`, writes to `outputs`.
     /// Each slice is one channel of audio (non-interleaved).
+    ///
+    /// The block is `ctx.buffer_size` frames, which can be fewer than the
+    /// graph's block size (the rest of a bigger driver block, or a block cut
+    /// at the loop end). Every input slice is exactly that long. The output
+    /// buffers are the graph's size, holding an older block past the frames
+    /// of this one: a node writes the block's frames (it may cut the buffers
+    /// to them) and must not read or pass on anything past them.
     fn process(
         &mut self,
         inputs: &[&[f32]],
@@ -177,6 +187,12 @@ pub trait AudioNode: Send {
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
         let _ = (slot_id, active);
     }
+
+    /// Allow or forbid smart disable on one plug-in slot. Synced on every
+    /// graph rebuild from the project's `PluginSlot::allow_smart_disable`.
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) {
+        let _ = (slot_id, allowed);
+    }
 }
 
 /// Each node's work is timed on one block in this many, for the mixer's
@@ -185,6 +201,16 @@ pub trait AudioNode: Send {
 /// every block came to a fifth of a 512-frame block on a 127-track song.
 /// This way a block reads the clock for a handful of nodes at most.
 pub const CPU_STRIDE: usize = 32;
+
+/// How many frames this block has, at most the graph's block size.
+fn block_frames(ctx: &ProcessContext, buffer_size: usize) -> usize {
+    (ctx.buffer_size as usize).min(buffer_size)
+}
+
+/// The first `frames` of a buffer (all of it when shorter).
+fn block_part(buffer: &[f32], frames: usize) -> &[f32] {
+    &buffer[..frames.min(buffer.len())]
+}
 
 /// Number of output channels every node gets. Tracks use 0/1 for post-fader
 /// stereo and 2/3 for the pre-fader tap that feeds pre-fader sends; other
@@ -764,6 +790,7 @@ impl AudioGraph {
         // previous code's `.clone()` was defensive but never load-bearing.)
         let midi_empty: [hardwave_midi::MidiEvent; 0] = [];
         let order_len = self.processing_order.len();
+        let frames = block_frames(ctx, self.buffer_size);
 
         for order_idx in 0..order_len {
             let node_id = self.processing_order[order_idx];
@@ -771,7 +798,23 @@ impl AudioGraph {
             // An idle node whose output is already silent has nothing to
             // do this block. Not when a delay line feeds it: that line
             // has to keep moving so it holds the right audio later.
-            let idle = self.nodes[node_id].idle(ctx)
+            // Nor when the keyboard plays into it this block: a node left
+            // out would never hear those notes.
+            let hears_keys = !midi_in.is_empty()
+                && self
+                    .accepts_live_midi
+                    .get(node_id)
+                    .copied()
+                    .unwrap_or(false);
+            // Nor when sound reaches its sidechain ports (2 and up): a
+            // plug-in keyed from another track has to hear it.
+            let keyed = self.incoming[node_id].iter().any(|&e| {
+                let edge = &self.edges[e];
+                edge.dest_port >= 2 && !self.silent.get(edge.source).copied().unwrap_or(false)
+            });
+            let idle = !hears_keys
+                && !keyed
+                && self.nodes[node_id].idle(ctx)
                 && self.incoming[node_id]
                     .iter()
                     .all(|&e| matches!(self.edge_delays.get(e), None | Some(None)));
@@ -780,9 +823,13 @@ impl AudioGraph {
             }
             let timed = self.node_nanos.is_some().then(std::time::Instant::now);
 
-            // Zero the scratch's input buffers in place — no realloc.
+            // Zero the scratch's input buffers in place (no realloc),
+            // and only the frames this block has: a short block (the rest
+            // of a driver block cut into graph-size pieces) used to zero
+            // four whole graph-size buffers per node all the same.
             for ch in &mut self.scratch[node_id].ch_bufs {
-                ch.fill(0.0);
+                let n = frames.min(ch.len());
+                ch[..n].fill(0.0);
             }
 
             // Gather inputs from edges that target this node. Disjoint
@@ -800,7 +847,6 @@ impl AudioGraph {
                 let silent = &self.silent;
                 let edge_delays = &mut self.edge_delays;
                 let scratch = &mut self.scratch[node_id];
-                let buffer_size = self.buffer_size;
                 for &edge_idx in &self.incoming[node_id] {
                     let e = &edges[edge_idx];
                     // A silent source adds nothing, unless its edge delays
@@ -814,7 +860,7 @@ impl AudioGraph {
                         Some(ch) => ch.as_slice(),
                         None => continue,
                     };
-                    let n = src.len().min(buffer_size);
+                    let n = src.len().min(frames);
                     let src_slice: &[f32] = if let Some(Some(dl)) = edge_delays.get_mut(edge_idx) {
                         dl.process(&src[..n], &mut scratch.delay_scratch[..n]);
                         &scratch.delay_scratch[..n]
@@ -839,11 +885,13 @@ impl AudioGraph {
             // so the array stays cheap.
             let scratch = &mut self.scratch[node_id];
             scratch.midi_out.clear();
+            // The block's frames only: past them the buffers hold an older
+            // block's sums, no longer zeroed.
             let input_refs: [&[f32]; NODE_CHANNELS] = [
-                scratch.ch_bufs[0].as_slice(),
-                scratch.ch_bufs[1].as_slice(),
-                scratch.ch_bufs[2].as_slice(),
-                scratch.ch_bufs[3].as_slice(),
+                block_part(&scratch.ch_bufs[0], frames),
+                block_part(&scratch.ch_bufs[1], frames),
+                block_part(&scratch.ch_bufs[2], frames),
+                block_part(&scratch.ch_bufs[3], frames),
             ];
             let live: &[hardwave_midi::MidiEvent] = if self
                 .accepts_live_midi
@@ -1056,7 +1104,21 @@ impl NodeWork<'_> {
         // Same skip as the one-thread loop: an idle node with a silent
         // output and no delay line feeding it has nothing to do.
         let node = unsafe { &mut *self.nodes.add(node_id) };
-        let idle = node.idle(self.ctx)
+        let hears_keys = !self.midi_in.is_empty()
+            && self
+                .accepts_live_midi
+                .get(node_id)
+                .copied()
+                .unwrap_or(false);
+        // Sources are in earlier levels, finished, so their silent flags
+        // are this block's.
+        let keyed = self.incoming[node_id].iter().any(|&e| {
+            let edge = &self.edges[e];
+            edge.dest_port >= 2 && !unsafe { *self.silent.add(edge.source) }
+        });
+        let idle = !hears_keys
+            && !keyed
+            && node.idle(self.ctx)
             && self.incoming[node_id]
                 .iter()
                 .all(|&e| delay_of(e).is_none_or(|d| d.is_none()));
@@ -1065,8 +1127,11 @@ impl NodeWork<'_> {
             return;
         }
         let scratch = unsafe { &mut *self.scratch.add(node_id) };
+        // Only the block's frames, as in the one-thread loop.
+        let frames = block_frames(self.ctx, self.buffer_size);
         for ch in &mut scratch.ch_bufs {
-            ch.fill(0.0);
+            let n = frames.min(ch.len());
+            ch[..n].fill(0.0);
         }
 
         for &edge_idx in &self.incoming[node_id] {
@@ -1086,7 +1151,7 @@ impl NodeWork<'_> {
             let Some(src) = source_bufs.get(e.source_port) else {
                 continue;
             };
-            let n = src.len().min(self.buffer_size);
+            let n = src.len().min(frames);
             let src_slice: &[f32] = if let Some(dl) = delay {
                 dl.process(&src[..n], &mut scratch.delay_scratch[..n]);
                 &scratch.delay_scratch[..n]
@@ -1105,10 +1170,10 @@ impl NodeWork<'_> {
 
         scratch.midi_out.clear();
         let input_refs: [&[f32]; NODE_CHANNELS] = [
-            scratch.ch_bufs[0].as_slice(),
-            scratch.ch_bufs[1].as_slice(),
-            scratch.ch_bufs[2].as_slice(),
-            scratch.ch_bufs[3].as_slice(),
+            block_part(&scratch.ch_bufs[0], frames),
+            block_part(&scratch.ch_bufs[1], frames),
+            block_part(&scratch.ch_bufs[2], frames),
+            block_part(&scratch.ch_bufs[3], frames),
         ];
         let midi_empty: [hardwave_midi::MidiEvent; 0] = [];
         let live: &[hardwave_midi::MidiEvent] = if self
@@ -1139,9 +1204,56 @@ impl NodeWork<'_> {
     }
 }
 
+/// The short-block contract (see [`AudioNode::process`]) for a node's own
+/// tests: a full block, then a `short` one with inputs exactly that long
+/// and the graph-size outputs holding the full block, as the graph hands
+/// them over. A read past the block's inputs panics. Returns the outputs.
+#[cfg(test)]
+pub(crate) fn run_short_block_after_a_full_one(
+    node: &mut dyn AudioNode,
+    graph_size: usize,
+    short: usize,
+) -> Vec<Vec<f32>> {
+    let at = |position_samples: u64, frames: usize| ProcessContext {
+        sample_rate: 48_000.0,
+        buffer_size: frames as u32,
+        tempo: 120.0,
+        time_sig: (4, 4),
+        position_samples,
+        position_ticks: 0,
+        playing: true,
+        smart_disable: false,
+    };
+    let mut outputs = vec![vec![0.0f32; graph_size]; NODE_CHANNELS];
+    let full = vec![0.5f32; graph_size];
+    let inputs = [&full[..], &full[..], &full[..], &full[..]];
+    node.process(
+        &inputs,
+        &mut outputs,
+        &[],
+        &mut Vec::new(),
+        &at(0, graph_size),
+    );
+    let part = vec![0.25f32; short];
+    let inputs = [&part[..], &part[..], &part[..], &part[..]];
+    node.process(
+        &inputs,
+        &mut outputs,
+        &[],
+        &mut Vec::new(),
+        &at(graph_size as u64, short),
+    );
+    for ch in outputs.iter().take(2) {
+        assert!(ch.len() >= short, "the block's frames are written");
+        assert!(ch[..short].iter().all(|s| s.is_finite()));
+    }
+    outputs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     struct FakeNode {
         name: &'static str,
@@ -1229,6 +1341,7 @@ mod tests {
 
     fn ctx() -> ProcessContext {
         ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 16,
             tempo: 120.0,
@@ -1242,7 +1355,6 @@ mod tests {
     #[test]
     fn an_idle_silent_node_is_skipped_and_the_sum_stays_right() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
-        use std::sync::Arc;
         let mut g = AudioGraph::new(16);
         let idle = Arc::new(AtomicBool::new(true));
         let quiet_runs = Arc::new(AtomicUsize::new(0));
@@ -1282,6 +1394,32 @@ mod tests {
         g.process(&ctx(), &[]);
         assert_eq!(quiet_runs.load(Relaxed), 3);
         assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+    }
+
+    /// A node fed sound on its sidechain ports (2 and 3) is run, even when
+    /// it says it is idle: what it keys off is only there while it runs.
+    #[test]
+    fn a_node_with_sound_on_its_sidechain_is_not_left_out() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+        use std::sync::Arc;
+        let mut g = AudioGraph::new(16);
+        let keyed_runs = Arc::new(AtomicUsize::new(0));
+        let key = g.add_node(Box::new(Source {
+            level: 0.5,
+            idle: Arc::new(AtomicBool::new(false)),
+            runs: Arc::new(AtomicUsize::new(0)),
+        }));
+        let keyed = g.add_node(Box::new(Source {
+            level: 0.25,
+            idle: Arc::new(AtomicBool::new(true)),
+            runs: keyed_runs.clone(),
+        }));
+        g.connect(key, 0, keyed, 2);
+        g.finalize_pdc(true);
+        for _ in 0..4 {
+            g.process(&ctx(), &[]);
+        }
+        assert_eq!(keyed_runs.load(Relaxed), 4);
     }
 
     /// A node that says it wrote silence, whatever it wrote.
@@ -1366,7 +1504,6 @@ mod tests {
     #[test]
     fn a_block_times_a_few_nodes_and_every_node_gets_its_turn() {
         use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-        use std::sync::Arc;
         let mut g = AudioGraph::new(16);
         let counts: Vec<Arc<AtomicUsize>> =
             (0..80).map(|_| Arc::new(AtomicUsize::new(0))).collect();
@@ -1422,6 +1559,134 @@ mod tests {
                 Some(level) => outputs[0].fill(level),
                 None => outputs[0].copy_from_slice(inputs[0]),
             }
+        }
+    }
+
+    /// Counts up with the song: sample `p` of the song is `p + 1`. Only the
+    /// block's frames are written. With `trims` it cuts its buffers to the
+    /// block, as a track does; without, what is past the block keeps a
+    /// stale value, as a node that leaves its buffers whole does.
+    struct Ramp {
+        latency: u32,
+        trims: bool,
+    }
+
+    impl AudioNode for Ramp {
+        fn name(&self) -> &str {
+            "ramp"
+        }
+        fn latency_samples(&self) -> u32 {
+            self.latency
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            ctx: &ProcessContext,
+        ) {
+            let frames = ctx.buffer_size as usize;
+            for ch in outputs.iter_mut() {
+                if self.trims {
+                    ch.resize(frames, 0.0);
+                } else {
+                    ch.fill(1000.0);
+                }
+                for (i, s) in ch.iter_mut().take(frames).enumerate() {
+                    *s = (ctx.position_samples + i as u64 + 1) as f32;
+                }
+            }
+        }
+    }
+
+    /// Per block: how long the inputs were, and the first two inputs.
+    type Heard = Arc<parking_lot::Mutex<Vec<(usize, Vec<f32>, Vec<f32>)>>>;
+
+    /// Keeps what reached its first two inputs, and how long they were.
+    struct Probe(Heard);
+
+    impl AudioNode for Probe {
+        fn name(&self) -> &str {
+            "probe"
+        }
+        fn process(
+            &mut self,
+            inputs: &[&[f32]],
+            _outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            ctx: &ProcessContext,
+        ) {
+            let frames = ctx.buffer_size as usize;
+            self.0.lock().push((
+                inputs[0].len().max(inputs[1].len()),
+                inputs[0][..frames.min(inputs[0].len())].to_vec(),
+                inputs[1][..frames.min(inputs[1].len())].to_vec(),
+            ));
+        }
+    }
+
+    /// Short blocks (the rest of a driver block cut into graph-size
+    /// pieces) zero and sum only their own frames now. What a node hears
+    /// must not depend on how the song was cut into blocks: the same as a
+    /// render in whole blocks, through a compensation line too, and
+    /// nothing from past the block's end.
+    #[test]
+    fn short_blocks_hear_the_same_as_whole_blocks() {
+        const SIZE: usize = 16;
+        const PAD: u64 = 5;
+        let ramp = |p: u64| if p >= PAD { (p - PAD + 1) as f32 } else { 0.0 };
+        for threads in [0, 2] {
+            let mut g = AudioGraph::new(SIZE);
+            if threads > 0 {
+                g.set_worker_pool(Some(Arc::new(crate::parallel::WorkerPool::new(threads))));
+            }
+            // Two counters held back behind a slower third, all into one
+            // node: their edges get a compensation line of PAD samples.
+            let trimmed = g.add_node(Box::new(Ramp {
+                latency: 0,
+                trims: true,
+            }));
+            let whole = g.add_node(Box::new(Ramp {
+                latency: 0,
+                trims: false,
+            }));
+            let slow = g.add_node(Box::new(Ramp {
+                latency: PAD as u32,
+                trims: true,
+            }));
+            let heard = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let probe = g.add_node(Box::new(Probe(Arc::clone(&heard))));
+            g.connect(trimmed, 0, probe, 0);
+            g.connect(slow, 0, probe, 0);
+            g.connect(whole, 0, probe, 1);
+            g.finalize_pdc(true);
+
+            let blocks = [16, 3, 16, 16, 1, 9, 16, 5, 16, 2];
+            let mut at = 0u64;
+            for &n in &blocks {
+                let mut c = ctx();
+                c.buffer_size = n as u32;
+                c.position_samples = at;
+                g.process(&c, &[]);
+                at += n as u64;
+            }
+            let heard = heard.lock();
+            let mut first = Vec::new();
+            let mut second = Vec::new();
+            for (&n, (len, a, b)) in blocks.iter().zip(heard.iter()) {
+                assert_eq!(
+                    *len, n,
+                    "{threads} threads: a node is handed the block's frames"
+                );
+                first.extend_from_slice(a);
+                second.extend_from_slice(b);
+            }
+            let want_first: Vec<f32> = (0..at).map(|p| ramp(p) + (p + 1) as f32).collect();
+            let want_second: Vec<f32> = (0..at).map(ramp).collect();
+            assert_eq!(first, want_first, "{threads} threads");
+            assert_eq!(second, want_second, "{threads} threads");
         }
     }
 

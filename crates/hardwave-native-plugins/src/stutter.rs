@@ -7,9 +7,10 @@
 //! (`set_transport`).
 
 use crate::format;
+use crate::tail;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -371,6 +372,38 @@ impl HostedPlugin for NativeStutter {
         self.sync = read("sync").map_or(0, |v| (v.max(0.0) as usize).min(SYNC_DIVISIONS.len() - 1));
         self.recompute_slice();
         Ok(())
+    }
+
+    /// A slice caught just before the input stopped replays for the rest of
+    /// its group; after one whole group of silence every slice is silent.
+    fn tail(&self) -> Tail {
+        tail::from_samples(self.slice_len as f64 * self.repeats.max(1) as f64 + 1.0)
+    }
+
+    /// Off the song's grid the slices keep their own time: step through the
+    /// silence as `process` would, recording it into the first slice.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active || self.slice_len == 0 {
+            return;
+        }
+        for _ in 0..num_samples {
+            if self.slice_in_group == 0 {
+                if let Some(s) = self.hold_l.get_mut(self.pos_in_slice) {
+                    *s = 0.0;
+                }
+                if let Some(s) = self.hold_r.get_mut(self.pos_in_slice) {
+                    *s = 0.0;
+                }
+            }
+            self.pos_in_slice += 1;
+            if self.pos_in_slice >= self.slice_len {
+                self.pos_in_slice = 0;
+                self.slice_in_group += 1;
+                if self.slice_in_group >= self.repeats {
+                    self.slice_in_group = 0;
+                }
+            }
+        }
     }
 
     fn latency_samples(&self) -> u32 {

@@ -618,6 +618,14 @@ pub fn set_play_truncated_notes(state: State<AppState>, enabled: bool) {
         .set_play_truncated_notes(enabled);
 }
 
+/// Smart disable for the whole engine (Settings > Audio): a plug-in whose
+/// input has been silent for longer than its tail, and whose sound has
+/// died away, is not called until sound, notes or a knob move arrive.
+#[tauri::command]
+pub fn set_smart_disable(state: State<AppState>, enabled: bool) {
+    state.engine.lock().audio_prefs().set_smart_disable(enabled);
+}
+
 /// Which pan law the tracks use: "-3", "-4.5", "-6" or "0" (dB at centre).
 #[tauri::command]
 pub fn set_pan_law(state: State<AppState>, law: String) -> Result<(), String> {

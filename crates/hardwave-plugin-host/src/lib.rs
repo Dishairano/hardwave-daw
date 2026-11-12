@@ -7,6 +7,7 @@ pub mod clap_ffi;
 pub mod clap_instance;
 pub mod clap_presets;
 pub mod gui_scaling;
+pub mod param_queue;
 pub mod plugin_ops;
 pub mod scanner;
 pub mod types;

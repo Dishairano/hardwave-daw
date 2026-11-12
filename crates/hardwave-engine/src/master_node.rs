@@ -43,6 +43,8 @@ pub struct MasterNode {
     /// Gain put on the reference so it sits at the mix's loudness, in
     /// decibels, as hundredths so it fits an atomic.
     reference_gain_centi_db: Arc<AtomicI64>,
+    /// The last block was silence, with every plug-in on the master asleep.
+    wrote_silence: bool,
 }
 
 impl MasterNode {
@@ -71,6 +73,7 @@ impl MasterNode {
             chain: crate::insert_chain::InsertChain::new(),
             chain_scratch: crate::insert_chain::Scratch::default(),
             track_id,
+            wrote_silence: false,
         }
     }
 }
@@ -167,6 +170,11 @@ impl AudioNode for MasterNode {
             InsertCommand::LoadFactoryPreset { slot_id, index, .. } => {
                 self.chain.load_factory_preset(&slot_id, index);
             }
+            InsertCommand::SetSmartDisable {
+                slot_id, allowed, ..
+            } => {
+                self.chain.set_slot_smart_disable(&slot_id, allowed);
+            }
             InsertCommand::ClearAll => self.chain.bury_all(graveyard),
         }
     }
@@ -201,8 +209,16 @@ impl AudioNode for MasterNode {
         self.chain.slots.len()
     }
 
+    fn output_is_silent(&self) -> bool {
+        self.wrote_silence
+    }
+
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
         self.chain.set_slot_sidechain(slot_id, active);
+    }
+
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) {
+        self.chain.set_slot_smart_disable(slot_id, allowed);
     }
 
     fn process(
@@ -214,11 +230,44 @@ impl AudioNode for MasterNode {
         ctx: &ProcessContext,
     ) {
         let buf_size = ctx.buffer_size as usize;
+        self.wrote_silence = false;
         if outputs.len() < 2 {
             return;
         }
         outputs[0].resize(buf_size, 0.0);
         outputs[1].resize(buf_size, 0.0);
+
+        // Where the song is, so a plug-in in this chain can work in beats
+        // rather than only in milliseconds.
+        let transport = hardwave_plugin_host::types::TransportInfo {
+            playing: ctx.playing,
+            tempo: ctx.tempo,
+            position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
+            time_sig: ctx.time_sig,
+            sample_rate: ctx.sample_rate,
+            position_samples: ctx.position_samples,
+        };
+        self.chain.set_smart_disable(ctx.smart_disable);
+        self.chain.set_transport(transport);
+
+        // Nothing reaches the master, on its input or its sidechain, and
+        // every plug-in on it is asleep (smart disable): the block is
+        // silence, with nothing to run.
+        let input_silent = inputs
+            .iter()
+            .take(4)
+            .all(|ch| ch.iter().take(buf_size).all(|s| *s == 0.0));
+        if ctx.smart_disable
+            && input_silent
+            && !self.reference_on.load(Ordering::Relaxed)
+            && self.chain.asleep_through(&[], None)
+        {
+            outputs[0][..buf_size].fill(0.0);
+            outputs[1][..buf_size].fill(0.0);
+            self.chain.pass_asleep(transport, buf_size);
+            self.wrote_silence = true;
+            return;
+        }
 
         // 1. Sum the incoming mix.
         for (i, sample) in outputs[0].iter_mut().enumerate() {
@@ -287,24 +336,20 @@ impl AudioNode for MasterNode {
         //    take both channels mutably at once.
         if !self.chain.slots.is_empty() {
             let (left, right) = outputs.split_at_mut(1);
-            // Where the song is, so a plug-in in this chain can work in
-            // beats rather than only in milliseconds.
-            self.chain
-                .set_transport(hardwave_plugin_host::types::TransportInfo {
-                    playing: ctx.playing,
-                    tempo: ctx.tempo,
-                    position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
-                    time_sig: ctx.time_sig,
-                    sample_rate: ctx.sample_rate,
-                    position_samples: ctx.position_samples,
-                });
+            // The sidechain bus on ports 2/3, for a slot keyed from a
+            // track, as on any track: the master's plug-ins were given none.
+            let sidechain: Option<(&[f32], &[f32])> = if inputs.len() >= 4 {
+                Some((inputs[2], inputs[3]))
+            } else {
+                None
+            };
             self.chain.process(
                 &mut left[0],
                 &mut right[0],
                 buf_size,
                 &mut self.chain_scratch,
                 &[],
-                None,
+                sidechain,
             );
         }
 
@@ -333,6 +378,7 @@ mod tests {
 
     fn ctx(frames: u32) -> ProcessContext {
         ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: frames,
             tempo: 120.0,
@@ -341,6 +387,15 @@ mod tests {
             position_ticks: 0,
             playing: true,
         }
+    }
+
+    /// The master's short block (see `AudioNode::process`): it sums only
+    /// the block's frames of its inputs.
+    #[test]
+    fn a_short_block_reads_only_its_own_frames() {
+        let mut node = MasterNode::new(Arc::new(AtomicF64::new(0.0)), Some("master".into()));
+        let out = crate::graph::run_short_block_after_a_full_one(&mut node, 512, 16);
+        assert!(out[0][..16].iter().any(|s| *s != 0.0), "the input is heard");
     }
 
     /// The song's plug-ins loaded twice (two audio restarts close together)
@@ -376,5 +431,116 @@ mod tests {
             outputs[0].iter().all(|&s| (s - 0.5).abs() < 1e-6),
             "doubled once, not twice"
         );
+    }
+}
+
+#[cfg(test)]
+mod smart_disable_tests {
+    use super::*;
+    use crate::insert_chain::tests::Ringer;
+    use hardwave_plugin_host::types::Tail;
+    use std::sync::atomic::AtomicU32;
+
+    /// With nothing reaching it and every plug-in on it asleep, the master
+    /// writes silence without running its chain, and says so.
+    #[test]
+    fn a_silent_master_skips_its_sleeping_chain() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let skipped = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), skipped.clone());
+        ringer.tail = Tail::Samples(0);
+        let mut node = MasterNode::new(Arc::new(AtomicF64::new(0.0)), None);
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "lim".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: false,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let silence = vec![0.0_f32; 256];
+        let mut run = |k: u64, input: &[f32]| {
+            let ctx = ProcessContext {
+                smart_disable: true,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: k * 256,
+                playing: true,
+            };
+            let inputs: [&[f32]; 2] = [input, input];
+            let mut out = vec![vec![0.0; 256]; 2];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+            (node.output_is_silent(), out)
+        };
+        for k in 0..4 {
+            run(k, &silence);
+        }
+        let asleep = calls.load(Ordering::Relaxed);
+        for k in 4..20 {
+            assert!(run(k, &silence).0, "silent, and said so");
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), asleep, "chain left out");
+        // Sound arrives: the chain runs on that block.
+        let mut tone = silence.clone();
+        tone[10] = 0.5;
+        let (silent, out) = run(20, &tone);
+        assert!(!silent);
+        assert_eq!(calls.load(Ordering::Relaxed), asleep + 1);
+        assert!(out[0][10] > 0.4, "heard on its own sample");
+    }
+
+    /// A plug-in on the master keyed from another track wakes when the key
+    /// sounds, even with nothing on the master's own input.
+    #[test]
+    fn a_loud_sidechain_wakes_a_keyed_master_plugin() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), Arc::new(AtomicU32::new(0)));
+        ringer.tail = Tail::Samples(0);
+        let mut node = MasterNode::new(Arc::new(AtomicF64::new(0.0)), None);
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "duck".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: true,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let silence = vec![0.0_f32; 256];
+        let key = vec![0.5_f32; 256];
+        for k in 0..12u64 {
+            let ctx = ProcessContext {
+                smart_disable: true,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: k * 256,
+                playing: true,
+            };
+            let sc: &[f32] = if k < 4 { &silence } else { &key };
+            let inputs: [&[f32]; 4] = [&silence, &silence, sc, sc];
+            let mut out = vec![vec![0.0; 256]; 2];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+        }
+        // Asleep after its first block, then called on every keyed block.
+        assert_eq!(calls.load(Ordering::Relaxed), 1 + 8);
     }
 }

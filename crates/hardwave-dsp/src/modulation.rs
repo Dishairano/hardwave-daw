@@ -96,6 +96,20 @@ impl ModulatedDelay {
         self.lfo_phase = (self.lfo_phase + self.lfo_rate_hz / self.sample_rate).rem_euclid(1.0);
         tap
     }
+
+    /// Move on by `num_samples` of silence without running the line: the
+    /// LFO and the write position go where `process` would have taken
+    /// them, sample by sample with the same sums, so the sweep comes back
+    /// exactly in place. For a host that stops calling an effect whose
+    /// input and output have gone silent; the line is silent then, so what
+    /// it holds is left as it is.
+    pub fn skip(&mut self, num_samples: usize) {
+        let step = self.lfo_rate_hz / self.sample_rate;
+        for _ in 0..num_samples {
+            self.lfo_phase = (self.lfo_phase + step).rem_euclid(1.0);
+        }
+        self.write_pos = (self.write_pos + num_samples) % self.buffer.len();
+    }
 }
 
 /// Single first-order allpass stage — the phaser's unit building block.
@@ -177,6 +191,34 @@ impl<const N: usize> PhaserChain<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Skipping silence leaves the sweep exactly where running silence
+    /// through the line would: the next sound comes out bit for bit the
+    /// same.
+    #[test]
+    fn skipping_silence_keeps_the_sweep_in_place() {
+        let make = || {
+            let mut d = ModulatedDelay::new(2048, 48_000.0);
+            d.set_base_delay(300.0);
+            d.set_lfo_rate(0.7);
+            d.set_lfo_depth(120.0);
+            d.set_feedback(0.4);
+            d
+        };
+        let (mut ran, mut skipped) = (make(), make());
+        for _ in 0..12_345 {
+            ran.process(0.0);
+        }
+        skipped.skip(12_345);
+        for i in 0..4_000 {
+            let x = (i as f32 * 0.01).sin();
+            assert_eq!(
+                ran.process(x).to_bits(),
+                skipped.process(x).to_bits(),
+                "{i}"
+            );
+        }
+    }
 
     #[test]
     fn modulated_delay_produces_delayed_impulse() {

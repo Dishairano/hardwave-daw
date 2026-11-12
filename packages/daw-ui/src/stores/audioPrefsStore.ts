@@ -18,6 +18,9 @@ import { invoke } from '@tauri-apps/api/core'
  *    When off, only notes that start at or after the playhead are played.
  *  - recordOffsetMs: manual correction added to the measured recording
  *    latency, for interfaces that do not report all of theirs.
+ *  - smartDisable: when on, a plug-in whose input has been silent for longer
+ *    than its tail, and whose sound has died away, is not called until
+ *    sound, notes or a knob move arrive. Each slot can opt out.
  */
 interface AudioPrefsState {
   resetPluginsOnTransport: boolean
@@ -25,10 +28,12 @@ interface AudioPrefsState {
   recordOffsetMs: number
   /** dB the centre sits at: '-3' (default), '-4.5', '-6' or '0'. */
   panLaw: '-3' | '-4.5' | '-6' | '0'
+  smartDisable: boolean
   setResetPluginsOnTransport: (v: boolean) => void
   setPlayTruncatedNotes: (v: boolean) => void
   setRecordOffsetMs: (ms: number) => void
   setPanLaw: (law: '-3' | '-4.5' | '-6' | '0') => void
+  setSmartDisable: (v: boolean) => void
 }
 
 export const useAudioPrefsStore = create<AudioPrefsState>()(
@@ -38,6 +43,7 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
       playTruncatedNotes: false,
       recordOffsetMs: 0,
       panLaw: '-3',
+      smartDisable: true,
       setResetPluginsOnTransport: (resetPluginsOnTransport) => {
         set({ resetPluginsOnTransport })
         invoke('set_reset_on_transport', { enabled: resetPluginsOnTransport }).catch(() => {})
@@ -45,6 +51,10 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
       setPlayTruncatedNotes: (playTruncatedNotes) => {
         set({ playTruncatedNotes })
         invoke('set_play_truncated_notes', { enabled: playTruncatedNotes }).catch(() => {})
+      },
+      setSmartDisable: (smartDisable) => {
+        set({ smartDisable })
+        invoke('set_smart_disable', { enabled: smartDisable }).catch(() => {})
       },
       setPanLaw: (panLaw) => {
         set({ panLaw })
@@ -68,9 +78,10 @@ export const useAudioPrefsStore = create<AudioPrefsState>()(
  * boot, and safe to call again.
  */
 export function applySavedAudioPrefs(): void {
-  const { resetPluginsOnTransport, playTruncatedNotes, recordOffsetMs, panLaw } = useAudioPrefsStore.getState()
+  const { resetPluginsOnTransport, playTruncatedNotes, recordOffsetMs, panLaw, smartDisable } = useAudioPrefsStore.getState()
   invoke('set_reset_on_transport', { enabled: resetPluginsOnTransport }).catch(() => {})
   invoke('set_play_truncated_notes', { enabled: playTruncatedNotes }).catch(() => {})
   invoke('set_record_offset_ms', { ms: recordOffsetMs ?? 0 }).catch(() => {})
   invoke('set_pan_law', { law: panLaw ?? '-3' }).catch(() => {})
+  invoke('set_smart_disable', { enabled: smartDisable ?? true }).catch(() => {})
 }

@@ -596,6 +596,12 @@ pub struct TrackNode {
     wrote_silence: bool,
     /// Cached Arc references to audio buffers, refreshed when clips change.
     cached_buffers: Vec<Option<Arc<AudioBuffer>>>,
+    /// Buffers a reset replaced with the pool's newer ones. Kept here, not
+    /// dropped: the last reference to a sample going on the audio thread
+    /// frees its memory there. They go with the node, which is dropped on
+    /// the graph builder's thread. Room for one per clip, made off the
+    /// audio thread.
+    retired_buffers: Vec<Arc<AudioBuffer>>,
     /// The clips in this track's row of the launcher grid, and the
     /// buffers behind them. A launched slot loops on top of the song
     /// instead of the timeline clips, which is what a launcher is.
@@ -774,7 +780,7 @@ impl ChannelUtility {
     /// Whether silence in gives silence out with nothing changing: no delay
     /// line, and the filter off or with nothing left ringing in it. Swap and
     /// polarity on silence are silence.
-    fn at_rest(&self) -> bool {
+    pub(crate) fn at_rest(&self) -> bool {
         let no_delay = self.delay_samples <= 0 || self.delay_buf_l.is_empty();
         no_delay && (self.filter_kind == TrackFilterType::Off || self.filter.at_rest())
     }
@@ -824,6 +830,7 @@ impl TrackNode {
             gain_ramp: GainRamp::default(),
             wrote_silence: false,
             cached_buffers: Vec::new(),
+            retired_buffers: Vec::new(),
             meter,
             rms_smooth: 0.0,
             chain: crate::insert_chain::InsertChain::new(),
@@ -890,6 +897,7 @@ impl TrackNode {
     /// when the project state changes.
     pub fn set_clips(&mut self, clips: Vec<ClipRegion>) {
         self.cached_buffers = clips.iter().map(|c| self.pool.get(&c.source_id)).collect();
+        self.retired_buffers = Vec::with_capacity(clips.len());
         self.clips = clips;
     }
 
@@ -1253,6 +1261,11 @@ impl AudioNode for TrackNode {
             InsertCommand::LoadFactoryPreset { slot_id, index, .. } => {
                 self.chain.load_factory_preset(&slot_id, index);
             }
+            InsertCommand::SetSmartDisable {
+                slot_id, allowed, ..
+            } => {
+                self.chain.set_slot_smart_disable(&slot_id, allowed);
+            }
             InsertCommand::ClearAll => self.chain.bury_all(graveyard),
         }
     }
@@ -1307,6 +1320,10 @@ impl AudioNode for TrackNode {
 
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
         self.chain.set_slot_sidechain(slot_id, active);
+    }
+
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) {
+        self.chain.set_slot_smart_disable(slot_id, allowed);
     }
 
     /// Muted, stopped, or a placeholder: each of those leaves the track
@@ -1442,11 +1459,12 @@ impl AudioNode for TrackNode {
             }
         }
 
-        // Whether anything reaches this track from others this block. A bus
-        // fed by tracks that are all silent hears nothing.
+        // Whether anything reaches this track from others this block, on its
+        // input or its sidechain. A bus fed by tracks that are all silent
+        // hears nothing.
         let input_heard = inputs
             .iter()
-            .take(2)
+            .take(4)
             .any(|ch| ch.iter().take(buf_size).any(|s| *s != 0.0));
 
         // Mix in send inputs arriving at this track (return routing). Sends
@@ -1608,12 +1626,29 @@ impl AudioNode for TrackNode {
         // utility, filter, fader and meters over a block of zeros: three
         // quarters of the audio thread's time on a 127-track FL song. What
         // those stages remember moves on as it would have.
+        //
+        // A track with plug-ins takes the same way when every one of them
+        // is asleep (smart disable): a reverb on an empty track used to run
+        // for the whole song.
+        let transport = hardwave_plugin_host::types::TransportInfo {
+            playing: ctx.playing,
+            tempo: ctx.tempo,
+            position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
+            time_sig: ctx.time_sig,
+            sample_rate: ctx.sample_rate,
+            position_samples: ctx.position_samples,
+        };
+        // Where the song is, so a plug-in in this chain can work in beats
+        // rather than only in milliseconds.
+        self.chain.set_smart_disable(ctx.smart_disable);
+        self.chain.set_transport(transport);
         if !input_heard
             && !session_playing
             && !clip_heard
-            && self.chain.slots.is_empty()
+            && self.chain.asleep_through(midi_in, None)
             && (self.frozen || self.utility.at_rest())
         {
+            self.chain.pass_asleep(transport, buf_size);
             self.pass_silence(buf_size);
             return;
         }
@@ -1671,17 +1706,6 @@ impl AudioNode for TrackNode {
             let (out_left, out_rest) = outputs.split_at_mut(1);
             let out_l = &mut out_left[0];
             let out_r = &mut out_rest[0];
-            // Where the song is, so a plug-in in this chain can work in
-            // beats rather than only in milliseconds.
-            self.chain
-                .set_transport(hardwave_plugin_host::types::TransportInfo {
-                    playing: ctx.playing,
-                    tempo: ctx.tempo,
-                    position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
-                    time_sig: ctx.time_sig,
-                    sample_rate: ctx.sample_rate,
-                    position_samples: ctx.position_samples,
-                });
             self.chain.process(
                 out_l,
                 out_r,
@@ -1758,11 +1782,36 @@ impl AudioNode for TrackNode {
         //
         // Refilled in place rather than collected into a new Vec: reset now
         // runs on the audio thread, on stop and on a playhead jump, and
-        // allocating there is what a dropout sounds like. After the clear the
-        // capacity from the last fill is enough for the same clips.
-        self.cached_buffers.clear();
-        for clip in &self.clips {
-            self.cached_buffers.push(self.pool.get(&clip.source_id));
+        // allocating there is what a dropout sounds like. The capacity from
+        // the last fill is enough for the same clips.
+        //
+        // Never waits on the pool either: when a sample is being loaded at
+        // this moment, a clip keeps the buffer it had (the next reset or
+        // graph build picks up the new one). Waiting here put the audio
+        // thread behind the loader on every stop or jump made while samples
+        // were loading.
+        //
+        // Nor does it free a sample here: a buffer the pool let go of stays
+        // (the clip went silent after a stop when the pool's cache had moved
+        // it out), and one the pool replaced is retired, not dropped (see
+        // `retired_buffers`); with no room left to retire it, the clip keeps
+        // the old one until the next graph build.
+        self.cached_buffers.resize(self.clips.len(), None);
+        for (cached, clip) in self.cached_buffers.iter_mut().zip(&self.clips) {
+            let Ok(Some(fresh)) = self.pool.try_get(&clip.source_id) else {
+                continue;
+            };
+            if cached.as_ref().is_some_and(|c| Arc::ptr_eq(c, &fresh)) {
+                continue;
+            }
+            match cached.take() {
+                None => *cached = Some(fresh),
+                Some(old) if self.retired_buffers.len() < self.retired_buffers.capacity() => {
+                    self.retired_buffers.push(old);
+                    *cached = Some(fresh);
+                }
+                Some(old) => *cached = Some(old),
+            }
         }
     }
 }
@@ -1859,6 +1908,7 @@ mod tests {
 
     fn block(node: &mut TrackNode, position: u64, size: usize) -> Vec<f32> {
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: size as u32,
@@ -1957,6 +2007,7 @@ mod tests {
         Arc::clone(&node.meter).set_mix(1.0, 1.0, 0.0);
         let _ = block(&mut node, 96_256, 256);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: 256,
@@ -2037,6 +2088,7 @@ mod tests {
             treat,
         }]);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: 256,
@@ -2138,6 +2190,7 @@ mod tests {
             treat,
         }]);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 512,
             tempo: 120.0,
@@ -2242,6 +2295,7 @@ mod tests {
             treat: ClipTreat::default(),
         }]);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 512,
             tempo: 120.0,
@@ -2361,6 +2415,7 @@ mod tests {
         node.set_volume_db(-100.0); // fader at -inf
 
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48000.0,
             position_ticks: 0,
             buffer_size: 64,
@@ -2517,6 +2572,7 @@ mod silence_tests {
     /// left side, and whether the node said the block was silent.
     fn heard(node: &mut TrackNode, position: u64, input: f32) -> (Vec<f32>, bool) {
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: 512,
@@ -2589,5 +2645,244 @@ mod silence_tests {
         let (tail, silent) = heard(&mut node, 512, 0.0);
         assert!(!silent);
         assert!(tail.iter().any(|s| *s != 0.0), "the tail is heard");
+    }
+
+    /// A bus's short block (see `AudioNode::process`): only its own frames
+    /// are read and written.
+    #[test]
+    fn a_short_block_reads_only_its_own_frames() {
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), AudioPool::new(), meter);
+        crate::graph::run_short_block_after_a_full_one(&mut node, 512, 16);
+    }
+
+    /// A stop or a jump while a sample is being loaded: the audio thread
+    /// used to wait for the loader to finish writing to the pool. Now it
+    /// does not wait, and the clip keeps the buffer it had.
+    #[test]
+    fn a_reset_never_waits_for_a_loader_and_keeps_its_buffers() {
+        let pool = AudioPool::new();
+        pool.insert(
+            "s".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![vec![0.5; 480], vec![0.5; 480]],
+                sample_rate: 48_000,
+                num_frames: 480,
+            },
+        );
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool.clone(), meter);
+        node.set_clips(vec![ClipRegion {
+            source_id: "s".into(),
+            timeline_start: 0,
+            timeline_end: 480,
+            source_offset: 0,
+            gain: 1.0,
+            muted: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            reversed: false,
+            source_step: 1.0,
+            warp: Vec::new(),
+            treat: ClipTreat::default(),
+        }]);
+        let loader = pool.hold_for_writing();
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let audio = std::thread::spawn(move || {
+            node.reset();
+            done_tx.send(()).unwrap();
+            node
+        });
+        let waited = done
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_err();
+        drop(loader);
+        let node = audio.join().unwrap();
+        assert!(!waited, "reset waited for the loader");
+        assert!(node.cached_buffers[0].is_some(), "the clip kept its buffer");
+        // With the pool free again a reset picks up the pool's buffer.
+        let mut node = node;
+        node.reset();
+        assert!(node.cached_buffers[0].is_some());
+    }
+
+    /// A reset frees no sample on the audio thread: one the pool replaced is
+    /// kept aside for the node's own drop, off the audio thread, and one
+    /// the pool let go of keeps playing instead of going silent.
+    #[test]
+    fn a_reset_never_frees_a_sample() {
+        let pool = AudioPool::new();
+        let buffer = |v: f32| crate::audio_pool::AudioBuffer {
+            channels: vec![vec![v; 480], vec![v; 480]],
+            sample_rate: 48_000,
+            num_frames: 480,
+        };
+        pool.insert("s".to_string(), buffer(0.5));
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool.clone(), meter);
+        node.set_clips(vec![ClipRegion {
+            source_id: "s".into(),
+            timeline_start: 0,
+            timeline_end: 480,
+            source_offset: 0,
+            gain: 1.0,
+            muted: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            reversed: false,
+            source_step: 1.0,
+            warp: Vec::new(),
+            treat: ClipTreat::default(),
+        }]);
+        let first = Arc::downgrade(node.cached_buffers[0].as_ref().unwrap());
+
+        // Replaced in the pool: the node holds the only reference left.
+        pool.insert("s".to_string(), buffer(0.25));
+        node.reset();
+        assert_eq!(
+            node.cached_buffers[0].as_ref().unwrap().channels[0][0],
+            0.25
+        );
+        assert!(
+            first.upgrade().is_some(),
+            "the old sample is not freed in reset"
+        );
+        assert_eq!(node.retired_buffers.len(), 1);
+
+        // Let go of by the pool: the clip keeps it.
+        pool.remove("s");
+        node.reset();
+        assert_eq!(
+            node.cached_buffers[0].as_ref().unwrap().channels[0][0],
+            0.25
+        );
+
+        // Freed with the node, on whichever thread drops it.
+        drop(node);
+        assert!(first.upgrade().is_none());
+    }
+}
+
+#[cfg(test)]
+mod smart_disable_tests {
+    use super::*;
+    use crate::insert_chain::tests::Ringer;
+    use hardwave_plugin_host::types::Tail;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// A track with a reverb on it and nothing to play: the reverb is called
+    /// until it has rung out, then the track writes silence without calling
+    /// it, and says its output is silent so nothing downstream sums it.
+    #[test]
+    fn a_reverb_on_an_empty_track_stops_being_called() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let skipped = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), skipped.clone());
+        ringer.tail = Tail::Samples(4_800);
+        let mut node = TrackNode::new(
+            "t".into(),
+            "T".into(),
+            AudioPool::new(),
+            Arc::new(TrackMeterState::default()),
+        );
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "verb".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: false,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let inputs: [&[f32]; 0] = [];
+        let mut run = |k: usize, smart: bool| {
+            let ctx = ProcessContext {
+                smart_disable: smart,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: (k * 256) as u64,
+                playing: true,
+            };
+            let mut out = vec![vec![0.0; 256]; 4];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+            node.output_is_silent()
+        };
+        for k in 0..100 {
+            run(k, true);
+        }
+        let asleep = calls.load(Ordering::Relaxed);
+        assert!(asleep < 60, "called {asleep} times on silence");
+        for k in 100..200 {
+            assert!(run(k, true), "silence, said as such");
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), asleep, "not called");
+        assert_eq!(skipped.load(Ordering::Relaxed), (200 - asleep) * 256);
+        // Smart disable off: called every block again.
+        for k in 200..210 {
+            run(k, false);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), asleep + 10);
+    }
+
+    /// A sleeping plug-in keyed from another track wakes when the key
+    /// sounds, though nothing plays on the track itself.
+    #[test]
+    fn a_loud_sidechain_wakes_a_keyed_plugin_on_a_quiet_track() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), Arc::new(AtomicU32::new(0)));
+        ringer.tail = Tail::Samples(0);
+        let mut node = TrackNode::new(
+            "t".into(),
+            "T".into(),
+            AudioPool::new(),
+            Arc::new(TrackMeterState::default()),
+        );
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "duck".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: true,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let silence = vec![0.0_f32; 256];
+        let key = vec![0.5_f32; 256];
+        for k in 0..12u64 {
+            let ctx = ProcessContext {
+                smart_disable: true,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: k * 256,
+                playing: true,
+            };
+            let sc: &[f32] = if k < 4 { &silence } else { &key };
+            let inputs: [&[f32]; 4] = [&silence, &silence, sc, sc];
+            let mut out = vec![vec![0.0; 256]; 4];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1 + 8);
     }
 }

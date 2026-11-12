@@ -1347,6 +1347,7 @@ mod tests {
         {
             let t = p.track_mut(&id).unwrap();
             t.inserts.push(crate::track::PluginSlot {
+                allow_smart_disable: None,
                 id: "slot-a".into(),
                 plugin_id: "hardwave.native.filter".into(),
                 enabled: true,
@@ -1763,6 +1764,7 @@ mod tests {
         let tid = p.tracks[1].id.clone();
         if let Some(t) = p.track_mut(&tid) {
             t.inserts.push(PluginSlot {
+                allow_smart_disable: None,
                 id: "s1".into(),
                 plugin_id: "hardwave.native.reverb".into(),
                 enabled: true,

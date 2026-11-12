@@ -977,6 +977,34 @@ export function AudioSettings({ onClose }: AudioSettingsProps) {
               </button>
             </div>
             <ReleaseInBackgroundRow />
+            <div style={{
+              marginTop: 8,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '6px 8px',
+              background: 'rgba(0,0,0,0.25)',
+              borderRadius: hw.radius.sm,
+              border: `1px solid ${audioPrefs.smartDisable ? hw.accent : hw.borderDark}`,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 11, color: hw.textSecondary }}>{tr('Smart disable')}</span>
+                <span style={{ fontSize: 9, color: hw.textFaint }}>
+                  {tr('Stops calling a plug-in while its input is silent and its sound has died away, and calls it again the moment sound, notes or a knob move arrive. Saves CPU on big songs. Each plug-in can opt out from its slot menu.')}
+                </span>
+              </div>
+              <button
+                onClick={() => audioPrefs.setSmartDisable(!audioPrefs.smartDisable)}
+                style={{
+                  padding: '2px 10px', fontSize: 10, fontWeight: 600,
+                  borderRadius: hw.radius.sm, border: 'none',
+                  cursor: 'pointer',
+                  background: audioPrefs.smartDisable ? hw.accent : 'rgba(255,255,255,0.08)',
+                  color: audioPrefs.smartDisable ? '#fff' : hw.textSecondary,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {audioPrefs.smartDisable ? tr('On') : tr('Off')}
+              </button>
+            </div>
           </>)}
 
           {tab === 'midi' && (<>

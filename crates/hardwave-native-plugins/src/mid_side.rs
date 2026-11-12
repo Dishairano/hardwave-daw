@@ -7,7 +7,7 @@ use crate::format;
 use hardwave_dsp::stereo::{decode_ms, encode_ms};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -243,6 +243,12 @@ impl HostedPlugin for NativeMidSide {
             self.solo = solo_from_norm(v);
         }
         Ok(())
+    }
+
+    /// Nothing is left once the input stops: every sample out comes from
+    /// the sample in at the same moment.
+    fn tail(&self) -> Tail {
+        Tail::Samples(0)
     }
 
     fn latency_samples(&self) -> u32 {

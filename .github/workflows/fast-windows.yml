@@ -27,7 +27,7 @@ on:
       - 'fast-v*'
 
 concurrency:
-  group: fast-windows
+  group: fast-windows-${{ github.ref_name }}
   cancel-in-progress: true
 
 # Read-only, except the one job that publishes the test build.

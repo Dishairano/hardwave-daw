@@ -378,6 +378,7 @@ impl AudioDeviceManager {
         for line in self.thread_priority_lines() {
             log::info!("{line}");
         }
+        thread_priority::log_missed_audio_threads();
     }
 
     /// The log lines due now: one per stream whose thread has run its
