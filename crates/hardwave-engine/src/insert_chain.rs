@@ -544,7 +544,12 @@ impl InsertChain {
             if s.sidechain_active && !key_quiet {
                 return false;
             }
-            if !self.smart || s.sleep.allowed == Some(false) || !s.sleep.asleep || s.sleep.poked {
+            if !self.smart
+                || s.sleep.allowed == Some(false)
+                || !s.sleep.asleep
+                || s.sleep.poked
+                || s.plugin.has_pending_changes()
+            {
                 return false;
             }
         }
@@ -679,7 +684,15 @@ impl InsertChain {
             let input_quiet =
                 main_quiet && sc_quiet && midi_in.is_empty() && !slot.sleep.notes_held();
             let may = smart && slot.sleep.allowed != Some(false);
-            if may && slot.sleep.asleep && input_quiet && !slot.sleep.poked && !jumped {
+            // A change from the plug-in's own window wakes it like a host
+            // parameter change does.
+            if may
+                && slot.sleep.asleep
+                && input_quiet
+                && !slot.sleep.poked
+                && !jumped
+                && !slot.plugin.has_pending_changes()
+            {
                 // Still nothing to do: silence out, and the plug-in's own
                 // clock moves on as if it had run.
                 slot.plugin.skip_silence(n);
@@ -2278,6 +2291,8 @@ pub(crate) mod tests {
         pub(crate) told_silent: Arc<std::sync::atomic::AtomicBool>,
         /// Where the song was, as the host last said.
         pub(crate) heard_pos: Arc<std::sync::atomic::AtomicU64>,
+        /// A change from its own window waits (`has_pending_changes`).
+        pub(crate) waiting: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl Ringer {
@@ -2306,6 +2321,7 @@ pub(crate) mod tests {
                 hum: 0.0,
                 told_silent: Default::default(),
                 heard_pos: Default::default(),
+                waiting: Default::default(),
             }
         }
     }
@@ -2390,6 +2406,9 @@ pub(crate) mod tests {
         fn skip_silence(&mut self, num_samples: usize) {
             self.skipped
                 .fetch_add(num_samples as u32, Ordering::Relaxed);
+        }
+        fn has_pending_changes(&self) -> bool {
+            self.waiting.load(Ordering::Relaxed)
         }
     }
 
@@ -2524,6 +2543,36 @@ pub(crate) mod tests {
             "called once for each new value, not for the repeats"
         );
         assert!(chain.slots[0].sleep.is_asleep());
+    }
+
+    /// A knob moved in the plug-in's own window (or a flush it asked for)
+    /// gets a sleeping plug-in called, as a host parameter change does, so
+    /// the change reaches its audio side and is reported back.
+    #[test]
+    fn a_change_from_its_own_window_wakes_a_sleeping_plugin() {
+        let waiting = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&waiting);
+        let (mut chain, probe) = ringer_chain(|r| {
+            r.tail = hardwave_plugin_host::types::Tail::Samples(0);
+            r.waiting = flag;
+        });
+        let silence = vec![0.0; BLOCK];
+        run(&mut chain, 0, &silence, &[]);
+        run(&mut chain, BLOCK as u64, &silence, &[]);
+        let asleep = probe.calls.load(Ordering::Relaxed);
+        assert!(chain.slots[0].sleep.is_asleep(), "nothing to do");
+        assert!(chain.asleep_through(&[], None));
+        waiting.store(true, Ordering::Relaxed);
+        assert!(!chain.asleep_through(&[], None), "a change waits");
+        run(&mut chain, 2 * BLOCK as u64, &silence, &[]);
+        assert_eq!(probe.calls.load(Ordering::Relaxed), asleep + 1);
+        waiting.store(false, Ordering::Relaxed);
+        run(&mut chain, 3 * BLOCK as u64, &silence, &[]);
+        assert_eq!(
+            probe.calls.load(Ordering::Relaxed),
+            asleep + 1,
+            "asleep again"
+        );
     }
 
     /// A playhead jump, MIDI or a state load each get a sleeping plug-in

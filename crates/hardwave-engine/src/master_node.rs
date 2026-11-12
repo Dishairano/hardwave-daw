@@ -389,6 +389,15 @@ mod tests {
         }
     }
 
+    /// The master's short block (see `AudioNode::process`): it sums only
+    /// the block's frames of its inputs.
+    #[test]
+    fn a_short_block_reads_only_its_own_frames() {
+        let mut node = MasterNode::new(Arc::new(AtomicF64::new(0.0)), Some("master".into()));
+        let out = crate::graph::run_short_block_after_a_full_one(&mut node, 512, 16);
+        assert!(out[0][..16].iter().any(|s| *s != 0.0), "the input is heard");
+    }
+
     /// The song's plug-ins loaded twice (two audio restarts close together)
     /// leave one limiter on the master, not two in a row.
     #[test]
