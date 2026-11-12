@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ExportOutcome } from './exportNotice'
+import { settleExport, type ExportOutcome } from './exportNotice'
 import { renderBounds } from './exportBounds'
 import { createPortal } from 'react-dom'
 import { listen } from '@tauri-apps/api/event'
@@ -254,11 +254,10 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
           mp3BitrateKbps: mp3Bitrate,
           oggQuality,
         })
-        if (result.cancelled) {
-          onError(t('Export cancelled'))
-        } else {
-          onComplete({ path: result.folder, duration_secs: result.duration_secs })
-        }
+        await settleExport(result, {
+          cancelled: onCancel,
+          finished: (r) => onComplete({ path: r.folder, duration_secs: r.duration_secs }),
+        })
       } catch (err) {
         onError(String(err))
       } finally {
@@ -311,17 +310,18 @@ export function ExportDialog({ initial, onCancel, onComplete, onError }: Props) 
         mp3BitrateKbps: mp3Bitrate,
         oggQuality,
       })
-      if (result.cancelled) {
-        onError(t('Export cancelled'))
-      } else {
-        if (playAfter) {
-          try {
-            const { openPath } = await import('@tauri-apps/plugin-opener')
-            await openPath(result.path)
-          } catch {}
-        }
-        onComplete(result)
-      }
+      await settleExport(result, {
+        cancelled: onCancel,
+        finished: async (r) => {
+          if (playAfter) {
+            try {
+              const { openPath } = await import('@tauri-apps/plugin-opener')
+              await openPath(r.path)
+            } catch {}
+          }
+          onComplete(r)
+        },
+      })
     } catch (err) {
       onError(String(err))
     } finally {
