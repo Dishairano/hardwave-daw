@@ -25,6 +25,13 @@ pub trait AudioNode: Send {
 
     /// Process audio. Reads from `inputs`, writes to `outputs`.
     /// Each slice is one channel of audio (non-interleaved).
+    ///
+    /// The block is `ctx.buffer_size` frames, which can be fewer than the
+    /// graph's block size (the rest of a bigger driver block, or a block cut
+    /// at the loop end). Every input slice is exactly that long. The output
+    /// buffers are the graph's size, holding an older block past the frames
+    /// of this one: a node writes the block's frames (it may cut the buffers
+    /// to them) and must not read or pass on anything past them.
     fn process(
         &mut self,
         inputs: &[&[f32]],
@@ -1156,6 +1163,51 @@ impl NodeWork<'_> {
         std::mem::swap(&mut scratch.outputs, buffers);
         *silent = idle || node.output_is_silent();
     }
+}
+
+/// The short-block contract (see [`AudioNode::process`]) for a node's own
+/// tests: a full block, then a `short` one with inputs exactly that long
+/// and the graph-size outputs holding the full block, as the graph hands
+/// them over. A read past the block's inputs panics. Returns the outputs.
+#[cfg(test)]
+pub(crate) fn run_short_block_after_a_full_one(
+    node: &mut dyn AudioNode,
+    graph_size: usize,
+    short: usize,
+) -> Vec<Vec<f32>> {
+    let at = |position_samples: u64, frames: usize| ProcessContext {
+        sample_rate: 48_000.0,
+        buffer_size: frames as u32,
+        tempo: 120.0,
+        time_sig: (4, 4),
+        position_samples,
+        position_ticks: 0,
+        playing: true,
+    };
+    let mut outputs = vec![vec![0.0f32; graph_size]; NODE_CHANNELS];
+    let full = vec![0.5f32; graph_size];
+    let inputs = [&full[..], &full[..], &full[..], &full[..]];
+    node.process(
+        &inputs,
+        &mut outputs,
+        &[],
+        &mut Vec::new(),
+        &at(0, graph_size),
+    );
+    let part = vec![0.25f32; short];
+    let inputs = [&part[..], &part[..], &part[..], &part[..]];
+    node.process(
+        &inputs,
+        &mut outputs,
+        &[],
+        &mut Vec::new(),
+        &at(graph_size as u64, short),
+    );
+    for ch in outputs.iter().take(2) {
+        assert!(ch.len() >= short, "the block's frames are written");
+        assert!(ch[..short].iter().all(|s| s.is_finite()));
+    }
+    outputs
 }
 
 #[cfg(test)]

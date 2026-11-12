@@ -2599,6 +2599,15 @@ mod silence_tests {
         assert!(tail.iter().any(|s| *s != 0.0), "the tail is heard");
     }
 
+    /// A bus's short block (see `AudioNode::process`): only its own frames
+    /// are read and written.
+    #[test]
+    fn a_short_block_reads_only_its_own_frames() {
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), AudioPool::new(), meter);
+        crate::graph::run_short_block_after_a_full_one(&mut node, 512, 16);
+    }
+
     /// A stop or a jump while a sample is being loaded: the audio thread
     /// used to wait for the loader to finish writing to the pool. Now it
     /// does not wait, and the clip keeps the buffer it had.

@@ -2322,6 +2322,14 @@ mod tests {
         vec![vec![0.0; n], vec![0.0; n]]
     }
 
+    /// An instrument track's short block (see `AudioNode::process`): what
+    /// is routed into it is mixed in for the block's frames only.
+    #[test]
+    fn a_short_block_reads_only_its_own_frames() {
+        let mut node = make_node();
+        crate::graph::run_short_block_after_a_full_one(&mut node, 512, 16);
+    }
+
     fn ctx_at(sr: f64, n: u32, pos: u64, playing: bool) -> ProcessContext {
         ProcessContext {
             sample_rate: sr,
