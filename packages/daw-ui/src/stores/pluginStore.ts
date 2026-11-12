@@ -26,6 +26,9 @@ interface ScanProgress {
 
 interface PluginState {
   plugins: PluginDescriptor[]
+  /** The list has been read (a scan, or the plug-ins the app knows): until
+   *  then an empty `plugins` says nothing about what is installed. */
+  listed: boolean
   scanning: boolean
   scanProgress: ScanProgress | null
   lastDiff: ScanDiff
@@ -59,6 +62,7 @@ interface PluginState {
 
 export const usePluginStore = create<PluginState>((set, get) => ({
   plugins: [],
+  listed: false,
   scanning: false,
   scanProgress: null,
   lastDiff: { added: [], removed: [] },
@@ -71,7 +75,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     set({ scanning: true, scanProgress: { count: 0, current: '' } })
     const plugins = await invoke<PluginDescriptor[]>('scan_plugins')
     const lastDiff = await invoke<ScanDiff>('get_last_scan_diff')
-    set({ plugins, lastDiff, scanning: false, scanProgress: null })
+    set({ plugins, listed: true, lastDiff, scanning: false, scanProgress: null })
   },
 
   setScanProgress: (p) => set({ scanProgress: p }),
@@ -79,14 +83,16 @@ export const usePluginStore = create<PluginState>((set, get) => ({
   loadCachedPlugins: async () => {
     const plugins = await invoke<PluginDescriptor[]>('get_plugins')
     const lastDiff = await invoke<ScanDiff>('get_last_scan_diff')
-    set({ plugins, lastDiff })
+    set({ plugins, listed: true, lastDiff })
   },
 
   showKnownPlugins: async () => {
     if (get().scanning) return
     const plugins = await invoke<PluginDescriptor[]>('get_plugins').catch(() => null)
-    // A scan that started meanwhile has the newer list.
-    if (plugins && !get().scanning) set({ plugins })
+    // A scan that started meanwhile has the newer list. A list that could
+    // not be read counts as read: Scan is then the way to fill it.
+    if (get().scanning) return
+    set(plugins ? { plugins, listed: true } : { listed: true })
   },
 
   refreshScanDiff: async () => {

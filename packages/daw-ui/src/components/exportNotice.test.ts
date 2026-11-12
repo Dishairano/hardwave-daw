@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeExport } from './exportNotice'
+import { describeExport, settleExport } from './exportNotice'
 
 describe('the export notice', () => {
   it('names the format and the loudness of the file', () => {
@@ -25,5 +25,25 @@ describe('the export notice', () => {
 
   it('still says something for a cancelled or old-style result', () => {
     expect(describeExport({ path: 'x.wav', duration_secs: 1 }).title).toBe('Exported 1.0 s to WAV')
+  })
+})
+
+describe('the end of an export', () => {
+  it('closes quietly when the render was cancelled, with no error box', async () => {
+    const seen: string[] = []
+    await settleExport({ path: 'x.wav', duration_secs: 1, cancelled: true }, {
+      finished: () => { seen.push('finished') },
+      cancelled: () => { seen.push('cancelled') },
+    })
+    expect(seen).toEqual(['cancelled'])
+  })
+
+  it('hands a finished file on, after what it waits for', async () => {
+    const seen: string[] = []
+    await settleExport({ path: 'x.wav', duration_secs: 1, cancelled: false }, {
+      finished: async (r) => { await Promise.resolve(); seen.push(`finished ${r.path}`) },
+      cancelled: () => { seen.push('cancelled') },
+    })
+    expect(seen).toEqual(['finished x.wav'])
   })
 })

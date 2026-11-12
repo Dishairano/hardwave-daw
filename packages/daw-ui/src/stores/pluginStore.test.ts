@@ -15,12 +15,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 const { usePluginStore } = await import('./pluginStore')
-const { tabListsPlugins } = await import('../components/browser/Browser')
+const { tabListsPlugins, showsScanHint } = await import('../components/browser/Browser')
 
 describe('the browser lists the plug-ins the app already knows', () => {
   beforeEach(() => {
     calls.length = 0
-    usePluginStore.setState({ plugins: [], scanning: false })
+    usePluginStore.setState({ plugins: [], scanning: false, listed: false })
   })
 
   it('without a scan, as soon as a tab that lists plug-ins shows', async () => {
@@ -38,5 +38,28 @@ describe('the browser lists the plug-ins the app already knows', () => {
     await usePluginStore.getState().showKnownPlugins()
     expect(calls).toEqual([])
     expect(usePluginStore.getState().plugins).toEqual([])
+  })
+})
+
+describe('"Click Scan to find VST3 & CLAP plugins"', () => {
+  beforeEach(() => {
+    calls.length = 0
+    usePluginStore.setState({ plugins: [], scanning: false, listed: false })
+  })
+
+  it('is not shown while the known plug-ins are still being read', () => {
+    expect(showsScanHint(usePluginStore.getState())).toBe(false)
+  })
+
+  it('is not shown once they are listed', async () => {
+    await usePluginStore.getState().showKnownPlugins()
+    expect(showsScanHint(usePluginStore.getState())).toBe(false)
+  })
+
+  it('is shown when the list was read and is really empty', async () => {
+    usePluginStore.setState({ plugins: [], scanning: false, listed: true })
+    expect(showsScanHint(usePluginStore.getState())).toBe(true)
+    usePluginStore.setState({ scanning: true })
+    expect(showsScanHint(usePluginStore.getState())).toBe(false)
   })
 })
