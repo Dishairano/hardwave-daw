@@ -216,44 +216,95 @@ fn raise_once(
 }
 
 /// Most audio threads listed at once: an output, an input, the exclusive
-/// render thread and the workers, with room to spare.
-const MAX_AUDIO_THREADS: usize = 64;
+/// render thread and the workers, with a stream opened again on every
+/// device or buffer change while an old one winds down: far more room than
+/// that needs.
+const MAX_AUDIO_THREADS: usize = 256;
 
-/// The system ids of the threads raised here, zero for a free entry.
-static AUDIO_THREADS: [AtomicU64; MAX_AUDIO_THREADS] =
-    [const { AtomicU64::new(0) }; MAX_AUDIO_THREADS];
+/// A fixed list of thread ids, zero for a free entry. Lock-free and
+/// allocation-free, since the audio threads add themselves.
+struct ThreadList<const N: usize> {
+    ids: [AtomicU64; N],
+    /// Threads that found the list full and are not in it.
+    missed: AtomicU64,
+}
 
-fn remember_audio_thread(id: u64) {
-    if id == 0 || is_audio_thread(id) {
-        return;
+impl<const N: usize> ThreadList<N> {
+    const fn new() -> Self {
+        Self {
+            ids: [const { AtomicU64::new(0) }; N],
+            missed: AtomicU64::new(0),
+        }
     }
-    for entry in &AUDIO_THREADS {
-        if entry
-            .compare_exchange(0, id, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
+
+    /// Add `id`. False when the list is full; that is counted, so the
+    /// list's users know it is not complete.
+    fn remember(&self, id: u64) -> bool {
+        if id == 0 || self.contains(id) {
+            return true;
+        }
+        for entry in &self.ids {
+            if entry
+                .compare_exchange(0, id, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+        self.missed.fetch_add(1, Ordering::AcqRel);
+        false
+    }
+
+    fn forget(&self, id: u64) {
+        if id == 0 {
             return;
         }
+        for entry in &self.ids {
+            let _ = entry.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Relaxed);
+        }
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        id != 0 && self.ids.iter().any(|e| e.load(Ordering::Acquire) == id)
     }
 }
 
+/// The system ids of the threads raised here.
+static AUDIO_THREADS: ThreadList<MAX_AUDIO_THREADS> = ThreadList::new();
+
+fn remember_audio_thread(id: u64) {
+    AUDIO_THREADS.remember(id);
+}
+
 fn forget_audio_thread(id: u64) {
-    if id == 0 {
-        return;
-    }
-    for entry in &AUDIO_THREADS {
-        let _ = entry.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Relaxed);
-    }
+    AUDIO_THREADS.forget(id);
 }
 
 /// Whether the thread with this system id (`GetCurrentThreadId` on
 /// Windows) renders audio: it was raised by [`raise_current_thread`] and
 /// has not ended. Always false where threads have no id here.
 pub fn is_audio_thread(id: u64) -> bool {
-    id != 0
-        && AUDIO_THREADS
-            .iter()
-            .any(|entry| entry.load(Ordering::Acquire) == id)
+    AUDIO_THREADS.contains(id)
+}
+
+/// How many audio threads found the list full, since the app started: when
+/// not zero, [`is_audio_thread`] can say no to an audio thread, and a tool
+/// that stops threads must stop none.
+pub fn audio_threads_missed() -> u64 {
+    AUDIO_THREADS.missed.load(Ordering::Acquire)
+}
+
+/// Write a log line when more audio threads found the list full since the
+/// last call. For the health poll: the audio thread itself does not format.
+pub fn log_missed_audio_threads() {
+    static LOGGED: AtomicU64 = AtomicU64::new(0);
+    let missed = audio_threads_missed();
+    if LOGGED.swap(missed, Ordering::AcqRel) != missed {
+        log::warn!(
+            "{missed} audio thread(s) found the audio thread list full ({MAX_AUDIO_THREADS}); \
+             the freeze log stops no other threads from now on"
+        );
+    }
 }
 
 /// Put the calling thread below normal priority, for work that may take
@@ -497,6 +548,23 @@ mod tests {
         // No id: never listed.
         remember_audio_thread(0);
         assert!(!is_audio_thread(0));
+    }
+
+    /// A full list says so instead of quietly leaving a thread out.
+    #[test]
+    fn a_full_list_counts_the_threads_it_could_not_take() {
+        let list: ThreadList<4> = ThreadList::new();
+        for id in 1..=4 {
+            assert!(list.remember(id));
+        }
+        assert_eq!(list.missed.load(Ordering::Relaxed), 0);
+        assert!(list.remember(3), "one already listed is no miss");
+        assert!(!list.remember(5));
+        assert!(!list.contains(5));
+        assert_eq!(list.missed.load(Ordering::Relaxed), 1);
+        list.forget(2);
+        assert!(list.remember(5), "room again once a thread ended");
+        assert!(list.contains(5));
     }
 
     #[test]

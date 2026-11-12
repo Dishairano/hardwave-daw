@@ -60,7 +60,14 @@ const AUDIO_THREAD_NAMES: [&str; 4] = [
 /// (MMCSS lowers a thread that used up its share) or never be raised (cpal 0.15 raised its own
 /// thread with the wrong handle, so it stayed at normal). Such a thread is known by its name, or
 /// by having been raised for audio (`raised_for_audio`), which also covers a thread an ASIO
-/// driver made itself once it has called us; past that, anything above normal is left alone.
+/// driver made itself once it has called us; past that, anything above normal is left alone,
+/// whoever raised it.
+///
+/// What this cannot see: a thread a driver made and left at normal priority or below, before
+/// it has called us for the first time. It carries no name of ours and nothing marks it as
+/// audio yet; a driver that renders on such a thread raises it (MMCSS or time-critical) before
+/// its first buffer, which the priority rule covers. When the list of audio threads overflowed
+/// (`audio_threads_missed`), `others` stops no thread at all.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn may_suspend(name: Option<&str>, raised_for_audio: bool, priority: i32, normal: i32) -> bool {
     if raised_for_audio {
@@ -150,6 +157,10 @@ mod windows_stack {
     /// frames: who holds what a stuck main thread waits for. The audio threads are never stopped
     /// (see `may_suspend`), so a snapshot cannot make the sound drop out.
     pub fn others(exe: &str) -> Vec<(String, Vec<Frame>)> {
+        // An audio thread may be missing from the list: then none is known for sure.
+        if hardwave_engine::thread_priority::audio_threads_missed() > 0 {
+            return Vec::new();
+        }
         // SAFETY: plain calls; the snapshot handle is closed below.
         let (me, pid, snapshot) = unsafe {
             (
