@@ -164,7 +164,10 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
   // input is silent and its sound has died away. Off for one that makes
   // sound out of silence (an LFO-driven effect, a generator) and goes quiet
   // when it should not.
-  const smartAllowed = insert?.allowSmartDisable !== false
+  // What the engine does with it now: the producer's choice, or the default
+  // (on for a built-in plug-in; a third-party one is then left out only when
+  // it says itself that it has finished).
+  const smartAllowed = insert?.allowSmartDisable ?? !!insert?.pluginId.startsWith('hardwave.native.')
   const onToggleSmartDisable = useCallback(() => {
     if (!insert) return
     setMenuOpen(false)
@@ -311,7 +314,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             aria-checked={smartAllowed}
             onClick={onToggleSmartDisable}
             disabled={!insert}
-            title={t('Stop calling this plug-in while its input is silent and its sound has died away, to save CPU. Turn it off for a plug-in that should make sound out of silence.')}
+            title={t('Stop calling this plug-in while its input is silent and its sound has died away, to save CPU. Off: a third-party plug-in is left out only when it says itself that it has finished. Untick it for a plug-in that should make sound out of silence.')}
           >
             {smartAllowed ? '\u2713 ' : '\u2003'}{t('Allow smart disable')}
           </button>
