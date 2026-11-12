@@ -547,9 +547,12 @@ mod tests {
                     wait_until(|| gate_state(&|g| g.passed > 0)),
                     "worker resumed"
                 );
-                wait_until(|| {
-                    late.load(Ordering::SeqCst) > 0 || worker_in_b.load(Ordering::SeqCst) > 0
-                });
+                assert!(
+                    wait_until(|| {
+                        late.load(Ordering::SeqCst) > 0 || worker_in_b.load(Ordering::SeqCst) > 0
+                    }),
+                    "the held worker did nothing once let go"
+                );
             }
         };
         pool.run_level(&nodes, &run_b);
