@@ -15,12 +15,13 @@ use crate::clap_ffi::{
     ClapEventNoteExpression, ClapEventParamValue, ClapEventTransport, ClapHost, ClapHostParams,
     ClapInputEvents, ClapIstream, ClapOstream, ClapOutputEvents, ClapParamInfo, ClapPlugin,
     ClapPluginEntry, ClapPluginFactory, ClapPluginGui, ClapPluginLatency, ClapPluginParams,
-    ClapPluginState, ClapProcess, ClapWindow, ClapWindowHandle, CLAP_BEATTIME_FACTOR,
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF,
-    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, CLAP_EXT_GUI,
-    CLAP_EXT_HOST_PARAMS, CLAP_EXT_LATENCY, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
-    CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_TUNING, CLAP_PROCESS_ERROR, CLAP_SECTIME_FACTOR,
-    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
+    ClapPluginState, ClapPluginTail, ClapProcess, ClapWindow, ClapWindowHandle,
+    CLAP_BEATTIME_FACTOR, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_EXPRESSION,
+    CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
+    CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_LATENCY, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
+    CLAP_EXT_TAIL, CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_TUNING, CLAP_PROCESS_CONTINUE,
+    CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR, CLAP_PROCESS_SLEEP, CLAP_PROCESS_TAIL,
+    CLAP_SECTIME_FACTOR, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
     CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use crate::types::*;
@@ -78,6 +79,14 @@ pub struct ClapPluginInstance {
     input_ptrs: Vec<*mut f32>,
     output_ptrs: Vec<*mut f32>,
     event_queue: Box<EncodedEventQueue>,
+    /// The plug-in's `clap.tail` extension, or null when it has none.
+    /// Found when it is activated.
+    tail_ext: *const ClapPluginTail,
+    /// What the plug-in's last `process` returned.
+    last_status: i32,
+    /// The host's word that the next block's input is exact silence, sent
+    /// as the input buffer's constant mask.
+    input_silent: bool,
 }
 
 /// What the main thread needs for this instance's window. CLAP has the
@@ -387,6 +396,9 @@ impl ClapPluginInstance {
             event_queue: Box::new(EncodedEventQueue {
                 events: Vec::with_capacity(MAX_BLOCK_EVENTS),
             }),
+            tail_ext: std::ptr::null(),
+            last_status: CLAP_PROCESS_ERROR,
+            input_silent: false,
         };
         me.refresh_params();
         {
@@ -662,6 +674,13 @@ impl HostedPlugin for ClapPluginInstance {
             .latency_ext()
             .map(|ext| unsafe { ((*ext).get)(self.plugin) })
             .unwrap_or(0);
+        // The tail is asked while playing, from the audio thread, which the
+        // extension allows; the lookup is made here, once. The id is the
+        // constant itself, so finding it allocates nothing.
+        self.tail_ext = unsafe {
+            ((*self.plugin).get_extension)(self.plugin, CLAP_EXT_TAIL.as_ptr() as *const c_char)
+        } as *const ClapPluginTail;
+        self.last_status = CLAP_PROCESS_ERROR;
         let start_ok = unsafe { ((*self.plugin).start_processing)(self.plugin) };
         if !start_ok {
             unsafe { ((*self.plugin).deactivate)(self.plugin) };
@@ -693,6 +712,7 @@ impl HostedPlugin for ClapPluginInstance {
     ) {
         if !self.processing || self.plugin.is_null() || num_samples == 0 {
             // Fail open — pass audio through if the plugin isn't ready.
+            self.last_status = CLAP_PROCESS_ERROR;
             for (ch, output) in outputs.iter_mut().enumerate() {
                 if ch < inputs.len() {
                     output.clear();
@@ -725,12 +745,23 @@ impl HostedPlugin for ClapPluginInstance {
         self.output_ptrs.clear();
         self.output_ptrs
             .extend(outputs.iter_mut().map(|v| v.as_mut_ptr()));
+        // Exact silence in is constant on every channel: a plug-in that
+        // reads the mask can skip its work on it.
+        let constant_mask = if self.input_silent {
+            if channel_count >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << channel_count) - 1
+            }
+        } else {
+            0
+        };
         let audio_in = ClapAudioBuffer {
             data32: self.input_ptrs.as_mut_ptr(),
             data64: std::ptr::null_mut(),
             channel_count,
             latency: 0,
-            constant_mask: 0,
+            constant_mask,
         };
         let mut audio_out = ClapAudioBuffer {
             data32: self.output_ptrs.as_mut_ptr(),
@@ -769,6 +800,7 @@ impl HostedPlugin for ClapPluginInstance {
         };
 
         let status = unsafe { ((*self.plugin).process)(self.plugin, &process) };
+        self.last_status = status;
 
         if status == CLAP_PROCESS_ERROR {
             log::warn!(
@@ -781,6 +813,34 @@ impl HostedPlugin for ClapPluginInstance {
                 }
             }
         }
+    }
+
+    fn tail(&self) -> Tail {
+        if self.tail_ext.is_null() || !self.processing {
+            return Tail::Unknown;
+        }
+        // SAFETY: the extension came from this plug-in when it was
+        // activated and lives as long as it does.
+        let samples = unsafe { ((*self.tail_ext).get)(self.plugin) };
+        if samples >= i32::MAX as u32 {
+            Tail::Infinite
+        } else {
+            Tail::Samples(samples)
+        }
+    }
+
+    fn process_hint(&self) -> ProcessHint {
+        match self.last_status {
+            CLAP_PROCESS_CONTINUE => ProcessHint::Continue,
+            CLAP_PROCESS_CONTINUE_IF_NOT_QUIET => ProcessHint::ContinueIfNotQuiet,
+            CLAP_PROCESS_TAIL => ProcessHint::Tail,
+            CLAP_PROCESS_SLEEP => ProcessHint::Sleep,
+            _ => ProcessHint::None,
+        }
+    }
+
+    fn set_input_silent(&mut self, silent: bool) {
+        self.input_silent = silent;
     }
 
     fn get_parameter_count(&self) -> u32 {
@@ -1866,6 +1926,9 @@ mod flush_tests {
             event_queue: Box::new(EncodedEventQueue {
                 events: Vec::with_capacity(MAX_BLOCK_EVENTS),
             }),
+            tail_ext: std::ptr::null(),
+            last_status: CLAP_PROCESS_ERROR,
+            input_silent: false,
         };
         instance.set_parameter_value(7, 0.73);
         assert_eq!(instance.get_parameter_value(7), 0.333, "waits for a block");

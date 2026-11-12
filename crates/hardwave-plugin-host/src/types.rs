@@ -209,6 +209,69 @@ pub trait HostedPlugin: Send {
     /// delay could not be set in beats. Plug-ins that do not care
     /// ignore it.
     fn set_transport(&mut self, _transport: TransportInfo) {}
+
+    /// How long this plug-in goes on sounding after its input falls
+    /// silent: a reverb's decay, a delay's echoes, a synth's release.
+    ///
+    /// The host stops calling a plug-in whose input has been silent for
+    /// longer than this and whose output has died away, and calls it
+    /// again the moment sound, notes or a knob move arrive. Asked on the
+    /// audio thread, so it must be cheap and must not allocate.
+    fn tail(&self) -> Tail {
+        Tail::Unknown
+    }
+
+    /// What the plug-in said about the block it just processed, beyond
+    /// the audio: a CLAP plug-in's process status, or a VST3 plug-in
+    /// flagging every output channel silent.
+    fn process_hint(&self) -> ProcessHint {
+        ProcessHint::None
+    }
+
+    /// Whether every input channel of the next block is exact silence, so
+    /// a plug-in that can tell (VST3 silence flags, CLAP constant mask)
+    /// may skip its own work on it. Set before `process`.
+    fn set_input_silent(&mut self, _silent: bool) {}
+
+    /// The plug-in was not called for this many samples because its input
+    /// and output were silent. A plug-in with its own free-running clock
+    /// (an LFO, a carrier) moves it on here, so it is where it would have
+    /// been had it been called, and a song sounds the same whether it was
+    /// asleep or not. Audio thread, cheap, no allocation.
+    fn skip_silence(&mut self, _num_samples: usize) {}
+}
+
+/// How long a plug-in goes on sounding after its input falls silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tail {
+    /// The plug-in does not say. The host assumes a few seconds and also
+    /// waits for the output to die away.
+    Unknown,
+    /// This many samples at the rate the plug-in runs at.
+    Samples(u32),
+    /// It may go on sounding forever with silence in (a delay at full
+    /// feedback, a drone): never stop calling it.
+    Infinite,
+}
+
+/// What a plug-in said about its last block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcessHint {
+    /// Nothing beyond the audio.
+    #[default]
+    None,
+    /// Keep calling it, whatever the input (CLAP_PROCESS_CONTINUE).
+    Continue,
+    /// Keep calling it while its output is not quiet
+    /// (CLAP_PROCESS_CONTINUE_IF_NOT_QUIET).
+    ContinueIfNotQuiet,
+    /// Go by its tail (CLAP_PROCESS_TAIL).
+    Tail,
+    /// It needs nothing more until input or events arrive
+    /// (CLAP_PROCESS_SLEEP).
+    Sleep,
+    /// It flagged every output channel silent (VST3 silence flags).
+    OutputSilent,
 }
 
 /// Where the song is, as the host sees it at the start of a block.
