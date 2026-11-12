@@ -1220,16 +1220,10 @@ impl HostedPlugin for Vst3PluginInstance {
                     }
                 }
             } else if inner.output_bus_count > 0 && n_out > 0 {
-                // A channel the plug-in flags silent may hold anything: the
-                // flag is its word that the host can ignore the buffer. It
-                // is made silence here, and a block with every channel
-                // flagged counts as silent output.
+                // Every channel flagged silent: a hint only. The buffer is
+                // what is played, as before, and the host counts the block
+                // silent only when the buffer is.
                 let flags = out_bus.silenceFlags;
-                for (ch, out) in outputs.iter_mut().enumerate().take(n_out) {
-                    if flags & (1u64 << ch) != 0 {
-                        out.fill(0.0);
-                    }
-                }
                 inner.output_silent = flags & channel_mask(n_out) == channel_mask(n_out);
             }
         }

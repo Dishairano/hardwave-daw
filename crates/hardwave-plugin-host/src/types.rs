@@ -238,6 +238,13 @@ pub trait HostedPlugin: Send {
     /// (an LFO, a carrier) moves it on here, so it is where it would have
     /// been had it been called, and a song sounds the same whether it was
     /// asleep or not. Audio thread, cheap, no allocation.
+    ///
+    /// VST3 and CLAP have no way to be told this. Woken, such a plug-in is
+    /// given the true song position (`set_transport`), so anything synced
+    /// to the song lands right, but a free-running LFO inside it carries on
+    /// from where it was when it fell asleep, at a different phase than
+    /// had it run throughout. That is why a third-party plug-in is only
+    /// left out on its own word or the producer's.
     fn skip_silence(&mut self, _num_samples: usize) {}
 }
 
@@ -270,7 +277,8 @@ pub enum ProcessHint {
     /// It needs nothing more until input or events arrive
     /// (CLAP_PROCESS_SLEEP).
     Sleep,
-    /// It flagged every output channel silent (VST3 silence flags).
+    /// It flagged every output channel silent (VST3 silence flags). A hint
+    /// only: the buffer is what is heard.
     OutputSilent,
 }
 
