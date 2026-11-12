@@ -1003,6 +1003,11 @@ pub struct DawEngine {
     /// The threads that share the per-block work. Empty is the audio
     /// thread alone, which is what a machine with one core wants.
     worker_pool: Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
+    /// Pools replaced by a new setting, held until no graph uses them. A
+    /// graph swapped out on the audio thread then never drops the last
+    /// handle there (waking and letting go of every worker, freeing the
+    /// pool): that happens here, on the thread that changes the setting.
+    retired_pools: Mutex<Vec<Arc<crate::parallel::WorkerPool>>>,
     /// The Ableton Link session, when the setting asks for one.
     link: Arc<Mutex<Option<crate::link::LinkSession>>>,
     /// A commercial track to compare the mix against, and how it is
@@ -1195,6 +1200,7 @@ impl DawEngine {
             master_tap: master_tap::new_shared(),
             graph_latency_samples: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             worker_pool: Arc::new(Mutex::new(None)),
+            retired_pools: Mutex::new(Vec::new()),
             link: Arc::new(Mutex::new(None)),
             reference: Arc::new(Mutex::new(None)),
             reference_on: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1312,6 +1318,10 @@ impl DawEngine {
     /// instances actually run their destructors. Returns the number
     /// dropped.
     pub fn drain_insert_graveyard(&self) -> usize {
+        // Helper pools the audio thread has let go of go too.
+        self.retired_pools
+            .lock()
+            .retain(|p| Arc::strong_count(p) > 1);
         let mut graveyard = self.insert_graveyard.lock();
         match graveyard.as_mut() {
             Some(g) => g.drain_and_drop(),
@@ -2924,8 +2934,22 @@ impl DawEngine {
         } else {
             Some(Arc::new(crate::parallel::WorkerPool::new(threads)))
         };
-        *self.worker_pool.lock() = pool;
+        let old = std::mem::replace(&mut *self.worker_pool.lock(), pool);
+        let mut retired = self.retired_pools.lock();
+        retired.extend(old);
+        // Pools no graph holds any more go now, on this thread.
+        retired.retain(|p| Arc::strong_count(p) > 1);
+        drop(retired);
         self.rebuild_graph();
+    }
+
+    /// How many replaced pools are still held for a graph that may use
+    /// them. For the tests.
+    #[doc(hidden)]
+    pub fn retired_worker_pools(&self) -> usize {
+        let mut retired = self.retired_pools.lock();
+        retired.retain(|p| Arc::strong_count(p) > 1);
+        retired.len()
     }
 
     /// What the audio threads got when they asked for real-time priority,
@@ -3415,8 +3439,11 @@ impl DawEngine {
         let buffer_size = (self.audio_device.buffer_size as usize).max(1);
         let device_frames = device_frames.max(1);
         // With the helper threads set on this engine, as playback would
-        // have them (`set_worker_threads`). The nodes are only timed one
-        // by one on the one-thread path.
+        // have them: none unless the caller asked (`set_worker_threads`),
+        // which is the one-thread path with every node timed. With helpers
+        // the block times are playback's, but nodes are not timed one by
+        // one (each thread would need its own clock per node), so the
+        // per-node and per-kind figures stay empty.
         let mut callback = self.offline_callback(
             sample_rate,
             buffer_size,
@@ -4464,6 +4491,7 @@ impl EngineCallback {
             sample_rate,
             buffer_size: buffer_size as usize,
             boards: HashMap::new(),
+            may_wait: false,
         };
         let mut cb = Self {
             builder: BuildMode::Inline(Box::new(builder)),
@@ -5051,6 +5079,9 @@ impl EngineCallback {
         // the lists that describe the new one (`carries`, `sidechain_flags`).
         if !p.pool_read {
             self.graph.keep_pool_of(&mut p.graph);
+            // The setting was not read (its lock was busy on this thread):
+            // the next block builds again to pick it up.
+            self.needs_rebuild = true;
         }
         // The new nodes start with their own level and pan.
         self.mod_mix.clear();
@@ -9804,5 +9835,95 @@ mod smart_disable_resync_tests {
                 .any(|c| matches!(c, EngineCommand::RebuildGraph)),
             "a rebuild was asked for"
         );
+    }
+}
+
+#[cfg(test)]
+mod pool_setting_tests {
+    use super::*;
+
+    #[test]
+    fn a_replaced_pool_a_graph_still_holds_is_let_go_off_the_audio_thread() {
+        let engine = DawEngine::new();
+        engine.set_worker_threads(2);
+        // What a graph on the audio thread holds.
+        let held = engine.worker_pool.lock().clone().expect("a pool");
+        engine.set_worker_threads(1);
+        assert_eq!(engine.retired_worker_pools(), 1, "kept for the graph");
+        // The graph is swapped out on the audio thread: its handle goes,
+        // and it was not the last one, so the pool is not freed there.
+        let audio_thread = std::thread::spawn(move || Arc::strong_count(&held));
+        assert_eq!(audio_thread.join().unwrap(), 2);
+        // The next look on another thread lets it go.
+        assert_eq!(engine.retired_worker_pools(), 0);
+        engine.set_worker_threads(0);
+        assert_eq!(engine.retired_worker_pools(), 0, "nothing held it");
+    }
+
+    /// A callback whose graphs get `pool`, and the lock on the setting.
+    fn callback_with_pool(
+        pool: Arc<crate::parallel::WorkerPool>,
+    ) -> (
+        EngineCallback,
+        Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
+    ) {
+        let setting = Arc::new(Mutex::new(Some(pool)));
+        let engine = DawEngine::new();
+        let callback =
+            engine.offline_callback(48_000, 512, 0, None, None, |_| {}, Arc::clone(&setting));
+        (callback, setting)
+    }
+
+    /// Hold the setting's lock on another thread for a moment, as the
+    /// window does when it reads the thread count.
+    fn hold_for_a_moment(
+        setting: &Arc<Mutex<Option<Arc<crate::parallel::WorkerPool>>>>,
+    ) -> std::thread::JoinHandle<()> {
+        let setting = Arc::clone(setting);
+        let (held, held_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _held = setting.lock();
+            held.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        });
+        held_rx.recv().unwrap();
+        holder
+    }
+
+    #[test]
+    fn the_builder_thread_waits_for_the_setting_rather_than_miss_it() {
+        let (mut callback, setting) =
+            callback_with_pool(Arc::new(crate::parallel::WorkerPool::new(2)));
+        let BuildMode::Inline(builder) = &mut callback.builder else {
+            unreachable!("an offline callback builds inline");
+        };
+        builder.may_wait = true;
+        let holder = hold_for_a_moment(&setting);
+        let project = callback.project.lock().clone();
+        let mut meters = callback.track_meters.lock();
+        let prepared = builder.build(&project, &mut meters, 1);
+        holder.join().unwrap();
+        assert!(prepared.pool_read, "the setting was read");
+        assert_eq!(prepared.graph.worker_threads(), 2);
+    }
+
+    #[test]
+    fn a_build_on_the_audio_thread_that_misses_the_setting_builds_again() {
+        let (mut callback, setting) =
+            callback_with_pool(Arc::new(crate::parallel::WorkerPool::new(2)));
+        let holder = hold_for_a_moment(&setting);
+        let prepared = {
+            let BuildMode::Inline(builder) = &mut callback.builder else {
+                unreachable!("an offline callback builds inline");
+            };
+            let project = callback.project.lock().clone();
+            let mut meters = callback.track_meters.lock();
+            builder.build(&project, &mut meters, callback.graph_seq + 1)
+        };
+        holder.join().unwrap();
+        assert!(!prepared.pool_read, "only tried, and the lock was busy");
+        callback.needs_rebuild = false;
+        drop(callback.install_graph(prepared));
+        assert!(callback.needs_rebuild, "the next block builds again");
     }
 }

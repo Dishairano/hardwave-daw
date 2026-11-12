@@ -244,6 +244,9 @@ fn an_fl_songs_playback_block_by_block() {
         })
         .collect();
     eprintln!("{workers} helper threads, {busy} busy threads beside");
+    if workers > 0 {
+        eprintln!("(with helper threads the nodes are not timed one by one)");
+    }
 
     // The sound is written or compared as it is played, a block at a time.
     use std::io::{Read, Write};
