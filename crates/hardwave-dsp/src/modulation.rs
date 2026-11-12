@@ -59,9 +59,11 @@ impl ModulatedDelay {
         self.lfo_phase = phase.rem_euclid(1.0);
     }
 
-    /// Feedback amount in `[0.0, 0.95]`.
+    /// Feedback amount in `[-0.95, 0.95]`. Negative feedback flips the
+    /// polarity of each trip round the loop (a flanger's Invert), which
+    /// moves the comb's peaks onto its notches.
     pub fn set_feedback(&mut self, feedback: f32) {
-        self.feedback = feedback.clamp(0.0, 0.95);
+        self.feedback = feedback.clamp(-0.95, 0.95);
     }
 
     pub fn reset(&mut self) {

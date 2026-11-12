@@ -327,4 +327,36 @@ mod tests {
             );
         }
     }
+
+    /// One click through a still comb (no sweep): the first echo comes
+    /// back 1 ms later, the second 2 ms later through the feedback. With
+    /// Invert on, the feedback flips polarity, so the second echo comes
+    /// back upside down. Invert used to do nothing: the delay line threw
+    /// the negative feedback away and set it to zero.
+    #[test]
+    fn invert_flips_the_feedback() {
+        let echo_after_feedback = |invert: f64| {
+            let mut p = NativeFlanger::new();
+            p.activate(48_000.0, 512).unwrap();
+            p.set_parameter_value(PARAM_DEPTH, 0.0);
+            p.set_parameter_value(PARAM_FEEDBACK, 0.6);
+            p.set_parameter_value(PARAM_MIX, 1.0);
+            p.set_parameter_value(PARAM_INVERT, invert);
+            let mut click = vec![0.0_f32; 200];
+            click[0] = 1.0;
+            let mut out = vec![Vec::new(), Vec::new()];
+            p.process(&[&click, &click], &mut out, &[], &mut Vec::new(), 200);
+            // 1 ms at 48 kHz is 48 samples: the first echo at 48, the
+            // one round the feedback at 96.
+            assert!((out[0][48] - 1.0).abs() < 1e-4, "first echo {}", out[0][48]);
+            out[0][96]
+        };
+        let plain = echo_after_feedback(0.0);
+        let inverted = echo_after_feedback(1.0);
+        assert!((plain - 0.6).abs() < 1e-4, "plain feedback echo {plain}");
+        assert!(
+            (inverted + 0.6).abs() < 1e-4,
+            "inverted feedback echo {inverted}, expected -0.6"
+        );
+    }
 }
