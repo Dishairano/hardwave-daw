@@ -12,6 +12,7 @@ mod diagnostics;
 mod endpoints;
 mod frontend_updater;
 mod main_window;
+mod meter_tick;
 mod midi_clock;
 mod midi_hotplug;
 mod midi_map;
@@ -1153,8 +1154,16 @@ pub fn run() {
                 // the page. Now only what changed goes, with everything
                 // again every two seconds so a window that starts
                 // listening late catches up.
-                let mut sent_tracks: std::collections::HashMap<String, String> =
-                    std::collections::HashMap::new();
+                //
+                // The tracks' levels are read from their meters' atomics,
+                // outside the engine lock, and only a track whose reading
+                // moved is written out (see `TrackMeterReader`). The engine
+                // lock is held for the device check and the transport alone:
+                // every command the window sends waits for it.
+                let mut track_reader = hardwave_engine::meter_reader::TrackMeterReader::new(
+                    Arc::clone(&engine.lock().track_meters),
+                );
+                let mut master_strip = meter_tick::MasterStrip::default();
                 let mut sent_meters = String::new();
                 let mut sent_transport = String::new();
                 let mut tick: u32 = 0;
@@ -1175,7 +1184,7 @@ pub fn run() {
                     // Single lock acquisition per tick — coalesces what used to be
                     // four separate engine.lock() calls and eliminates per-tick
                     // contention with command handlers.
-                    let (meters, track_payload, transport_payload) = {
+                    let (meters, project, transport_payload) = {
                         use std::sync::atomic::Ordering;
                         let mut eng = engine.lock();
                         // Surface stream death to the user: recovery (device
@@ -1219,49 +1228,6 @@ pub fn run() {
                             }
                         }
                         let meters = eng.master_meter();
-                        // What automation does to each fader and pan, so the
-                        // mixer can move with it.
-                        let automated: std::collections::HashMap<_, _> = eng
-                            .track_automation()
-                            .into_iter()
-                            .map(|(id, v, p)| (id, (v, p)))
-                            .collect();
-                        let mut track_payload: Vec<_> = eng
-                            .track_meter_snapshots()
-                            .into_iter()
-                            .map(|(id, pl, pr, rms, pre_fader)| {
-                                let (auto_db, auto_pan) =
-                                    automated.get(&id).copied().unwrap_or((None, None));
-                                serde_json::json!({
-                                    "id": id,
-                                    "peakL": pl,
-                                    "peakR": pr,
-                                    "rms": rms,
-                                    "preFaderPeak": pre_fader,
-                                    "autoVolumeDb": auto_db,
-                                    "autoPan": auto_pan,
-                                })
-                            })
-                            .collect();
-                        // The master has no track meter of its own (it is not
-                        // an audio-bearing track), so the mixer's master strip
-                        // never moved. It reads the master meter instead.
-                        let master_id = eng
-                            .project
-                            .lock()
-                            .tracks
-                            .iter()
-                            .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
-                            .map(|t| t.id.clone());
-                        if let Some(id) = master_id {
-                            track_payload.push(serde_json::json!({
-                                "id": id,
-                                "peakL": meters.peak_db,
-                                "peakR": meters.peak_db,
-                                "rms": meters.rms_db,
-                                "preFaderPeak": meters.peak_db,
-                            }));
-                        }
                         let pos = eng.transport.position();
                         let playing = eng.transport.is_playing();
                         let bpm = eng.transport.bpm.load(Ordering::Relaxed);
@@ -1289,21 +1255,21 @@ pub fn run() {
                             "loopEnd": loop_end,
                             "sampleRate": sample_rate,
                         });
-                        (meters, track_payload, transport_payload)
+                        (meters, Arc::clone(&eng.project), transport_payload)
                     };
 
-                    let changed_tracks: Vec<serde_json::Value> = track_payload
-                        .into_iter()
-                        .filter(|entry| {
-                            let id = entry["id"].as_str().unwrap_or_default().to_string();
-                            let now = entry.to_string();
-                            if !resend_all && sent_tracks.get(&id) == Some(&now) {
-                                return false;
-                            }
-                            sent_tracks.insert(id, now);
-                            true
-                        })
-                        .collect();
+                    // What automation does to each fader and pan rides along
+                    // with the levels, so the mixer can move with it.
+                    let mut changed_tracks: Vec<serde_json::Value> = Vec::new();
+                    track_reader.changed(resend_all, |id, r| {
+                        changed_tracks.push(meter_tick::track_entry(id, r));
+                    });
+                    // The master has no track meter of its own (it is not
+                    // an audio-bearing track), so the mixer's master strip
+                    // never moved. It reads the master meter instead.
+                    if let Some(entry) = master_strip.changed(&project, &meters, resend_all) {
+                        changed_tracks.push(entry);
+                    }
                     if !changed_tracks.is_empty() {
                         let _ = app_handle.emit("daw:trackMeters", &changed_tracks);
                     }

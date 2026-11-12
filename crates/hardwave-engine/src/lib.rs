@@ -16,6 +16,7 @@ pub mod link;
 pub mod live_midi_fx;
 pub mod master_node;
 pub mod master_tap;
+pub mod meter_reader;
 pub mod metronome;
 pub mod midi_track_node;
 pub mod pan;
