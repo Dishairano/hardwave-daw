@@ -25,6 +25,13 @@ export function tabListsPlugins(tab: Tab): boolean {
   return tab === 'lists' || tab === 'favorites' || tab === 'search'
 }
 
+/** "Click Scan to find VST3 & CLAP plugins" is for a list that was read and
+ *  is empty. It showed while the list was still being read, over the 52
+ *  plug-ins the picker listed. */
+export function showsScanHint(s: { plugins: readonly unknown[]; listed: boolean; scanning: boolean }): boolean {
+  return s.listed && !s.scanning && s.plugins.length === 0
+}
+
 export function Browser() {
   useLanguage()
   const [activeTab, setActiveTab] = useState<Tab>('folders')
@@ -291,7 +298,7 @@ function SearchTab() {
 
 function PluginsTab() {
   useLanguage()
-  const { plugins, scanning, scanPlugins } = usePluginStore()
+  const { plugins, listed, scanning, scanPlugins } = usePluginStore()
   const { selectedTrackId } = useTrackStore()
   const pluginFavorites = useBrowserStore(s => s.pluginFavorites)
   const toggleFav = useBrowserStore(s => s.togglePluginFavorite)
@@ -346,7 +353,7 @@ function PluginsTab() {
         </button>
       </div>
 
-      {plugins.length === 0 && !scanning && (
+      {showsScanHint({ plugins, listed, scanning }) && (
         <div style={{ padding: 16, textAlign: 'center', color: hw.textFaint, fontSize: 12, whiteSpace: 'pre-line' }}>
           {t('Click Scan to find\nVST3 & CLAP plugins')}
         </div>
@@ -354,8 +361,9 @@ function PluginsTab() {
 
       {/* The Hardwave plug-ins are free in here and paid in every
           other host, which is worth saying where a producer is
-          looking for plug-ins rather than only on the website. */}
-      {!scanning && !hasSuitePlugins(plugins) && (
+          looking for plug-ins rather than only on the website. Once the
+          list is read: before, it said so over a list still loading. */}
+      {listed && !scanning && !hasSuitePlugins(plugins) && (
         <div style={{
           margin: '6px 8px', padding: 10, fontSize: 12, lineHeight: 1.5,
           color: hw.textSecondary, background: 'rgba(255,255,255,0.03)',
