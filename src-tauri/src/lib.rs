@@ -124,8 +124,9 @@ pub struct AppState {
     pub osc_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub osc_port: Arc<Mutex<u16>>,
     #[allow(clippy::type_complexity)]
-    pub slot_gui_edit_logs:
-        Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
+    pub slot_gui_edit_logs: Arc<
+        Mutex<std::collections::HashMap<(String, String), hardwave_plugin_host::SharedEditLog>>,
+    >,
     /// Where each insert publishes its gain reduction, keyed by track and
     /// slot. Compressors and limiters worked this out every sample and
     /// Peak levels in and out of each slot, for the plug-in window's meters.

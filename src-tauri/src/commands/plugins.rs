@@ -2009,18 +2009,14 @@ pub fn drain_plugin_knob_moves(state: State<AppState>) -> Vec<PluginKnobMove> {
     let logs = state.slot_gui_edit_logs.lock();
     let mut moves = Vec::new();
     for ((track_id, slot_id), log) in logs.iter() {
-        let taken: Vec<(u32, f64)> = {
-            let mut q = log.lock();
-            std::mem::take(&mut *q)
-        };
-        for (param_id, value) in taken {
+        log.drain(usize::MAX, |param_id, value| {
             moves.push(PluginKnobMove {
                 track_id: track_id.clone(),
                 slot_id: slot_id.clone(),
                 param_id,
                 value: value.clamp(0.0, 1.0),
             });
-        }
+        });
     }
     moves
 }

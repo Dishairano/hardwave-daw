@@ -345,12 +345,10 @@ struct Vst3Inner {
     /// Where the song is, for the plug-in's ProcessContext. A null context
     /// left every tempo-synced delay, LFO, arp and gate without a tempo.
     transport: TransportInfo,
-    /// Values the host set since the last block (automation, a controller,
-    /// our parameter sheet). The controller hears them at once; the audio
-    /// processor only hears what arrives in a block's parameter changes, so
-    /// they wait here. Before this the processor of any plug-in with its
-    /// own controller never heard automation at all.
-    host_param_changes: Vec<(u32, f64)>,
+    /// The parameters automation may record, sorted, for telling which of
+    /// the changes a processor reports are knob moves (and not, say, a
+    /// gain-reduction meter it publishes as a read-only parameter).
+    automatable_ids: Vec<u32>,
     /// MIDI controllers to parameters, as the plug-in's IMidiMapping says,
     /// per (channel, controller); pitch bend is controller 129 and channel
     /// pressure 128. VST3 has no CC events: a plug-in hears CC and pitch
@@ -359,6 +357,10 @@ struct Vst3Inner {
     /// Made once and refilled every block, so processing does not allocate.
     in_changes: vst3::ComWrapper<HostParameterChanges>,
     in_changes_ptr: Option<ComPtr<IParameterChanges>>,
+    /// Where the processor reports parameter changes it made itself in a
+    /// block. Passed as null before, so those never reached the app.
+    out_changes: vst3::ComWrapper<HostParameterChanges>,
+    out_changes_ptr: Option<ComPtr<IParameterChanges>>,
     events: vst3::ComWrapper<HostEventList>,
     events_ptr: Option<ComPtr<IEventList>>,
     /// Input copies kept between blocks.
@@ -398,20 +400,9 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
         // costs one slot and the last move of a gesture always arrives.
         // (It used to be dropped when the audio thread was mid-drain.)
         self.pending.push(id, value);
-        if let Some(mut log) = self.log.try_lock() {
-            if let Some(last) = log.last_mut() {
-                if last.0 == id {
-                    last.1 = value;
-                    return kResultOk;
-                }
-            }
-            // Bounded: if the app is not draining, the oldest moves go
-            // rather than the memory.
-            if log.len() >= 256 {
-                log.remove(0);
-            }
-            log.push((id, value));
-        }
+        // And the app's copy, for automation recording, the same way: it
+        // used try_lock and dropped the move when the app was draining.
+        self.log.push(id, value);
         kResultOk
     }
     unsafe fn endEdit(&self, _id: ParamID) -> tresult {
@@ -614,8 +605,7 @@ impl Vst3PluginInstance {
         // notifies us on every performEdit. The wrapper is held in
         // Vst3Inner so its lifetime tracks the plugin instance.
         let pending_params: crate::types::SharedParamQueue = shared_pending.unwrap_or_default();
-        let gui_edit_log: crate::types::SharedEditLog =
-            shared_log.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        let gui_edit_log: crate::types::SharedEditLog = shared_log.unwrap_or_default();
         let handler_wrapper = vst3::ComWrapper::new(HardwaveComponentHandler {
             pending: Arc::clone(&pending_params),
             log: Arc::clone(&gui_edit_log),
@@ -627,6 +617,13 @@ impl Vst3PluginInstance {
         }
 
         let in_changes = vst3::ComWrapper::new(HostParameterChanges::new());
+        let out_changes = vst3::ComWrapper::new(HostParameterChanges::new());
+        let mut automatable_ids: Vec<u32> = cached_params
+            .iter()
+            .filter(|p| p.automatable)
+            .map(|p| p.id)
+            .collect();
+        automatable_ids.sort_unstable();
         let events = vst3::ComWrapper::new(HostEventList {
             events: Mutex::new(Vec::with_capacity(MAX_EVENTS)),
         });
@@ -656,10 +653,12 @@ impl Vst3PluginInstance {
             gui_edit_log,
             component_handler: Some(handler_wrapper),
             transport: TransportInfo::default(),
-            host_param_changes: Vec::with_capacity(MAX_HOST_CHANGES),
+            automatable_ids,
             midi_map: std::collections::HashMap::new(),
             in_changes_ptr: in_changes.to_com_ptr::<IParameterChanges>(),
             in_changes,
+            out_changes_ptr: out_changes.to_com_ptr::<IParameterChanges>(),
+            out_changes,
             events_ptr: events.to_com_ptr::<IEventList>(),
             events,
             input_scratch: Vec::new(),
@@ -697,21 +696,33 @@ impl Vst3PluginInstance {
 
 impl Vst3Inner {
     /// Move the waiting parameter changes (the plug-in window's edits and
-    /// the host's) into this block's change list, which keeps its room.
-    /// Never waits on the threads that push window edits: the audio thread
-    /// used to lock their queue here every block. Window edits that do not
-    /// fit beside the host's this block stay queued for the next one.
+    /// the host's, one queue with the newest value of each) into this
+    /// block's change list, which keeps its room. Never waits on the threads
+    /// that push window edits: the audio thread used to lock their queue
+    /// here every block. What does not fit this block stays queued for the
+    /// next one.
     fn take_param_changes(&mut self) {
         self.in_changes.clear();
-        let room = MAX_QUEUES.saturating_sub(self.host_param_changes.len());
         let changes = &self.in_changes;
-        self.pending_params.drain(room, |id, value| {
+        self.pending_params.drain(MAX_QUEUES, |id, value| {
             changes.add(id as ParamID, 0, value);
         });
-        for &(id, value) in self.host_param_changes.iter() {
-            self.in_changes.add(id as ParamID, 0, value);
+    }
+
+    /// Hand the app the parameter changes the processor reported in the
+    /// block just run, the automatable ones, as knob moves for automation
+    /// recording and the window. Lock-free and allocation-free.
+    fn report_output_changes(&self) {
+        let count = self.out_changes.count();
+        for i in 0..count {
+            let data = self.out_changes.queues[i].data.lock();
+            let Some(&(_, value)) = data.points.last() else {
+                continue;
+            };
+            if self.automatable_ids.binary_search(&data.id).is_ok() {
+                self.gui_edit_log.push(data.id, value);
+            }
         }
-        self.host_param_changes.clear();
     }
 }
 
@@ -1179,9 +1190,15 @@ impl HostedPlugin for Vst3PluginInstance {
                 data.inputParameterChanges = p.as_ptr();
             }
         }
+        // Somewhere for the processor to report changes it makes itself.
+        inner.out_changes.clear();
+        if let Some(p) = &inner.out_changes_ptr {
+            data.outputParameterChanges = p.as_ptr();
+        }
 
         if let Some(processor) = &inner.processor {
             let res = unsafe { processor.process(&mut data) };
+            inner.report_output_changes();
             if res != kResultOk {
                 log::warn!(
                     "VST3 plugin '{}' process returned {}; zeroing outputs",
@@ -1220,13 +1237,11 @@ impl HostedPlugin for Vst3PluginInstance {
         if let Some(ctrl) = &inner.controller {
             unsafe { ctrl.setParamNormalized(id, value) };
         }
-        // And the audio processor, in the next block. A full queue keeps
-        // the newest value of a parameter already in it.
-        if let Some(slot) = inner.host_param_changes.iter_mut().find(|(p, _)| *p == id) {
-            slot.1 = value;
-        } else if inner.host_param_changes.len() < MAX_HOST_CHANGES {
-            inner.host_param_changes.push((id, value));
-        }
+        // And the audio processor, in the next block, through the same
+        // queue as the window's edits: whichever of the two came last wins.
+        // (Host values were applied after the window's in each block, so an
+        // older host value could undo a newer knob move.)
+        inner.pending_params.push(id, value);
     }
 
     fn flush_parameters(&mut self) {
@@ -1237,7 +1252,7 @@ impl HostedPlugin for Vst3PluginInstance {
         if !inner.processing || inner.processor.is_none() || inner.in_changes_ptr.is_none() {
             return;
         }
-        if inner.host_param_changes.is_empty() && !inner.pending_params.has_pending() {
+        if !inner.pending_params.has_pending() {
             return;
         }
         inner.take_param_changes();
@@ -1305,11 +1320,10 @@ impl HostedPlugin for Vst3PluginInstance {
         if res != kResultOk {
             return Err(format!("setState failed ({res})"));
         }
-        // Values the host set before this state are older than it: handed
-        // over after it, they put the old knobs back over a loaded preset.
-        // (The window's queue may be shared with a copy for the window,
-        // so it is left alone.)
-        inner.host_param_changes.clear();
+        // Values set before this state (by the host or in the plug-in's
+        // window) are older than it: handed over after it, they put the old
+        // knobs back over a loaded preset.
+        inner.pending_params.discard();
         // A controller of its own does not see the component's state: told
         // nothing, its window showed its defaults over the loaded sound, and
         // the first knob touched sent those defaults to the audio.
@@ -1731,7 +1745,6 @@ impl IEventListTrait for HostEventList {
 /// processing never allocates.
 const MAX_EVENTS: usize = 512;
 const MAX_CHANNELS: usize = 8;
-const MAX_HOST_CHANGES: usize = 256;
 const MAX_QUEUES: usize = 128;
 const MAX_POINTS: usize = 64;
 
@@ -2160,6 +2173,128 @@ mod tests {
         let mut t = transport_at(7.0, true);
         t.time_sig = (6, 8);
         assert_eq!(process_context(&t, 48_000.0).barPositionMusic, 6.0);
+    }
+
+    /// An instance with no plug-in behind it: enough for the host's own
+    /// parameter handling.
+    fn bare_instance(params: Vec<ParameterInfo>) -> Vst3PluginInstance {
+        let in_changes = vst3::ComWrapper::new(HostParameterChanges::new());
+        let out_changes = vst3::ComWrapper::new(HostParameterChanges::new());
+        let events = vst3::ComWrapper::new(HostEventList {
+            events: Mutex::new(Vec::with_capacity(MAX_EVENTS)),
+        });
+        let mut automatable_ids: Vec<u32> = params
+            .iter()
+            .filter(|p| p.automatable)
+            .map(|p| p.id)
+            .collect();
+        automatable_ids.sort_unstable();
+        let inner = Arc::new(Vst3Inner {
+            descriptor: PluginDescriptor {
+                id: "vst3:test.bare".into(),
+                name: "Bare".into(),
+                vendor: String::new(),
+                version: String::new(),
+                format: PluginFormat::Vst3,
+                path: "<test>".into(),
+                category: PluginCategory::Effect,
+                num_inputs: 2,
+                num_outputs: 2,
+                has_midi_input: false,
+                has_editor: false,
+            },
+            library: None,
+            factory: None,
+            component: None,
+            processor: None,
+            controller: None,
+            separate_controller: false,
+            plug_view: None,
+            plug_frame: None,
+            resize_request: None,
+            class_cid: [0; 16],
+            sample_rate: 48_000.0,
+            max_block: 0,
+            active: false,
+            processing: false,
+            cached_params: params,
+            input_bus_count: 0,
+            output_bus_count: 0,
+            num_inputs: 2,
+            num_outputs: 2,
+            has_midi_input: false,
+            pending_params: Default::default(),
+            gui_edit_log: Default::default(),
+            component_handler: None,
+            transport: TransportInfo::default(),
+            automatable_ids,
+            midi_map: std::collections::HashMap::new(),
+            in_changes_ptr: in_changes.to_com_ptr::<IParameterChanges>(),
+            in_changes,
+            out_changes_ptr: out_changes.to_com_ptr::<IParameterChanges>(),
+            out_changes,
+            events_ptr: events.to_com_ptr::<IEventList>(),
+            events,
+            input_scratch: Vec::new(),
+        });
+        let editor = Arc::new(Mutex::new(Vst3EditorSide {
+            controller: None,
+            view: None,
+            frame: None,
+            request: None,
+        }));
+        Vst3PluginInstance { inner, editor }
+    }
+
+    /// This block's value for a parameter, as the processor would read it.
+    fn block_value(instance: &mut Vst3PluginInstance, id: u32) -> Option<f64> {
+        let inner = instance.inner_mut().unwrap();
+        inner.take_param_changes();
+        (0..inner.in_changes.count()).find_map(|i| {
+            let d = inner.in_changes.queues[i].data.lock();
+            (d.id == id).then(|| d.points.last().map(|p| p.1)).flatten()
+        })
+    }
+
+    /// The host's value and a knob move in the window, in the same block:
+    /// the one made last is what the processor hears. Host values were
+    /// added after the window's, so an older host value undid a newer move.
+    #[test]
+    fn the_newest_of_a_host_value_and_a_window_edit_wins() {
+        let mut p = bare_instance(Vec::new());
+        let window = Arc::clone(&p.inner.pending_params);
+        window.push(5, 0.2);
+        p.set_parameter_value(5, 0.7);
+        assert_eq!(block_value(&mut p, 5), Some(0.7));
+        p.set_parameter_value(5, 0.1);
+        window.push(5, 0.9);
+        assert_eq!(block_value(&mut p, 5), Some(0.9));
+        assert_eq!(block_value(&mut p, 5), None, "handed over once");
+    }
+
+    /// What the processor reports as changed reaches the app's edit log,
+    /// the automatable parameters only (not a meter it publishes).
+    #[test]
+    fn changes_the_processor_reports_reach_the_app() {
+        let param = |id: u32, automatable: bool| ParameterInfo {
+            id,
+            name: String::new(),
+            default_value: 0.0,
+            min: 0.0,
+            max: 1.0,
+            unit: String::new(),
+            automatable,
+        };
+        let p = bare_instance(vec![param(1, true), param(2, false)]);
+        p.inner.out_changes.add(1, 10, 0.3);
+        p.inner.out_changes.add(1, 40, 0.4);
+        p.inner.out_changes.add(2, 0, 0.9);
+        p.inner.report_output_changes();
+        let mut got = Vec::new();
+        p.inner
+            .gui_edit_log
+            .drain(usize::MAX, |id, v| got.push((id, v)));
+        assert_eq!(got, vec![(1, 0.4)]);
     }
 
     /// Points stay in time order per parameter, and a block starts empty.

@@ -349,14 +349,14 @@ fn send_moves<W: Write>(out: &Out<W>, gui_log: Option<&SharedEditLog>) {
     let Some(log) = gui_log else {
         return;
     };
-    let moves: Vec<(u32, f64)> = {
-        let mut queue = log.lock();
-        if queue.is_empty() {
-            return;
-        }
-        queue.drain(..).collect()
-    };
-    send(out, Frame::param_moves(&moves));
+    if !log.has_pending() {
+        return;
+    }
+    let mut moves: Vec<(u32, f64)> = Vec::new();
+    log.drain(usize::MAX, |id, value| moves.push((id, value)));
+    if !moves.is_empty() {
+        send(out, Frame::param_moves(&moves));
+    }
 }
 
 /// Where there is no window to keep: wait for the host to go, passing on
@@ -746,7 +746,8 @@ mod tests {
     fn the_child_lists_parameters_plays_notes_and_passes_on_its_window_s_knob_moves() {
         let (from_host, to_child) = std::io::pipe().expect("pipe");
         let (from_child, to_host) = std::io::pipe().expect("pipe");
-        let gui_log: SharedEditLog = Arc::new(parking_lot::Mutex::new(vec![(11, 0.75)]));
+        let gui_log: SharedEditLog = Default::default();
+        gui_log.push(11, 0.75);
         let tempo = Arc::new(Mutex::new(0.0));
         let fake = Fake {
             desc: PluginDescriptor {

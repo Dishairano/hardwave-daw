@@ -1044,7 +1044,9 @@ fn take_aside(frame: &Frame, shared: &Shared) -> bool {
             for (id, value) in &moves {
                 shared.set_value(*id, *value);
             }
-            shared.gui_log.lock().extend(moves);
+            for (id, value) in moves {
+                shared.gui_log.push(id, value);
+            }
             shared.state_stale.store(true, Ordering::Relaxed);
             true
         }
@@ -1362,10 +1364,12 @@ while True:
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(plugin.get_parameter_value(3), 0.9);
-        assert_eq!(
-            plugin.gui_edit_log().unwrap().lock().as_slice(),
-            &[(3, 0.9)]
-        );
+        let mut recorded = Vec::new();
+        plugin
+            .gui_edit_log()
+            .unwrap()
+            .drain(usize::MAX, |id, v| recorded.push((id, v)));
+        assert_eq!(recorded, vec![(3, 0.9)]);
 
         // Its window opens from its own process, and while it is open the
         // state is fetched, so a save has what was done in it.

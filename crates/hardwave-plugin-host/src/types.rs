@@ -262,9 +262,12 @@ impl TransportInfo {
 /// ever waiting (see [`crate::param_queue`]).
 pub type SharedParamQueue = std::sync::Arc<crate::param_queue::ParamChangeQueue>;
 
-/// The app's copy of the edits made in a plug-in's own window, drained by
-/// the app (never by the audio thread) for automation recording.
-pub type SharedEditLog = std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>;
+/// The app's copy of the edits made in a plug-in's own window (and of the
+/// changes a plug-in reports from its audio side), drained by the app for
+/// automation recording. The same lock-free queue as above, so a push from
+/// a window or from the audio thread never waits and never drops a move:
+/// it keeps the newest value per parameter until the app takes it.
+pub type SharedEditLog = std::sync::Arc<crate::param_queue::ParamChangeQueue>;
 
 /// A plug-in's own window on the instance that plays. Every call is made on
 /// the thread that owns the app's windows; the instance closes the window
