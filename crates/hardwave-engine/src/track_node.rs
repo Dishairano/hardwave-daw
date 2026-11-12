@@ -1758,11 +1758,19 @@ impl AudioNode for TrackNode {
         //
         // Refilled in place rather than collected into a new Vec: reset now
         // runs on the audio thread, on stop and on a playhead jump, and
-        // allocating there is what a dropout sounds like. After the clear the
-        // capacity from the last fill is enough for the same clips.
-        self.cached_buffers.clear();
-        for clip in &self.clips {
-            self.cached_buffers.push(self.pool.get(&clip.source_id));
+        // allocating there is what a dropout sounds like. The capacity from
+        // the last fill is enough for the same clips.
+        //
+        // Never waits on the pool either: when a sample is being loaded at
+        // this moment, a clip keeps the buffer it had (the next reset or
+        // graph build picks up the new one). Waiting here put the audio
+        // thread behind the loader on every stop or jump made while samples
+        // were loading.
+        self.cached_buffers.resize(self.clips.len(), None);
+        for (cached, clip) in self.cached_buffers.iter_mut().zip(&self.clips) {
+            if let Ok(buffer) = self.pool.try_get(&clip.source_id) {
+                *cached = buffer;
+            }
         }
     }
 }
@@ -2589,5 +2597,57 @@ mod silence_tests {
         let (tail, silent) = heard(&mut node, 512, 0.0);
         assert!(!silent);
         assert!(tail.iter().any(|s| *s != 0.0), "the tail is heard");
+    }
+
+    /// A stop or a jump while a sample is being loaded: the audio thread
+    /// used to wait for the loader to finish writing to the pool. Now it
+    /// does not wait, and the clip keeps the buffer it had.
+    #[test]
+    fn a_reset_never_waits_for_a_loader_and_keeps_its_buffers() {
+        let pool = AudioPool::new();
+        pool.insert(
+            "s".to_string(),
+            crate::audio_pool::AudioBuffer {
+                channels: vec![vec![0.5; 480], vec![0.5; 480]],
+                sample_rate: 48_000,
+                num_frames: 480,
+            },
+        );
+        let meter = Arc::new(TrackMeterState::default());
+        let mut node = TrackNode::new("t".into(), "T".into(), pool.clone(), meter);
+        node.set_clips(vec![ClipRegion {
+            source_id: "s".into(),
+            timeline_start: 0,
+            timeline_end: 480,
+            source_offset: 0,
+            gain: 1.0,
+            muted: false,
+            fade_in_samples: 0,
+            fade_out_samples: 0,
+            fade_in_curve: Default::default(),
+            fade_out_curve: Default::default(),
+            reversed: false,
+            source_step: 1.0,
+            warp: Vec::new(),
+            treat: ClipTreat::default(),
+        }]);
+        let loader = pool.hold_for_writing();
+        let (done_tx, done) = std::sync::mpsc::channel();
+        let audio = std::thread::spawn(move || {
+            node.reset();
+            done_tx.send(()).unwrap();
+            node
+        });
+        let waited = done
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_err();
+        drop(loader);
+        let node = audio.join().unwrap();
+        assert!(!waited, "reset waited for the loader");
+        assert!(node.cached_buffers[0].is_some(), "the clip kept its buffer");
+        // With the pool free again a reset picks up the pool's buffer.
+        let mut node = node;
+        node.reset();
+        assert!(node.cached_buffers[0].is_some());
     }
 }

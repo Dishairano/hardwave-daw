@@ -136,6 +136,10 @@ pub struct AudioCacheStats {
     pub entry_count: u64,
 }
 
+/// The pool was being written to; see [`AudioPool::try_get`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolBusy;
+
 /// Pool of loaded audio buffers keyed by a unique source ID (typically the file path hash).
 #[derive(Clone)]
 pub struct AudioPool {
@@ -191,6 +195,25 @@ impl AudioPool {
     /// without blocking the loading thread.
     pub fn get(&self, id: &str) -> Option<Arc<AudioBuffer>> {
         self.inner.read().buffers.get(id).cloned()
+    }
+
+    /// [`Self::get`] for the audio thread: never waits. `Err(PoolBusy)`
+    /// when a loader is writing to the pool at this moment; the caller
+    /// keeps what it had and asks again later.
+    ///
+    /// The audio thread used to take the read lock and wait behind a
+    /// sample being inserted (and the buffers it evicted being freed),
+    /// which at real-time priority is a wait on a normal-priority thread.
+    pub fn try_get(&self, id: &str) -> Result<Option<Arc<AudioBuffer>>, PoolBusy> {
+        let inner = self.inner.try_read().ok_or(PoolBusy)?;
+        Ok(inner.buffers.get(id).cloned())
+    }
+
+    /// Hold the pool as a loader writing to it does, for tests of the
+    /// paths that must not wait for it.
+    #[cfg(test)]
+    pub(crate) fn hold_for_writing(&self) -> impl Sized + '_ {
+        self.inner.write()
     }
 
     /// A buffer's levels (`LevelStats`), worked out the first time they are

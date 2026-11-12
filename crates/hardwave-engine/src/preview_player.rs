@@ -132,8 +132,21 @@ impl PreviewPlayer {
             self.playing = None;
         }
         if self.request.start.swap(false, Ordering::Acquire) {
-            let id = self.request.source_id.lock().clone();
-            self.playing = pool.get(&id).map(|buffer| {
+            // Never wait here, and make no copy of the id: when the window
+            // is writing a new id, or a loader is writing to the pool, the
+            // start is tried again next block. This used to lock both and
+            // clone the id, on the audio thread.
+            let found = self
+                .request
+                .source_id
+                .try_lock()
+                .and_then(|id| pool.try_get(&id).ok());
+            // Busy: what plays carries on, and the start waits a block.
+            let Some(found) = found else {
+                self.request.start.store(true, Ordering::Release);
+                return self.mix_into(output, num_frames);
+            };
+            self.playing = found.map(|buffer| {
                 let source_rate = if buffer.sample_rate > 0 {
                     buffer.sample_rate as f64
                 } else {
@@ -151,6 +164,11 @@ impl PreviewPlayer {
             });
         }
 
+        self.mix_into(output, num_frames);
+    }
+
+    /// Add what plays into the block.
+    fn mix_into(&mut self, output: &mut [f32], num_frames: usize) {
         let Some(state) = self.playing.as_mut() else {
             return;
         };
@@ -342,5 +360,32 @@ mod tests {
         player.render(&mut out, 64, &pool, 48_000.0);
         // Source is 0.5 everywhere, so a quarter gain is 0.125.
         assert!((peak(&out) - 0.125).abs() < 1e-6, "got {}", peak(&out));
+    }
+
+    /// The audio thread never waits for the window writing a new id or a
+    /// loader writing to the pool: the start waits a block instead, and
+    /// is not lost.
+    #[test]
+    fn a_start_while_the_id_or_the_pool_is_busy_waits_a_block_not_the_thread() {
+        let pool = pool_with("s", 4_800, 48_000, 2);
+        let req = PreviewRequest::new();
+        let mut player = PreviewPlayer::new(req.clone());
+        req.play("s");
+
+        let held = req.source_id.lock();
+        let mut out = vec![0.0f32; 64 * 2];
+        player.render(&mut out, 64, &pool, 48_000.0);
+        assert_eq!(peak(&out), 0.0);
+        drop(held);
+
+        let loader = pool.hold_for_writing();
+        let mut out = vec![0.0f32; 64 * 2];
+        player.render(&mut out, 64, &pool, 48_000.0);
+        assert_eq!(peak(&out), 0.0);
+        drop(loader);
+
+        let mut out = vec![0.0f32; 64 * 2];
+        player.render(&mut out, 64, &pool, 48_000.0);
+        assert!(peak(&out) > 0.0, "the start was kept and plays now");
     }
 }
