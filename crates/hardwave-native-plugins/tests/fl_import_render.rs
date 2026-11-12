@@ -59,6 +59,7 @@ fn a_real_fl_project_imports_and_renders_with_its_sample_settings() {
         track.inserts.insert(
             0,
             PluginSlot {
+                allow_smart_disable: true,
                 id: slot_id.clone(),
                 plugin_id: NativeSampler::ID.to_string(),
                 enabled: true,

@@ -61,6 +61,7 @@ fn song(setup: impl FnOnce(&mut Track)) -> (DawEngine, usize, usize) {
 
 fn plug_in(track: &mut Track, plugin_id: &str) {
     track.inserts.push(PluginSlot {
+        allow_smart_disable: true,
         id: format!("slot-{plugin_id}"),
         plugin_id: plugin_id.into(),
         enabled: true,

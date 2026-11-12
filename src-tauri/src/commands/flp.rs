@@ -198,6 +198,7 @@ fn open_built(
                     track.inserts.insert(
                         0,
                         hardwave_project::track::PluginSlot {
+                            allow_smart_disable: true,
                             id: slot_id.clone(),
                             plugin_id: hardwave_native_plugins::sampler::NativeSampler::ID
                                 .to_string(),
@@ -1009,6 +1010,7 @@ mod tests {
             ("insert-003", "s4", "OTT", vec!["vst3:ott"], false),
         ] {
             project.track_mut(track).unwrap().inserts.push(PluginSlot {
+                allow_smart_disable: true,
                 id: slot.into(),
                 plugin_id: candidates[0].into(),
                 enabled: true,

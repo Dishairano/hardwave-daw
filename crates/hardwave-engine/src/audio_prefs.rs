@@ -28,6 +28,10 @@ pub struct AudioPrefs {
     /// Which pan law the tracks use. Stored as a number so the audio thread
     /// can read it without a lock.
     pan_law: Arc<AtomicU8>,
+    /// Smart disable: a plug-in whose input has been silent for longer
+    /// than its tail, and whose output has died away, is not called until
+    /// sound, notes or a knob move arrive.
+    smart_disable: Arc<AtomicBool>,
 }
 
 impl AudioPrefs {
@@ -39,6 +43,7 @@ impl AudioPrefs {
             play_truncated_notes: Arc::new(AtomicBool::new(false)),
             record_offset_ms: Arc::new(AtomicI32::new(0)),
             pan_law: Arc::new(AtomicU8::new(crate::pan::PanLaw::Minus3dB.as_u8())),
+            smart_disable: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -76,6 +81,14 @@ impl AudioPrefs {
     pub fn pan_law(&self) -> crate::pan::PanLaw {
         crate::pan::PanLaw::from_u8(self.pan_law.load(Ordering::Relaxed))
     }
+
+    pub fn set_smart_disable(&self, on: bool) {
+        self.smart_disable.store(on, Ordering::Relaxed);
+    }
+
+    pub fn smart_disable(&self) -> bool {
+        self.smart_disable.load(Ordering::Relaxed)
+    }
 }
 
 impl Default for AudioPrefs {
@@ -93,6 +106,7 @@ mod tests {
         let prefs = AudioPrefs::new();
         assert!(prefs.reset_on_transport());
         assert!(!prefs.play_truncated_notes());
+        assert!(prefs.smart_disable(), "smart disable is on by default");
     }
 
     #[test]

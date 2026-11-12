@@ -365,6 +365,7 @@ fn the_audio_thread_neither_builds_nor_allocates_for_an_edit() {
             .unwrap()
             .inserts
             .push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: true,
                 id: slot.into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,

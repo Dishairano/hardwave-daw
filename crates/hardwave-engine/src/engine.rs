@@ -4708,7 +4708,8 @@ impl EngineCallback {
         let sr = self.sample_rate as f64;
         // Snapshot the insert plan under the project lock, then instantiate
         // outside it (plug-in loads can be slow and must not hold the lock).
-        // (track_id, slot_id, plugin_id, enabled, wet, sidechained, saved_state)
+        // (track_id, slot_id, plugin_id, enabled, wet, sidechained,
+        // allow_smart_disable, saved_state)
         let mut hydrated_any = false;
         let plan = {
             let project = self.project.lock();
@@ -4728,13 +4729,14 @@ impl EngineCallback {
                         s.enabled,
                         s.wet,
                         s.sidechain_source.is_some(),
+                        s.allow_smart_disable,
                         state,
                     ));
                 }
             }
             acc
         };
-        for (track_id, slot_id, plugin_id, enabled, wet, sidechained, state) in plan {
+        for (track_id, slot_id, plugin_id, enabled, wet, sidechained, smart, state) in plan {
             let Some(node_id) = self.track_id_to_node.get(&track_id).copied() else {
                 continue;
             };
@@ -4747,6 +4749,7 @@ impl EngineCallback {
             hydrated_any = true;
             if let Some(node) = self.graph.node_mut(node_id) {
                 let slot = crate::insert_chain::LiveSlot {
+                    sleep: Box::new(crate::insert_chain::SlotSleep::allowed(smart)),
                     param_ranges: crate::insert_chain::LiveSlot::ranges_of(plugin.as_ref()),
                     levels: Default::default(),
                     slot_id,
@@ -5047,9 +5050,10 @@ impl EngineCallback {
                 new_node.carry_on_from(old_node.as_mut());
             }
         }
-        for (node, slot_id, active) in &old.sidechain_flags {
+        for (node, slot_id, active, smart) in &old.sidechain_flags {
             if let Some(node) = self.graph.node_mut(*node) {
                 node.set_slot_sidechain(slot_id, *active);
+                node.set_slot_smart_disable(slot_id, *smart);
             }
         }
         self.graph.carry_delays_from(&mut old.graph);
@@ -5804,6 +5808,7 @@ impl EngineCallback {
         }
 
         let ctx = ProcessContext {
+            smart_disable: self.audio_prefs.smart_disable(),
             sample_rate: self.sample_rate as f64,
             buffer_size: num_frames as u32,
             position_ticks,
@@ -6228,6 +6233,7 @@ mod offline_insert_tests {
                 row: None,
             });
             t.inserts.push(PluginSlot {
+                allow_smart_disable: true,
                 id: "slot1".into(),
                 plugin_id: "test.silencer".into(),
                 enabled: true,
@@ -7700,6 +7706,7 @@ mod rt_safety_tests {
             taken: Arc::clone(&taken),
         });
         let slot = LiveSlot {
+            sleep: Default::default(),
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             levels: Default::default(),
             slot_id: "shape".into(),
@@ -7755,6 +7762,7 @@ mod rt_safety_tests {
                 .unwrap()
                 .inserts
                 .push(hardwave_project::track::PluginSlot {
+                    allow_smart_disable: true,
                     id: name.into(),
                     plugin_id: "test.gain".into(),
                     enabled: true,
@@ -7831,6 +7839,7 @@ mod rt_safety_tests {
             .unwrap()
             .inserts
             .push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: true,
                 id: "fx".into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,
@@ -7953,6 +7962,7 @@ mod rt_safety_tests {
         // audio thread.
         project_arc.lock().track_mut(&id).unwrap().inserts.push(
             hardwave_project::track::PluginSlot {
+                allow_smart_disable: true,
                 id: "eq".into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,
@@ -8063,6 +8073,7 @@ mod rt_safety_tests {
             .push(Track::new_bus("fed".into(), "Fed".into()));
         let mut fx = Track::new_bus("fx".into(), "With effect".into());
         fx.inserts.push(PluginSlot {
+            allow_smart_disable: true,
             id: "s".into(),
             plugin_id: "test.gain".into(),
             enabled: true,
@@ -8095,6 +8106,7 @@ mod rt_safety_tests {
             .unwrap()
             .inserts
             .push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: true,
                 id: "slot-x".into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,
@@ -8757,6 +8769,7 @@ mod monitoring_tests {
             });
         } else {
             vox.inserts.push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: true,
                 id: "comp".into(),
                 plugin_id: "compressor".into(),
                 enabled: true,

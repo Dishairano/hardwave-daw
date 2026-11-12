@@ -66,10 +66,19 @@ pub struct PluginSlot {
     /// Dry/wet mix for this slot in [0, 1]. 1.0 = fully processed, 0.0 = bypass audible effect.
     #[serde(default = "default_wet")]
     pub wet: f32,
+    /// Smart disable may leave this plug-in out while its input is silent
+    /// and its sound has died away. Off for a plug-in that makes sound out
+    /// of silence without saying so. Songs saved before it existed allow it.
+    #[serde(default = "default_allow_smart_disable")]
+    pub allow_smart_disable: bool,
 }
 
 fn default_wet() -> f32 {
     1.0
+}
+
+fn default_allow_smart_disable() -> bool {
+    true
 }
 
 fn default_stereo_separation() -> f64 {

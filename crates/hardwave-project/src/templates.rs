@@ -145,6 +145,7 @@ mod tests {
             enabled: true,
         });
         t.inserts.push(PluginSlot {
+            allow_smart_disable: true,
             id: "eq".into(),
             plugin_id: "hardwave.native.eq".into(),
             enabled: true,

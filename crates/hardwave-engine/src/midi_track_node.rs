@@ -387,6 +387,22 @@ pub struct MidiTrackNode {
     /// track — synth → inserts → fader → pan, the standard channel strip.
     chain: crate::insert_chain::InsertChain,
     chain_scratch: crate::insert_chain::Scratch,
+    /// Other tracks route or send into this one.
+    receives_input: bool,
+    /// Smart disable: the last block came out silent with nothing left
+    /// sounding or held, every plug-in asleep, and nothing waiting to be
+    /// sent. While that holds and nothing starts, a block is silence
+    /// without any of the work (see `rests`).
+    quiet: bool,
+    /// The block silence was last written for, as where it ends, by the
+    /// graph leaving this node out (`idle`) or by the short way in
+    /// `process`. Cells because `idle` only borrows the node.
+    rest_end: std::cell::Cell<u64>,
+    /// Samples of song the graph left this node out for since it last ran,
+    /// so its plug-ins' clocks are moved on by as much.
+    rested: std::cell::Cell<u64>,
+    /// The last block written was all silence.
+    wrote_silence: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -494,7 +510,68 @@ impl MidiTrackNode {
             kick: hardwave_dsp::kick_synth::KickSynth::new(48_000.0),
             chain: crate::insert_chain::InsertChain::new(),
             chain_scratch: crate::insert_chain::Scratch::default(),
+            receives_input: false,
+            quiet: false,
+            rest_end: std::cell::Cell::new(u64::MAX),
+            rested: std::cell::Cell::new(0),
+            wrote_silence: false,
         }
+    }
+
+    /// Whether this block can be silence with no work at all (smart
+    /// disable): the track was quiet last block, nothing of its own starts
+    /// in this one (a note, a controller, a launched loop), nothing moves
+    /// it (automation), and the playhead went straight on. Only the
+    /// built-in sine and plug-in instruments: the kick synth does not say
+    /// when it has finished.
+    fn rests(&self, ctx: &ProcessContext) -> bool {
+        if !ctx.smart_disable || !ctx.playing || !self.quiet || !self.was_playing {
+            return false;
+        }
+        if self.muted
+            || !self.automation_lanes.is_empty()
+            || !self.automation_clips.is_empty()
+            || self.clips.is_some()
+            || !self.session_midi.is_empty()
+            || !matches!(self.instrument, Instrument::BuiltinSine)
+            || (self.mpe && !self.mpe_zone_sent)
+            || !self.utility.at_rest()
+            || !self.chain.asleep_through(&[])
+        {
+            return false;
+        }
+        let pos = ctx.position_samples;
+        if pos != self.last_block_end && pos != self.rest_end.get() {
+            return false;
+        }
+        let end = pos.saturating_add(ctx.buffer_size as u64);
+        let note_starts = self
+            .notes
+            .get(self.next_note_idx)
+            .is_some_and(|n| n.note_on_sample < end);
+        let control_moves = self
+            .controls
+            .get(self.next_control_idx)
+            .is_some_and(|c| c.sample < end);
+        !note_starts && !control_moves
+    }
+
+    /// Whether the block just written leaves the track quiet (see `quiet`).
+    fn settle_quiet(&mut self, outputs: &[Vec<f32>], block_size: usize) {
+        self.wrote_silence = outputs
+            .iter()
+            .all(|ch| ch.iter().take(block_size).all(|s| *s == 0.0));
+        self.quiet = self.wrote_silence
+            && self.voices.is_empty()
+            && self.live_events.is_empty()
+            && self.jump_offs.is_empty()
+            && self.carried_offs.is_empty()
+            && !self.release_live
+            && !self.live_fx.busy()
+            && self.session_was.is_none()
+            && !self.live_held.iter().any(|h| *h)
+            && self.session_held.iter().all(|h| *h == 0)
+            && self.chain.asleep_through(&[]);
     }
 
     /// Switch which native instrument voices this track. Cheap — flag
@@ -1108,6 +1185,29 @@ impl AudioNode for MidiTrackNode {
         self.release_live = true;
     }
 
+    fn set_receives_input(&mut self, receives: bool) {
+        self.receives_input = receives;
+    }
+
+    /// Nothing held, nothing sounding, every plug-in asleep and nothing
+    /// starting in this block (see `rests`): the graph may leave the track
+    /// out. A track others route into is never idle here, since what
+    /// reaches it is not known until the block runs.
+    fn idle(&self, ctx: &ProcessContext) -> bool {
+        if self.receives_input || !self.rests(ctx) {
+            return false;
+        }
+        let end = ctx.position_samples.saturating_add(ctx.buffer_size as u64);
+        self.rest_end.set(end);
+        self.rested
+            .set(self.rested.get().saturating_add(ctx.buffer_size as u64));
+        true
+    }
+
+    fn output_is_silent(&self) -> bool {
+        self.wrote_silence
+    }
+
     fn set_chain_parameter(&mut self, slot_id: &str, param_id: u32, value: f64) {
         // Modulation moves a parameter 0..1, as automation does.
         self.chain
@@ -1152,6 +1252,72 @@ impl AudioNode for MidiTrackNode {
         }
         self.volume = self.fader_volume;
         self.pan = self.fader_pan;
+        self.chain.set_smart_disable(ctx.smart_disable);
+        let transport = hardwave_plugin_host::types::TransportInfo {
+            playing: ctx.playing,
+            tempo: ctx.tempo,
+            position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
+            time_sig: ctx.time_sig,
+            sample_rate: ctx.sample_rate,
+            position_samples: ctx.position_samples,
+        };
+        // Blocks the graph left this node out of (see `idle`), apart from
+        // this one if `idle` said so for it too: the playhead went straight
+        // on through them, and the sleeping plug-ins' clocks move on by as
+        // much, as they would have had they run.
+        let frames = ctx.buffer_size as u64;
+        let mut rested = self.rested.replace(0);
+        if self.rest_end.get() == ctx.position_samples.saturating_add(frames) {
+            rested = rested.saturating_sub(frames);
+        }
+        if rested > 0 && ctx.playing && ctx.position_samples >= rested {
+            let from = ctx.position_samples - rested;
+            if from == self.last_block_end {
+                self.last_block_end = ctx.position_samples;
+                // A block at a time, as they went by: a plug-in that moves
+                // its clock once a block (the phaser) lands where it would
+                // have, to the bit.
+                let mut at = transport;
+                at.position_samples = from;
+                while at.position_samples < ctx.position_samples {
+                    let n = (ctx.position_samples - at.position_samples).min(frames.max(1));
+                    self.chain.pass_asleep(at, n as usize);
+                    at.position_samples += n;
+                }
+            }
+        }
+        // Smart disable: nothing sounding, held, routed in or starting, and
+        // every plug-in asleep. The block is silence, and only what moves
+        // with time moves on: the width, the fader ramp, the meters.
+        let inputs_silent = inputs
+            .iter()
+            .take(2)
+            .all(|ch| ch.iter().take(ctx.buffer_size as usize).all(|s| *s == 0.0));
+        if midi_in.is_empty() && inputs_silent && self.rests(ctx) {
+            let n = outputs
+                .first()
+                .map_or(0, Vec::len)
+                .min(ctx.buffer_size as usize);
+            for buf in outputs.iter_mut() {
+                let m = n.min(buf.len());
+                buf[..m].fill(0.0);
+            }
+            self.chain.pass_asleep(transport, n);
+            self.last_block_end = ctx.position_samples.saturating_add(n as u64);
+            self.rest_end.set(self.last_block_end);
+            self.width_applied = self.stereo_separation;
+            let pan = (self.pan + self.mod_pan).clamp(-1.0, 1.0);
+            let (pan_l, pan_r) = crate::pan::gains(pan, self.prefs.pan_law());
+            let vol = self.volume * self.mod_gain;
+            self.gain_ramp.step((vol * pan_l, vol * pan_r));
+            self.meter.publish_automation(None, None);
+            self.rms_smooth *= 0.9;
+            self.meter.park();
+            self.wrote_silence = true;
+            return;
+        }
+        self.quiet = false;
+        self.wrote_silence = false;
         // Automation moves the fader, the pan and the plug-ins' knobs for
         // this block. A mute from automation silences the block's output
         // (the voices keep their state, so it comes back cleanly).
@@ -2102,6 +2268,7 @@ impl AudioNode for MidiTrackNode {
         // Soloed flag: the engine's mix step honours TrackKind solo across
         // the whole project, so we just expose our own solo bit unchanged.
         let _ = self.soloed;
+        self.settle_quiet(outputs, block_size);
     }
 
     fn reset(&mut self) {
@@ -2180,6 +2347,11 @@ impl AudioNode for MidiTrackNode {
             InsertCommand::LoadFactoryPreset { slot_id, index, .. } => {
                 self.chain.load_factory_preset(&slot_id, index);
             }
+            InsertCommand::SetSmartDisable {
+                slot_id, allowed, ..
+            } => {
+                self.chain.set_slot_smart_disable(&slot_id, allowed);
+            }
             InsertCommand::ClearAll => self.chain.bury_all(graveyard),
         }
     }
@@ -2216,6 +2388,10 @@ impl AudioNode for MidiTrackNode {
 
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
         self.chain.set_slot_sidechain(slot_id, active);
+    }
+
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: bool) {
+        self.chain.set_slot_smart_disable(slot_id, allowed);
     }
 
     fn push_offline_slot(
@@ -2331,6 +2507,7 @@ mod tests {
 
     fn ctx_at(sr: f64, n: u32, pos: u64, playing: bool) -> ProcessContext {
         ProcessContext {
+            smart_disable: true,
             sample_rate: sr,
             position_ticks: 0,
             buffer_size: n,
@@ -2548,6 +2725,7 @@ mod tests {
         let mut node = make_node();
         node.push_offline_slot(
             crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
                 param_ranges: Vec::new(),
                 levels: Default::default(),
                 slot_id: "s".into(),
@@ -2666,6 +2844,7 @@ mod tests {
         let mut node = make_node();
         node.push_offline_slot(
             crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
                 param_ranges: Vec::new(),
                 levels: Default::default(),
                 slot_id: "inst".into(),
@@ -2848,6 +3027,7 @@ mod tests {
             }
         }
         crate::insert_chain::LiveSlot {
+            sleep: Default::default(),
             param_ranges: Vec::new(),
             levels: Default::default(),
             slot_id: id.into(),
@@ -3016,6 +3196,7 @@ mod tests {
             }
         }
         crate::insert_chain::LiveSlot {
+            sleep: Default::default(),
             param_ranges: Vec::new(),
             levels: Default::default(),
             slot_id: "spy".into(),
@@ -4204,6 +4385,7 @@ mod mpe_tests {
 
     fn render(node: &mut MidiTrackNode, events: &[MidiEvent]) -> Vec<Vec<f32>> {
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 4096,
             tempo: 140.0,
@@ -4246,6 +4428,7 @@ mod mpe_tests {
             ..Default::default()
         }]);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 4096,
             tempo: 140.0,
@@ -4266,6 +4449,7 @@ mod mpe_tests {
         );
         // The next block carries the kick on, and does not fire it again.
         let ctx2 = ProcessContext {
+            smart_disable: true,
             position_samples: 4096,
             ..ctx
         };
@@ -4322,5 +4506,152 @@ mod mpe_tests {
         n.set_mpe(false);
         assert!(n.channel_bend.iter().all(|b| (*b - 1.0).abs() < 1e-9));
         assert!(n.channel_pressure.iter().all(|p| *p == 0.0));
+    }
+}
+
+#[cfg(test)]
+mod smart_disable_tests {
+    use super::*;
+    use crate::insert_chain::tests::Ringer;
+    use hardwave_plugin_host::types::{PluginCategory, Tail};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    const BLOCK: usize = 256;
+
+    fn ctx(pos: u64, smart: bool) -> ProcessContext {
+        ProcessContext {
+            smart_disable: smart,
+            sample_rate: 48_000.0,
+            position_ticks: 0,
+            buffer_size: BLOCK as u32,
+            tempo: 120.0,
+            time_sig: (4, 4),
+            position_samples: pos,
+            playing: true,
+        }
+    }
+
+    /// An instrument track playing a ringing plug-in instrument, two notes
+    /// far apart, and what came out of the plug-in.
+    fn track(notes: &[(u64, u64)]) -> (MidiTrackNode, Arc<AtomicU32>, Arc<AtomicU32>) {
+        let calls = Arc::new(AtomicU32::new(0));
+        let skipped = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), skipped.clone());
+        ringer.descriptor.category = PluginCategory::Instrument;
+        ringer.descriptor.num_inputs = 0;
+        ringer.tail = Tail::Samples(18_000);
+        let mut node =
+            MidiTrackNode::new("t".into(), "T".into(), Arc::new(TrackMeterState::default()));
+        node.set_notes(
+            notes
+                .iter()
+                .map(|&(on, off)| MidiNoteRegion {
+                    note_on_sample: on,
+                    note_off_sample: off,
+                    pitch: 60,
+                    velocity: 1.0,
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "inst".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: false,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            BLOCK as u32,
+        );
+        (node, calls, skipped)
+    }
+
+    /// Between its notes, once the instrument has died away and been put to
+    /// sleep, the track says it is idle and the graph leaves it out (or its
+    /// block is silence without any work). The next note is played on its
+    /// own sample, the song sounds as it does with smart disable off, and
+    /// the sleeping instrument's clock is told about every block it missed.
+    #[test]
+    fn an_instrument_track_rests_between_notes_and_plays_the_next_on_time() {
+        let notes = [(1_000, 2_000), (200_037, 201_000)];
+        let (mut smart, calls, skipped) = track(&notes);
+        let (mut plain, _, _) = track(&notes);
+        let blocks = 1_000;
+        let mut idle_blocks = 0;
+        let mut worst = 0.0_f32;
+        let mut note_block_off = f32::MAX;
+        for k in 0..blocks {
+            let pos = (k * BLOCK) as u64;
+            let mut a = vec![vec![0.0; BLOCK]; 4];
+            let mut b = vec![vec![0.0; BLOCK]; 4];
+            let inputs: [&[f32]; 0] = [];
+            // As the graph does: an idle node whose output is already
+            // silent is not run, and its buffers stay silent.
+            if smart.idle(&ctx(pos, true)) && smart.output_is_silent() {
+                idle_blocks += 1;
+            } else {
+                smart.process(&inputs, &mut a, &[], &mut Vec::new(), &ctx(pos, true));
+            }
+            plain.process(&inputs, &mut b, &[], &mut Vec::new(), &ctx(pos, false));
+            let off = a[0]
+                .iter()
+                .zip(&b[0])
+                .fold(0.0_f32, |m, (x, y)| m.max((x - y).abs()));
+            worst = worst.max(off);
+            if pos <= 200_037 && 200_037 < pos + BLOCK as u64 {
+                note_block_off = off;
+                let at = (200_037 - pos) as usize;
+                assert!(a[0][at] > 0.5, "the note sounds on its own sample");
+                assert!(a[0][at - 1].abs() < 1e-12, "and not before");
+            }
+        }
+        assert!(worst < 1e-7, "differs from smart disable off by {worst:e}");
+        assert!(
+            note_block_off < 1e-12,
+            "the note's block: {note_block_off:e}"
+        );
+        assert!(
+            idle_blocks > 250,
+            "left out for {idle_blocks} of {blocks} blocks"
+        );
+        // Every block was either run or slept through, never both or none.
+        // The blocks the graph left it out of are counted when it next
+        // runs, so it runs once more.
+        let mut out = vec![vec![0.0; BLOCK]; 4];
+        let inputs: [&[f32]; 0] = [];
+        let end = (blocks * BLOCK) as u64;
+        smart.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx(end, true));
+        let ran = calls.load(Ordering::Relaxed) as usize;
+        assert_eq!(
+            ran * BLOCK + skipped.load(Ordering::Relaxed) as usize,
+            (blocks + 1) * BLOCK
+        );
+    }
+
+    /// With smart disable off, or while a note is held, the track is never
+    /// idle.
+    #[test]
+    fn a_held_note_or_smart_disable_off_keeps_the_track_running() {
+        let (mut node, _, _) = track(&[(1_000, 400_000)]);
+        let inputs: [&[f32]; 0] = [];
+        for k in 0..600 {
+            let pos = (k * BLOCK) as u64;
+            assert!(!node.idle(&ctx(pos, true)), "held at block {k}");
+            let mut out = vec![vec![0.0; BLOCK]; 4];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx(pos, true));
+        }
+        let (mut node, _, _) = track(&[]);
+        for k in 0..600 {
+            let pos = (k * BLOCK) as u64;
+            assert!(!node.idle(&ctx(pos, false)), "smart disable off");
+            let mut out = vec![vec![0.0; BLOCK]; 4];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx(pos, false));
+        }
     }
 }

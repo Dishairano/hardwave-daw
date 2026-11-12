@@ -89,9 +89,9 @@ pub(crate) struct PreparedGraph {
     /// The frozen tracks, each with an empty chain to park its plug-ins in.
     /// Made here so parking one on the audio thread never grows the map.
     pub(crate) parked_chains: HashMap<String, crate::insert_chain::InsertChain>,
-    /// Which plug-in slots have a sidechain routed to them, set on the
-    /// chains once they are in their new nodes.
-    pub(crate) sidechain_flags: Vec<(crate::graph::NodeId, String, bool)>,
+    /// Which plug-in slots have a sidechain routed to them, and which allow
+    /// smart disable, set on the chains once they are in their new nodes.
+    pub(crate) sidechain_flags: Vec<(crate::graph::NodeId, String, bool, bool)>,
     /// Per node: where its chain's delay and size are published.
     pub(crate) boards: Vec<Option<Arc<ChainBoard>>>,
     /// Per node: the chain delay the compensation was worked out with.
@@ -1171,7 +1171,12 @@ impl GraphBuilder {
             for slot in &track.inserts {
                 // Set on the chain once it is in its new node.
                 let active = slot.sidechain_source.is_some();
-                p.sidechain_flags.push((dst_node, slot.id.clone(), active));
+                p.sidechain_flags.push((
+                    dst_node,
+                    slot.id.clone(),
+                    active,
+                    slot.allow_smart_disable,
+                ));
                 if let Some(src_id) = &slot.sidechain_source {
                     if let Some(&src_node) = track_id_to_node.get(src_id) {
                         if src_node != dst_node && !sources.contains(&src_node) {

@@ -17,6 +17,9 @@ pub struct ProcessContext {
     /// one tempo: with a tempo change or a ramp the curve slid off the music.
     pub position_ticks: u64,
     pub playing: bool,
+    /// Smart disable (Settings > Audio): plug-ins with nothing to do are
+    /// left out, and nodes with nothing to play skip their work.
+    pub smart_disable: bool,
 }
 
 /// Trait implemented by all nodes in the audio graph.
@@ -176,6 +179,12 @@ pub trait AudioNode: Send {
     /// rebuild from the project's `PluginSlot::sidechain_source`.
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
         let _ = (slot_id, active);
+    }
+
+    /// Allow or forbid smart disable on one plug-in slot. Synced on every
+    /// graph rebuild from the project's `PluginSlot::allow_smart_disable`.
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: bool) {
+        let _ = (slot_id, allowed);
     }
 }
 
@@ -771,7 +780,16 @@ impl AudioGraph {
             // An idle node whose output is already silent has nothing to
             // do this block. Not when a delay line feeds it: that line
             // has to keep moving so it holds the right audio later.
-            let idle = self.nodes[node_id].idle(ctx)
+            // Nor when the keyboard plays into it this block: a node left
+            // out would never hear those notes.
+            let hears_keys = !midi_in.is_empty()
+                && self
+                    .accepts_live_midi
+                    .get(node_id)
+                    .copied()
+                    .unwrap_or(false);
+            let idle = !hears_keys
+                && self.nodes[node_id].idle(ctx)
                 && self.incoming[node_id]
                     .iter()
                     .all(|&e| matches!(self.edge_delays.get(e), None | Some(None)));
@@ -1056,7 +1074,14 @@ impl NodeWork<'_> {
         // Same skip as the one-thread loop: an idle node with a silent
         // output and no delay line feeding it has nothing to do.
         let node = unsafe { &mut *self.nodes.add(node_id) };
-        let idle = node.idle(self.ctx)
+        let hears_keys = !self.midi_in.is_empty()
+            && self
+                .accepts_live_midi
+                .get(node_id)
+                .copied()
+                .unwrap_or(false);
+        let idle = !hears_keys
+            && node.idle(self.ctx)
             && self.incoming[node_id]
                 .iter()
                 .all(|&e| delay_of(e).is_none_or(|d| d.is_none()));
@@ -1229,6 +1254,7 @@ mod tests {
 
     fn ctx() -> ProcessContext {
         ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 16,
             tempo: 120.0,

@@ -17,6 +17,9 @@ pub struct InsertInfo {
     /// can say what a channel plays.
     #[serde(rename = "samplePath", skip_serializing_if = "Option::is_none")]
     pub sample_path: Option<String>,
+    /// The slot's "Allow smart disable" box.
+    #[serde(rename = "allowSmartDisable")]
+    pub allow_smart_disable: bool,
 }
 
 #[derive(Serialize)]
@@ -211,6 +214,7 @@ pub(crate) fn track_to_info(
             wet: s.wet,
             sidechain_source: s.sidechain_source.clone(),
             sample_path: sample_path(s),
+            allow_smart_disable: s.allow_smart_disable,
         })
         .collect();
     TrackInfo {
@@ -1734,6 +1738,7 @@ mod snapshot_tests {
             enabled: true,
         });
         t.inserts.push(PluginSlot {
+            allow_smart_disable: true,
             id: "s1".into(),
             plugin_id: "hardwave.native.eq".into(),
             enabled: true,
