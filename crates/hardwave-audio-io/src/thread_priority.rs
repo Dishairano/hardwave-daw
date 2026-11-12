@@ -23,6 +23,10 @@
 //!
 //! On other platforms this does nothing (macOS joins the device's
 //! workgroup in `coreaudio_workgroup` instead).
+//!
+//! The other way round, [`lower_current_thread`] puts background work
+//! (stretch and warp bakes) below normal priority, so it never competes
+//! with the audio threads or the window.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -202,6 +206,16 @@ fn raise_once(
         .unwrap_or(PriorityOutcome::Pending)
 }
 
+/// Put the calling thread below normal priority, for work that may take
+/// its time: it then only gets the processor when the audio threads and
+/// the window do not want it. True when the system took it.
+///
+/// Windows: below normal. Linux: a nice of 10 for this thread. macOS: the
+/// utility quality of service. Elsewhere nothing.
+pub fn lower_current_thread() -> bool {
+    platform::lower()
+}
+
 #[cfg(target_os = "windows")]
 mod platform {
     use super::{on_refusal, OnRefusal, PriorityOutcome};
@@ -209,8 +223,14 @@ mod platform {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Threading::{
         AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, AvSetMmThreadPriority,
-        GetCurrentThread, SetThreadPriority, AVRT_PRIORITY_HIGH, THREAD_PRIORITY_TIME_CRITICAL,
+        GetCurrentThread, SetThreadPriority, AVRT_PRIORITY_HIGH, THREAD_PRIORITY_BELOW_NORMAL,
+        THREAD_PRIORITY_TIME_CRITICAL,
     };
+
+    pub(super) fn lower() -> bool {
+        // SAFETY: GetCurrentThread is a pseudo handle valid on this thread.
+        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) }.is_ok()
+    }
 
     pub(super) fn raise() -> (PriorityOutcome, usize) {
         let mut task_index = 0u32;
@@ -256,6 +276,27 @@ mod platform {
     }
 
     pub(super) fn revert(_handle: usize) {}
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn lower() -> bool {
+        // SAFETY: plain calls; on Linux a nice set by thread id applies to
+        // that thread alone.
+        unsafe {
+            let tid = libc::gettid();
+            libc::setpriority(libc::PRIO_PROCESS, tid as libc::id_t, 10) == 0
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn lower() -> bool {
+        // SAFETY: a plain call on the calling thread.
+        unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0) == 0 }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub(super) fn lower() -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -380,6 +421,25 @@ mod tests {
         ] {
             assert_eq!(on_refusal(code), OnRefusal::TimeCritical, "{code:08x}");
         }
+    }
+
+    #[test]
+    fn background_work_can_be_put_below_normal() {
+        std::thread::spawn(|| {
+            let lowered = lower_current_thread();
+            if cfg!(any(target_os = "linux", target_os = "windows")) {
+                assert!(lowered);
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: plain calls about this thread.
+                let nice =
+                    unsafe { libc::getpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t) };
+                assert!(nice >= 10, "nice {nice}");
+            }
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

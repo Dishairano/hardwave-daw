@@ -2247,7 +2247,15 @@ impl DawEngine {
         let tx = self.command_tx.clone();
         let inflight = Arc::clone(&self.stretch_inflight);
         let project = Arc::clone(&self.project);
-        std::thread::spawn(move || {
+        let bake = std::thread::Builder::new().name("hw-bake".into());
+        // Fails only as `std::thread::spawn` would, which it replaces.
+        bake.spawn(move || {
+            // Below normal priority: a bake made while the song plays (27 to
+            // 44 percent of a core for a big FL import, measured on the test
+            // machine) took the processor from the audio thread and the
+            // window at the same priority as theirs. Now it only gets what
+            // they leave.
+            hardwave_audio_io::thread_priority::lower_current_thread();
             let stale = {
                 // Release the in-flight keys on the way out whatever happens. If a
                 // bake panicked and left them claimed, that source could never be
@@ -2302,7 +2310,8 @@ impl DawEngine {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 drop(stale);
             }
-        });
+        })
+        .expect("start the bake thread");
     }
 
     /// Wait while another bake is still making a tuned take this one is
