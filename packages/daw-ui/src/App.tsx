@@ -4,6 +4,7 @@ import React, { Suspense, useEffect, useState, useRef, useCallback, useMemo } fr
 import { SplashScreen } from './components/SplashScreen'
 import { HwApp } from './components/HwApp'
 import type { MenuDef, MenuItem } from './components/HwTopMenu'
+import { autoCrossfadeMenuItem } from './components/arrangement/autoCrossfadeMenu'
 import { usePatternStore } from './stores/patternStore'
 import { useUiPreferencesStore, UI_SCALE_OPTIONS, type UiScale } from './stores/uiPreferencesStore'
 import { Roadmap } from './components/roadmap/Roadmap'
@@ -2383,6 +2384,7 @@ export function App() {
           { label: 'Duplicate', shortcut: 'Ctrl+D', action: duplicateSelection },
           { separator: true, label: '' },
           { label: 'Select all', shortcut: 'Ctrl+A', action: () => useTrackStore.getState().selectAllClips() },
+          autoCrossfadeMenuItem(),
           { separator: true, label: '' },
           { label: 'Play selection', shortcut: 'Shift+Space', action: playSelection },
           { separator: true, label: '' },
