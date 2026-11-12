@@ -137,6 +137,20 @@ pub trait AudioNode: Send {
         None
     }
 
+    /// How long this node's work took in one block, in nanoseconds, for
+    /// its load read-out in the mixer. The graph times each node on one
+    /// block in [`CPU_STRIDE`], not on every block. Default: not shown.
+    fn report_cpu(&self, nanos: u64) {
+        let _ = nanos;
+    }
+
+    /// Whether the block just processed left every output channel silent.
+    /// The graph then leaves the node out of the sums it feeds, as it does
+    /// an idle one. Default: never said.
+    fn output_is_silent(&self) -> bool {
+        false
+    }
+
     /// How many plug-ins the node's chain holds.
     fn chain_len(&self) -> usize {
         0
@@ -164,6 +178,13 @@ pub trait AudioNode: Send {
         let _ = (slot_id, active);
     }
 }
+
+/// Each node's work is timed on one block in this many, for the mixer's
+/// per-track load read-out. Reading the clock is not free: on a Windows
+/// virtual machine one read took 14 microseconds, and two per track on
+/// every block came to a fifth of a 512-frame block on a 127-track song.
+/// This way a block reads the clock for a handful of nodes at most.
+pub const CPU_STRIDE: usize = 32;
 
 /// Number of output channels every node gets. Tracks use 0/1 for post-fader
 /// stereo and 2/3 for the pre-fader tap that feeds pre-fader sends; other
@@ -321,6 +342,13 @@ pub struct AudioGraph {
     /// The critical-path latency `finalize_pdc` worked out, with the chain
     /// delays it was told.
     planned_latency: u32,
+    /// Per node, the nanoseconds spent gathering its inputs and running
+    /// it, added up over the blocks since timing was switched on. `None`
+    /// (the default) times nothing. For measurements only.
+    node_nanos: Option<Vec<[u64; 2]>>,
+    /// Counts the blocks, to pick the nodes timed for their load read-out
+    /// this block (see [`CPU_STRIDE`]).
+    cpu_turn: usize,
 }
 
 impl AudioGraph {
@@ -341,7 +369,39 @@ impl AudioGraph {
             pool: None,
             delay_keys: Vec::new(),
             planned_latency: 0,
+            node_nanos: None,
+            cpu_turn: 0,
         }
+    }
+
+    /// Start timing each node on the one-thread path (see
+    /// [`Self::node_nanos`]), from zero, or stop. For measurements only.
+    #[doc(hidden)]
+    pub fn time_nodes(&mut self, on: bool) {
+        self.node_nanos = on.then(|| vec![[0, 0]; self.nodes.len()]);
+    }
+
+    /// Per node, the nanoseconds spent gathering its inputs (sums and
+    /// compensation lines) and running it since [`Self::time_nodes`],
+    /// when timing is on.
+    #[doc(hidden)]
+    pub fn node_nanos(&mut self) -> Option<&mut [[u64; 2]]> {
+        self.node_nanos.as_deref_mut()
+    }
+
+    /// The name of a node, and whether it is an audio track, an
+    /// instrument track or the master. For measurements.
+    #[doc(hidden)]
+    pub fn node_label(&mut self, node_id: NodeId) -> Option<(String, &'static str)> {
+        let node = self.nodes.get_mut(node_id)?;
+        let name = node.name().to_string();
+        let kind = match node.as_any_mut() {
+            Some(any) if any.is::<crate::track_node::TrackNode>() => "track",
+            Some(any) if any.is::<crate::midi_track_node::MidiTrackNode>() => "instrument",
+            _ if name == "Master" => "master",
+            _ => "other",
+        };
+        Some((name, kind))
     }
 
     /// Mark a node as accepting external/live MIDI for the next call to
@@ -693,8 +753,10 @@ impl AudioGraph {
         self.ensure_order();
         // More than one core, when a pool is attached and the graph is
         // wide enough to be worth it.
+        let cpu_turn = self.cpu_turn % CPU_STRIDE;
+        self.cpu_turn = self.cpu_turn.wrapping_add(1);
         if self.pool.is_some() && !self.levels.is_empty() {
-            self.process_in_parallel(ctx, midi_in);
+            self.process_in_parallel(ctx, midi_in, cpu_turn);
             return;
         }
         // Iterate by index — `processing_order` mutates inside the loop
@@ -716,6 +778,7 @@ impl AudioGraph {
             if idle && self.silent[node_id] {
                 continue;
             }
+            let timed = self.node_nanos.is_some().then(std::time::Instant::now);
 
             // Zero the scratch's input buffers in place — no realloc.
             for ch in &mut self.scratch[node_id].ch_bufs {
@@ -769,6 +832,8 @@ impl AudioGraph {
                 }
             }
 
+            let gathered = timed.map(|t| (t.elapsed(), std::time::Instant::now()));
+
             // Run the node. Stack-allocated input_refs avoids a
             // per-iteration `Vec::collect`. NODE_CHANNELS is small + const
             // so the array stays cheap.
@@ -790,6 +855,7 @@ impl AudioGraph {
             } else {
                 &midi_empty
             };
+            let clocked = (order_idx % CPU_STRIDE == cpu_turn).then(std::time::Instant::now);
             self.nodes[node_id].process(
                 &input_refs,
                 &mut scratch.outputs,
@@ -797,13 +863,23 @@ impl AudioGraph {
                 &mut scratch.midi_out,
                 ctx,
             );
+            if let Some(started) = clocked {
+                self.nodes[node_id].report_cpu(started.elapsed().as_nanos() as u64);
+            }
 
             // Swap the freshly-written output with the persistent buffer.
             // Zero copy — the persistent buffer becomes the next-block
             // scratch.outputs, which we'll .fill(0.0) on next call.
             std::mem::swap(&mut scratch.outputs, &mut self.buffers[node_id]);
-            // An idle node wrote silence (the trait's promise).
-            self.silent[node_id] = idle;
+            // An idle node wrote silence (the trait's promise), and a node
+            // may say it did.
+            self.silent[node_id] = idle || self.nodes[node_id].output_is_silent();
+            if let (Some(nanos), Some((gather, ran))) = (&mut self.node_nanos, gathered) {
+                if let Some(slot) = nanos.get_mut(node_id) {
+                    slot[0] += gather.as_nanos() as u64;
+                    slot[1] += ran.elapsed().as_nanos() as u64;
+                }
+            }
         }
     }
 
@@ -814,7 +890,12 @@ impl AudioGraph {
     /// output buffers of nodes in earlier levels, which are finished
     /// before this level starts. That is what makes handing out
     /// pointers to separate nodes sound.
-    fn process_in_parallel(&mut self, ctx: &ProcessContext, midi_in: &[hardwave_midi::MidiEvent]) {
+    fn process_in_parallel(
+        &mut self,
+        ctx: &ProcessContext,
+        midi_in: &[hardwave_midi::MidiEvent],
+        cpu_turn: usize,
+    ) {
         let Some(pool) = self.pool.clone() else {
             return;
         };
@@ -832,6 +913,7 @@ impl AudioGraph {
             buffer_size: self.buffer_size,
             midi_in,
             ctx,
+            cpu_turn,
         };
         let run = |node_id: usize| {
             // SAFETY: every node id in a level is distinct, and a node
@@ -942,6 +1024,8 @@ struct NodeWork<'a> {
     buffer_size: usize,
     midi_in: &'a [hardwave_midi::MidiEvent],
     ctx: &'a ProcessContext,
+    /// The nodes whose id falls on this in [`CPU_STRIDE`] are timed.
+    cpu_turn: usize,
 }
 
 // SAFETY: the nodes handed to different threads are distinct, and the
@@ -1037,6 +1121,7 @@ impl NodeWork<'_> {
         } else {
             &midi_empty
         };
+        let clocked = (node_id % CPU_STRIDE == self.cpu_turn).then(std::time::Instant::now);
         node.process(
             &input_refs,
             &mut scratch.outputs,
@@ -1044,10 +1129,13 @@ impl NodeWork<'_> {
             &mut scratch.midi_out,
             self.ctx,
         );
+        if let Some(started) = clocked {
+            node.report_cpu(started.elapsed().as_nanos() as u64);
+        }
 
         let buffers = unsafe { &mut *self.buffers.add(node_id) };
         std::mem::swap(&mut scratch.outputs, buffers);
-        *silent = idle;
+        *silent = idle || node.output_is_silent();
     }
 }
 
@@ -1194,6 +1282,113 @@ mod tests {
         g.process(&ctx(), &[]);
         assert_eq!(quiet_runs.load(Relaxed), 3);
         assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+    }
+
+    /// A node that says it wrote silence, whatever it wrote.
+    struct SaysSilent;
+
+    impl AudioNode for SaysSilent {
+        fn name(&self) -> &str {
+            "says silent"
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+            outputs[0].fill(0.25);
+        }
+        fn output_is_silent(&self) -> bool {
+            true
+        }
+    }
+
+    /// A node that says its block was silent is left out of the sums it
+    /// feeds, on one thread and on several, and is still run every block.
+    #[test]
+    fn a_node_that_says_it_wrote_silence_is_left_out_of_the_sums() {
+        for threads in [0, 2] {
+            let mut g = AudioGraph::new(16);
+            if threads > 0 {
+                g.set_worker_pool(Some(std::sync::Arc::new(crate::parallel::WorkerPool::new(
+                    threads,
+                ))));
+            }
+            let quiet = g.add_node(Box::new(SaysSilent));
+            let loud = g.add_node(Box::new(Source {
+                level: 0.5,
+                idle: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                runs: Default::default(),
+            }));
+            let sink = g.add_node(Box::new(Sum));
+            g.connect(quiet, 0, sink, 0);
+            g.connect(loud, 0, sink, 0);
+            g.finalize_pdc(true);
+            for _ in 0..3 {
+                g.process(&ctx(), &[]);
+                assert!(g.node_output(sink).unwrap()[0].iter().all(|v| *v == 0.5));
+            }
+        }
+    }
+
+    /// A node that counts the times it was timed for its load read-out.
+    struct Clocked {
+        reports: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AudioNode for Clocked {
+        fn name(&self) -> &str {
+            "clocked"
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            _outputs: &mut [Vec<f32>],
+            _midi_in: &[hardwave_midi::MidiEvent],
+            _midi_out: &mut Vec<hardwave_midi::MidiEvent>,
+            _ctx: &ProcessContext,
+        ) {
+        }
+        fn report_cpu(&self, _nanos: u64) {
+            self.reports
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Each node is timed for its load read-out on one block in
+    /// `CPU_STRIDE`, and a block times a few nodes, not all of them: every
+    /// node read the clock twice on every block, which on a Windows virtual
+    /// machine (14 microseconds a read) took a fifth of the block on a big
+    /// song.
+    #[test]
+    fn a_block_times_a_few_nodes_and_every_node_gets_its_turn() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        use std::sync::Arc;
+        let mut g = AudioGraph::new(16);
+        let counts: Vec<Arc<AtomicUsize>> =
+            (0..80).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+        for c in &counts {
+            g.add_node(Box::new(Clocked { reports: c.clone() }));
+        }
+        g.finalize_pdc(true);
+        let total =
+            |counts: &[Arc<AtomicUsize>]| counts.iter().map(|c| c.load(Relaxed)).sum::<usize>();
+        let mut most_in_a_block = 0;
+        for _ in 0..3 * CPU_STRIDE {
+            let before = total(&counts);
+            g.process(&ctx(), &[]);
+            most_in_a_block = most_in_a_block.max(total(&counts) - before);
+        }
+        assert!(
+            most_in_a_block <= 80usize.div_ceil(CPU_STRIDE),
+            "{most_in_a_block} nodes timed in one block"
+        );
+        for c in &counts {
+            assert_eq!(c.load(Relaxed), 3, "each node timed once a round");
+        }
     }
 
     /// A track's node for the rebuild test: a steady level, a latency, and

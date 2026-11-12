@@ -751,12 +751,17 @@ impl HostedPlugin for NativeSampler {
                 _ => {}
             }
         }
-        let Some(sample) = self.sample.clone() else {
-            return;
-        };
-        if outputs.len() < 2 {
+        // Nothing sounding: the block is the silence written above.
+        if self.voices.is_empty() || outputs.len() < 2 {
             return;
         }
+        // Borrowed, never copied: this ran on every block of every sampler,
+        // and a copy of the sample here was an allocation and a copy of the
+        // whole file on the audio thread each time, sounding or not. A song
+        // with dozens of sampler channels dropped out from that alone.
+        let Some(sample) = self.sample.as_ref() else {
+            return;
+        };
         let frames = sample.frames();
         if frames == 0 {
             return;
@@ -860,9 +865,9 @@ impl HostedPlugin for NativeSampler {
                     continue;
                 }
                 let g = v.env * v.cut_gain * v.attack_gain * v.velocity * gain;
-                let (mut sl, mut sr_s) = (Self::read_fx(&sample, 0, v.pos, &fx), 0.0);
+                let (mut sl, mut sr_s) = (Self::read_fx(sample, 0, v.pos, &fx), 0.0);
                 if two_ch {
-                    sr_s = Self::read_fx(&sample, 1, v.pos, &fx);
+                    sr_s = Self::read_fx(sample, 1, v.pos, &fx);
                 }
                 // Into the loop's crossfade: blend with what comes before
                 // the loop start, so the seam does not click.
@@ -870,9 +875,9 @@ impl HostedPlugin for NativeSampler {
                     let other = v.pos - (le - ls);
                     if other >= rs {
                         let w = ((v.pos - (le - xfade)) / xfade).clamp(0.0, 1.0) as f32;
-                        sl = sl * (1.0 - w) + Self::read_fx(&sample, 0, other, &fx) * w;
+                        sl = sl * (1.0 - w) + Self::read_fx(sample, 0, other, &fx) * w;
                         if two_ch {
-                            sr_s = sr_s * (1.0 - w) + Self::read_fx(&sample, 1, other, &fx) * w;
+                            sr_s = sr_s * (1.0 - w) + Self::read_fx(sample, 1, other, &fx) * w;
                         }
                     }
                 }

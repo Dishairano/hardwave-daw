@@ -442,6 +442,12 @@ impl MidiInputManager {
         let Some(mut state) = self.shared.try_lock() else {
             return false;
         };
+        // The audio thread asks on every block, mostly with nothing played.
+        // The clock is read only when there is something to age: a read
+        // took 14 microseconds on a Windows virtual machine.
+        if state.events.is_empty() {
+            return true;
+        }
         let now = Instant::now();
         out.extend(state.events.drain(..).map(|(arrived, ev)| {
             let age = now.saturating_duration_since(arrived).as_secs_f64() * sample_rate.max(1.0);
