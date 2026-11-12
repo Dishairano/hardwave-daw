@@ -212,12 +212,21 @@ fn take_work(shared: &Shared, nodes: &[usize], run: &dyn Fn(usize)) {
     }
 }
 
+/// What the last worker to start got when it asked for real-time
+/// priority, for the diagnostics.
+pub static WORKER_PRIORITY: hardwave_audio_io::thread_priority::PriorityStatus =
+    hardwave_audio_io::thread_priority::PriorityStatus::new();
+
 fn worker_loop(shared: Arc<Shared>) {
     // These threads run plug-ins and effects like the audio thread does,
     // and only the audio thread had denormals flushed: a reverb tail on a
     // worker took the slow path and spiked the load. The workers live as
     // long as the pool, so once is enough.
     hardwave_audio_io::denormals::flush_denormals_to_zero();
+    // They also have to keep up with the audio thread they work for: at
+    // normal priority any busy program on the machine delays a level,
+    // and the audio thread waits for it. Same class as the audio thread.
+    WORKER_PRIORITY.set(hardwave_audio_io::thread_priority::raise_current_thread());
     let mut seen_epoch = 0usize;
     loop {
         let (nodes, run) = {
@@ -333,6 +342,21 @@ mod tests {
         for (node, count) in counts.iter().enumerate() {
             assert_eq!(count.load(Ordering::Relaxed), 50, "node {node}");
         }
+    }
+
+    #[test]
+    fn the_workers_ask_for_the_audio_thread_s_priority() {
+        let _pool = WorkerPool::new(1);
+        // Each worker asks as it starts; give it the time to.
+        let asked = (0..200).any(|_| {
+            if WORKER_PRIORITY.get() != hardwave_audio_io::thread_priority::PriorityOutcome::Pending
+            {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            false
+        });
+        assert!(asked, "no worker asked for real-time priority");
     }
 
     #[test]
