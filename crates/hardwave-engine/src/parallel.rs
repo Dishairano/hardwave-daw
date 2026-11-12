@@ -18,7 +18,7 @@
 //! either way: the tests check that the parallel path and the plain one
 //! produce identical samples.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Which level each node belongs to, and the nodes of each level in
@@ -63,6 +63,24 @@ impl Levels {
     }
 }
 
+/// How the claim word is split: the batch number above, the index of
+/// the next node below.
+const INDEX_BITS: u32 = 24;
+const INDEX_MASK: u64 = (1 << INDEX_BITS) - 1;
+/// Batch numbers count up to this and start again at zero. 2^40
+/// batches is about four months even at a hundred thousand levels a
+/// second, so a worker would have to be held up that long for an old
+/// batch number to match again.
+const EPOCH_MASK: u64 = (1 << (64 - INDEX_BITS)) - 1;
+/// The most nodes a level can have and still be shared out: an index
+/// below this plus one still fits under the batch number.
+const MAX_SHARED_LEVEL: usize = INDEX_MASK as usize;
+
+/// The claim word for node `index` of batch `epoch`.
+fn pack(epoch: u64, index: usize) -> u64 {
+    (epoch << INDEX_BITS) | index as u64
+}
+
 /// One batch of work: the nodes of a level, and the function that runs
 /// one node. The pointers are to the publisher's own stack frame, which
 /// is only certain to be alive while a node of this batch is claimed
@@ -72,7 +90,7 @@ impl Levels {
 struct Batch {
     /// Which batch this is. A claim only succeeds while the claim word
     /// still carries this number.
-    epoch: u32,
+    epoch: u64,
     nodes: *const usize,
     count: usize,
     /// The closure, as a bare pointer pair. A trait-object pointer
@@ -92,24 +110,38 @@ struct Shared {
     batch: Mutex<Option<Batch>>,
     /// Woken when a batch is published.
     ready: Condvar,
-    /// The current batch's number in the top 32 bits and the index of
-    /// the next node to take out of it in the low 32. One word, so a
+    /// The current batch's number in the top 40 bits and the index of
+    /// the next node to take out of it in the low 24. One word, so a
     /// worker still holding an older batch cannot take a node out of
-    /// the new one: its claim sees a different number and fails. The
-    /// number wraps after 2^32 batches, more than a day of playback, so
-    /// a worker would have to sleep that long to be fooled by it.
+    /// the new one: its claim sees a different number and fails.
     claim: AtomicU64,
     /// How many nodes of the batch are still unfinished. Only a thread
     /// that claimed a node of the current batch takes one off, so the
     /// count cannot be touched by a batch that is already over.
     remaining: AtomicUsize,
-    /// The number of the last batch published.
-    epoch: AtomicU32,
+    /// Counts the batches published; the batch number is its low 40
+    /// bits.
+    epoch: AtomicU64,
+    /// Set while a thread is handing out a level.
+    publishing: AtomicBool,
+    /// A node of the current level panicked on a worker.
+    worker_panicked: AtomicBool,
+    /// Set, under the batch lock, when the pool is dropped.
     shutdown: AtomicBool,
-    /// Called by a worker before each claim, so a test can hold it at
-    /// the point where the scheduler could take it off the core.
     #[cfg(test)]
+    hooks: TestHooks,
+}
+
+/// Places where a test can hold a worker, to stand in for the scheduler
+/// taking it off the core there.
+#[cfg(test)]
+#[derive(Default)]
+struct TestHooks {
+    /// Before each claim.
     before_claim: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Holding the batch lock, after finding nothing to do and before
+    /// waiting for the next batch.
+    before_wait: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// A handful of threads that stay alive between blocks.
@@ -129,23 +161,22 @@ impl WorkerPool {
         Self::start(
             threads,
             #[cfg(test)]
-            None,
+            TestHooks::default(),
         )
     }
 
-    fn start(
-        threads: usize,
-        #[cfg(test)] before_claim: Option<Box<dyn Fn() + Send + Sync>>,
-    ) -> Self {
+    fn start(threads: usize, #[cfg(test)] hooks: TestHooks) -> Self {
         let shared = Arc::new(Shared {
             batch: Mutex::new(None),
             ready: Condvar::new(),
             claim: AtomicU64::new(0),
             remaining: AtomicUsize::new(0),
-            epoch: AtomicU32::new(0),
+            epoch: AtomicU64::new(0),
+            publishing: AtomicBool::new(false),
+            worker_panicked: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             #[cfg(test)]
-            before_claim,
+            hooks,
         });
         let mut workers = Vec::with_capacity(threads);
         for index in 0..threads {
@@ -172,9 +203,22 @@ impl WorkerPool {
             return;
         }
         // One node on its own is not worth waking anybody for. A level
-        // too big for the claim word's index (never, in practice) runs
-        // here as well.
-        if nodes.len() == 1 || self.workers.is_empty() || nodes.len() > u32::MAX as usize {
+        // too big for the claim word's index (16 million nodes, never in
+        // practice) runs here as well.
+        if nodes.len() == 1 || self.workers.is_empty() || nodes.len() > MAX_SHARED_LEVEL {
+            for &node in nodes {
+                run(node);
+            }
+            return;
+        }
+
+        // One level at a time. The graphs that use the pool share it,
+        // and the pool hands out one batch: a second thread publishing
+        // over a level in flight would reset its claim word and count
+        // under it, so nodes would be skipped or the wait would never
+        // end. Playback is the only caller today; anything else that
+        // gets here at the same time runs its level on its own thread.
+        if self.shared.publishing.swap(true, Ordering::Acquire) {
             for &node in nodes {
                 run(node);
             }
@@ -191,7 +235,8 @@ impl WorkerPool {
             .shared
             .epoch
             .fetch_add(1, Ordering::Relaxed)
-            .wrapping_add(1);
+            .wrapping_add(1)
+            & EPOCH_MASK;
         let batch = Batch {
             epoch,
             nodes: nodes.as_ptr(),
@@ -202,9 +247,7 @@ impl WorkerPool {
         // The count first, then the claim word: a thread whose claim
         // sees the new number also sees the new count.
         self.shared.remaining.store(nodes.len(), Ordering::Relaxed);
-        self.shared
-            .claim
-            .store(u64::from(epoch) << 32, Ordering::Release);
+        self.shared.claim.store(pack(epoch, 0), Ordering::Release);
         {
             let mut slot = self.shared.batch.lock().expect("batch lock");
             *slot = Some(batch);
@@ -212,7 +255,7 @@ impl WorkerPool {
         self.shared.ready.notify_all();
 
         // This thread takes work too rather than standing idle.
-        take_work(&self.shared, &batch, false);
+        let panicked_here = take_work(&self.shared, &batch, false);
 
         // Wait for the stragglers. A spin first, because the usual case
         // is that they are a few microseconds behind. A worker that took
@@ -228,18 +271,48 @@ impl WorkerPool {
             }
         }
 
-        let mut slot = self.shared.batch.lock().expect("batch lock");
-        *slot = None;
+        let panicked_on_worker = self.shared.worker_panicked.swap(false, Ordering::Relaxed);
+        {
+            let mut slot = self.shared.batch.lock().expect("batch lock");
+            *slot = None;
+        }
+        self.shared.publishing.store(false, Ordering::Release);
+        // A node that panicked goes on up from here, once the level is
+        // over and nothing runs on this frame any more, as it would have
+        // with no helper threads. Before, a panic here left the workers
+        // running on a frame that was being unwound, and a panic on a
+        // worker never took its node off the count, so this thread
+        // waited for it forever.
+        if let Some(payload) = panicked_here {
+            std::panic::resume_unwind(payload);
+        }
+        if panicked_on_worker {
+            panic!("a mixer node panicked on an audio worker thread");
+        }
     }
 }
 
 impl Drop for WorkerPool {
     fn drop(&mut self) {
-        self.shared.shutdown.store(true, Ordering::Release);
-        self.shared.ready.notify_all();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
+        // Under the lock: a worker checks for shutdown and then waits
+        // while holding it, so it has either seen the flag or is already
+        // waiting and gets the wake. Set without the lock, a worker
+        // between its check and its wait missed both and slept forever.
+        {
+            let _slot = self
+                .shared
+                .batch
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.shared.shutdown.store(true, Ordering::Release);
         }
+        self.shared.ready.notify_all();
+        // The workers are let go, not joined. Each holds only its own
+        // handle on the shared state and stops at its next wake, and a
+        // join would make whichever thread drops the last handle on the
+        // pool wait for all of them. That can be the audio thread: with
+        // no graph builder thread it frees the graph it replaces itself.
+        self.workers.clear();
     }
 }
 
@@ -255,15 +328,15 @@ impl Drop for WorkerPool {
 /// with it: the closure's frame was gone, and the new level lost a node
 /// and its unfinished count. Here the batch number travels with the
 /// index, so the claim fails instead.
-fn claim(shared: &Shared, epoch: u32, count: usize) -> Option<usize> {
+fn claim(shared: &Shared, epoch: u64, count: usize) -> Option<usize> {
     let mut current = shared.claim.load(Ordering::Acquire);
     loop {
-        let index = (current & u64::from(u32::MAX)) as usize;
-        if (current >> 32) as u32 != epoch || index >= count {
+        let index = (current & INDEX_MASK) as usize;
+        if current >> INDEX_BITS != epoch || index >= count {
             return None;
         }
-        // index < count <= u32::MAX, so the add cannot reach the
-        // batch number's bits.
+        // index < count <= MAX_SHARED_LEVEL, so the add cannot reach
+        // the batch number's bits.
         match shared.claim.compare_exchange_weak(
             current,
             current + 1,
@@ -277,28 +350,45 @@ fn claim(shared: &Shared, epoch: u32, count: usize) -> Option<usize> {
 }
 
 /// Take nodes from the batch until there are none left.
-#[cfg_attr(not(test), allow(unused_variables))]
-fn take_work(shared: &Shared, batch: &Batch, on_worker: bool) {
+///
+/// A node that panics still counts as finished, so nobody waits for it
+/// forever. The first panic is handed back; on a worker it is also
+/// noted for the publisher, which raises it once the level is over.
+fn take_work(
+    shared: &Shared,
+    batch: &Batch,
+    on_worker: bool,
+) -> Option<Box<dyn std::any::Any + Send>> {
+    let mut panicked = None;
     loop {
         #[cfg(test)]
         if on_worker {
-            if let Some(hook) = &shared.before_claim {
+            if let Some(hook) = &shared.hooks.before_claim {
                 hook();
             }
         }
         let Some(index) = claim(shared, batch.epoch, batch.count) else {
-            return;
+            return panicked;
         };
         // SAFETY: this thread holds an unfinished node of the batch, so
         // `remaining` is above zero and the publisher is still inside
         // `run_level`, keeping the node list and the closure alive until
         // the count is taken off below. Nothing of the batch is touched
         // after that.
-        unsafe {
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             let node = *batch.nodes.add(index);
             let raw: *const (dyn Fn(usize) + Sync) =
                 std::mem::transmute((batch.run, batch.run_vtable));
             (*raw)(node);
+        }));
+        if let Err(payload) = ran {
+            // Seen by the publisher through the count below.
+            if on_worker {
+                shared.worker_panicked.store(true, Ordering::Relaxed);
+            }
+            if panicked.is_none() {
+                panicked = Some(payload);
+            }
         }
         shared.remaining.fetch_sub(1, Ordering::AcqRel);
     }
@@ -319,7 +409,7 @@ fn worker_loop(shared: Arc<Shared>) {
     // normal priority any busy program on the machine delays a level,
     // and the audio thread waits for it. Same class as the audio thread.
     WORKER_PRIORITY.set(hardwave_audio_io::thread_priority::raise_current_thread());
-    let mut seen_epoch = 0u32;
+    let mut seen_epoch = 0u64;
     loop {
         let batch = {
             let mut slot = shared.batch.lock().expect("batch lock");
@@ -333,10 +423,16 @@ fn worker_loop(shared: Arc<Shared>) {
                         break batch;
                     }
                 }
+                #[cfg(test)]
+                if let Some(hook) = &shared.hooks.before_wait {
+                    hook();
+                }
                 slot = shared.ready.wait(slot).expect("batch wait");
             }
         };
-        take_work(&shared, &batch, true);
+        // The panic was reported where it happened; the audio thread
+        // raises it again.
+        drop(take_work(&shared, &batch, true));
     }
 }
 
@@ -355,6 +451,7 @@ pub fn default_worker_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU32;
 
     #[test]
     #[cfg(target_arch = "x86_64")]
@@ -460,6 +557,13 @@ mod tests {
         passed: usize,
     }
 
+    fn hooks_before_claim(hook: impl Fn() + Send + Sync + 'static) -> TestHooks {
+        TestHooks {
+            before_claim: Some(Box::new(hook)),
+            ..TestHooks::default()
+        }
+    }
+
     fn on_worker() -> bool {
         std::thread::current()
             .name()
@@ -494,7 +598,7 @@ mod tests {
         let hook_gate = Arc::clone(&gate);
         let pool = WorkerPool::start(
             1,
-            Some(Box::new(move || {
+            hooks_before_claim(move || {
                 let (lock, cond) = &*hook_gate;
                 let mut g = lock.lock().unwrap();
                 while g.hold {
@@ -505,7 +609,7 @@ mod tests {
                 g.waiting = false;
                 g.passed += 1;
                 cond.notify_all();
-            })),
+            }),
         );
         let gate_state = |f: &dyn Fn(&Gate) -> bool| f(&gate.0.lock().unwrap());
 
@@ -547,9 +651,12 @@ mod tests {
                     wait_until(|| gate_state(&|g| g.passed > 0)),
                     "worker resumed"
                 );
-                wait_until(|| {
-                    late.load(Ordering::SeqCst) > 0 || worker_in_b.load(Ordering::SeqCst) > 0
-                });
+                assert!(
+                    wait_until(|| {
+                        late.load(Ordering::SeqCst) > 0 || worker_in_b.load(Ordering::SeqCst) > 0
+                    }),
+                    "the held worker did nothing once let go"
+                );
             }
         };
         pool.run_level(&nodes, &run_b);
@@ -581,7 +688,7 @@ mod tests {
         let seed = AtomicU64::new(0x9e37_79b9_7f4a_7c15);
         let pool = WorkerPool::start(
             3,
-            Some(Box::new(move || {
+            hooks_before_claim(move || {
                 // A shared xorshift is random enough for this.
                 let mut x = seed.load(Ordering::Relaxed);
                 x ^= x << 13;
@@ -593,7 +700,7 @@ mod tests {
                     1..=4 => std::thread::yield_now(),
                     _ => {}
                 }
-            })),
+            }),
         );
         let current = AtomicUsize::new(0);
         let overlaps = AtomicUsize::new(0);
@@ -625,6 +732,171 @@ mod tests {
             overlaps.load(Ordering::SeqCst),
             0,
             "a node ran outside its level"
+        );
+    }
+
+    #[test]
+    fn a_claim_from_a_batch_two_to_the_32_back_fails() {
+        // With a 32-bit batch number these two were the same batch.
+        let pool = WorkerPool::new(0);
+        let now = 5 + (1u64 << 32);
+        pool.shared.claim.store(pack(now, 0), Ordering::SeqCst);
+        assert_eq!(claim(&pool.shared, 5, 10), None);
+        assert_eq!(claim(&pool.shared, now, 10), Some(0));
+        assert_eq!(claim(&pool.shared, now, 10), Some(1));
+    }
+
+    #[test]
+    fn the_batch_number_starts_again_without_losing_a_node() {
+        let pool = WorkerPool::new(2);
+        pool.shared.epoch.store(EPOCH_MASK - 3, Ordering::SeqCst);
+        let counts: Vec<AtomicU32> = (0..16).map(|_| AtomicU32::new(0)).collect();
+        let nodes: Vec<usize> = (0..16).collect();
+        let run = |node: usize| {
+            counts[node].fetch_add(1, Ordering::SeqCst);
+        };
+        for level in 0..10 {
+            pool.run_level(&nodes, &run);
+            for (node, count) in counts.iter().enumerate() {
+                assert_eq!(
+                    count.swap(0, Ordering::SeqCst),
+                    1,
+                    "level {level} node {node}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_the_pool_lets_every_worker_go() {
+        // A worker that has checked for shutdown and not yet started to
+        // wait must still hear about it, and dropping the pool must not
+        // wait for the workers to stop.
+        let at_wait = Arc::new(AtomicUsize::new(0));
+        let hook_at_wait = Arc::clone(&at_wait);
+        let pool = WorkerPool::start(
+            1,
+            TestHooks {
+                before_wait: Some(Box::new(move || {
+                    hook_at_wait.fetch_add(1, Ordering::SeqCst);
+                    // Stay between the check and the wait for a while.
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                })),
+                ..TestHooks::default()
+            },
+        );
+        let shared = Arc::downgrade(&pool.shared);
+        assert!(
+            wait_until(|| at_wait.load(Ordering::SeqCst) > 0),
+            "worker idle"
+        );
+        let (dropped, dropped_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(pool);
+            let _ = dropped.send(());
+        });
+        assert!(
+            dropped_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "dropping the pool returned"
+        );
+        assert!(
+            wait_until(|| shared.upgrade().is_none()),
+            "every worker stopped"
+        );
+    }
+
+    #[test]
+    fn two_threads_sharing_a_pool_each_run_every_node_once() {
+        let pool = Arc::new(WorkerPool::new(2));
+        let (done, done_rx) = std::sync::mpsc::channel();
+        for _ in 0..2 {
+            let pool = Arc::clone(&pool);
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let counts: Vec<AtomicU32> = (0..16).map(|_| AtomicU32::new(0)).collect();
+                let nodes: Vec<usize> = (0..16).collect();
+                let run = |node: usize| {
+                    counts[node].fetch_add(1, Ordering::SeqCst);
+                };
+                let mut wrong = 0;
+                for _ in 0..2_000 {
+                    pool.run_level(&nodes, &run);
+                    wrong += counts
+                        .iter()
+                        .filter(|count| count.swap(0, Ordering::SeqCst) != 1)
+                        .count();
+                }
+                let _ = done.send(wrong);
+            });
+        }
+        for _ in 0..2 {
+            let wrong = done_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("both threads got through their levels");
+            assert_eq!(wrong, 0, "a node ran other than once");
+        }
+    }
+
+    #[test]
+    fn a_node_that_panics_on_a_worker_does_not_hang_the_audio_thread() {
+        let pool = WorkerPool::new(1);
+        let (done, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let nodes: Vec<usize> = (0..8).collect();
+            let worker_ran = AtomicBool::new(false);
+            let failing = |node: usize| {
+                if on_worker() {
+                    worker_ran.store(true, Ordering::SeqCst);
+                    panic!("node {node} failed on a worker");
+                }
+                // Keep the level open until a worker has taken a node.
+                if node == 0 {
+                    assert!(wait_until(|| worker_ran.load(Ordering::SeqCst)));
+                }
+            };
+            let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pool.run_level(&nodes, &failing)
+            }));
+            // The pool still works afterwards.
+            let counts: Vec<AtomicU32> = (0..8).map(|_| AtomicU32::new(0)).collect();
+            pool.run_level(&nodes, &|node| {
+                counts[node].fetch_add(1, Ordering::SeqCst);
+            });
+            let counts: Vec<u32> = counts.iter().map(|c| c.load(Ordering::SeqCst)).collect();
+            let _ = done.send((first.is_err(), counts));
+        });
+        let (panicked, counts) = done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("run_level came back");
+        assert!(panicked, "the worker's panic reached the caller");
+        assert_eq!(counts, vec![1; 8]);
+    }
+
+    #[test]
+    fn a_node_that_panics_on_the_audio_thread_waits_for_the_workers() {
+        let pool = WorkerPool::new(1);
+        let worker_in = AtomicBool::new(false);
+        let worker_done = AtomicBool::new(false);
+        let nodes: Vec<usize> = (0..2).collect();
+        let run = |_node: usize| {
+            if on_worker() {
+                worker_in.store(true, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                worker_done.store(true, Ordering::SeqCst);
+            } else {
+                assert!(wait_until(|| worker_in.load(Ordering::SeqCst)));
+                panic!("a node failed on the audio thread");
+            }
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.run_level(&nodes, &run)
+        }));
+        assert!(result.is_err(), "the panic reached the caller");
+        assert!(
+            worker_done.load(Ordering::SeqCst),
+            "run_level unwound while a worker was still in a node"
         );
     }
 }
