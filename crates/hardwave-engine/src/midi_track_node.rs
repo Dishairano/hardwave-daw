@@ -216,6 +216,9 @@ const ATTACK_SECS: f32 = 0.005;
 const DECAY_SECS: f32 = 0.080;
 const SUSTAIN_LEVEL: f32 = 0.70;
 const RELEASE_SECS: f32 = 0.150;
+/// A released voice whose envelope has fallen under this (-140 dB) has
+/// ended.
+const ENV_ENDED: f32 = 1e-7;
 
 /// Pitch bend as a frequency multiplier, over the standard two semitones
 /// either way that a synth defaults to.
@@ -1086,7 +1089,11 @@ impl MidiTrackNode {
                     voice.env_value
                 };
                 voice.env_value -= step;
-                if voice.env_value <= 0.0 {
+                // The release falls by a share of what is left, so it never
+                // reached zero: it stopped at a tiny value and the voice was
+                // stepped every sample for the rest of the song. Under
+                // -140 dB it has ended.
+                if voice.env_value <= ENV_ENDED {
                     voice.env_value = 0.0;
                     voice.stage = EnvStage::Idle;
                 }
@@ -2697,6 +2704,32 @@ mod tests {
             flat < 1e-4,
             "instrument (DC) should replace the built-in sine, got delta={flat}"
         );
+    }
+
+    /// A note of the built-in synth, let go, ends: its voice is gone once
+    /// the release has fallen under -140 dB. The release fell by a share
+    /// of what was left and never reached zero, so every note left a voice
+    /// running for good.
+    #[test]
+    fn a_released_built_in_note_ends() {
+        let mut node = make_node();
+        node.set_notes(vec![MidiNoteRegion {
+            note_on_sample: 100,
+            note_off_sample: 4_800,
+            pitch: 60,
+            velocity: 1.0,
+            ..Default::default()
+        }]);
+        let inputs: [&[f32]; 0] = [];
+        let mut most = 0;
+        // Five seconds.
+        for b in 0..940u64 {
+            let ctx = ctx_at(48_000.0, 256, b * 256, true);
+            node.process(&inputs, &mut block_outputs(256), &[], &mut Vec::new(), &ctx);
+            most = most.max(node.voices.len());
+        }
+        assert_eq!(most, 1, "the note played");
+        assert!(node.voices.is_empty(), "and its voice ended");
     }
 
     /// Under a plug-in instrument nothing is played on the built-in synth's
