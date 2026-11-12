@@ -1,23 +1,25 @@
 ### Bug fixes
-- fix: the first export after opening an FL song no longer freezes the window; while stretched clips are prepared the export window says "preparing stretched audio, n of N" and Cancel works
-- fix: an export only prepares the stretched clips in the part being exported, so exporting part of a song starts much sooner
-- fix: stretched and pitched clips are prepared over twice as fast, before playback and before an export, on several cores at once
-- fix: big songs play without dropouts on slower computers: tracks with nothing playing at that moment no longer use the processor
-- fix: the built-in sampler no longer copies its sample all the time while the song plays, a cause of crackles in songs with sampler channels
-- fix: measuring each track's load in the mixer no longer slows playback down; on some Windows machines it took a fifth of the processing time
-- fix: the built-in EQ uses less processor time and sounds the same
-- fix: instrument tracks with a plug-in synth no longer play a hidden built-in synth under every note
-- fix: pitched audio clips play at the right level (a loop raised by 13 semitones came out 1.6 dB too loud) and stretched clips sound slightly different, closer to the original
+- fix: renaming a channel or insert also renames its playlist track when that track still has the channel's old name (as in a new song, a starter or an older song); a playlist track you named yourself keeps its name
+- fix: the browser's Plug-ins tab lists your plug-ins and the built-in ones as soon as you open it, without pressing Scan
+- fix: on Windows, sample paths no longer show a "\\?\" in front (the Hardwave drums folder and every sample taken from it); songs saved with those paths open as before and show them without it
+- fix: FL Studio's 909 Clap and 909 Snare (WAV files with Ogg Vorbis audio inside) now load and play instead of being refused
+- fix: the Edit menu now has Auto-crossfade overlaps, which the help already pointed to: every overlap between two audio clips of one channel on a playlist track gets a crossfade, as one undo step
+- fix: a sampler track built quickly (track, Sampler, sample, notes) no longer stays silent until the song is saved and reopened.
+- fix: a song's plug-in windows open again after you open the song a second time in the same session (Hard-Shape said it had no window).
+- fix: exports use a plug-in's saved settings when the playing plug-in hands over nothing, so a sampler's sample is never left out of a render.
+- fix: cancelling an export closes the export window quietly instead of showing "Export failed: Export cancelled".
+- fix: the tempo lane shows a starter song's own tempo (150 BPM for the hardstyle starter) instead of 140.
+- fix: the browser's Plug-ins tab no longer says "Click Scan to find VST3 & CLAP plugins" while your plug-ins are still loading.
 
 ### Improvements
-- test(engine): the graph swap test checks what the audio thread built, not the graph number
-- fix(engine): an instrument track with a plug-in synth no longer runs a hidden built-in synth for every note
-- fix(eq): the built-in EQ does the same work in less time
-- fix(engine): a track with nothing playing in a block no longer runs its whole channel over silence
-- fix(midi): reading the keyboard on each block no longer reads the clock when nothing was played
-- fix(engine): the per-track load read-out no longer reads the clock twice per track on every block
-- fix(sampler): the built-in sampler no longer copies its whole sample on every block
-- test(engine): measure what playing an FL song costs the audio thread, block by block
-- fix(export): stretched clips are prepared on several cores before an export
--2000 rad. The notes in a stretched chord come out at the same level
-- fix(export): the window keeps working while an export prepares stretched clips
+- fix(export): a plug-in that hands over nothing keeps its saved settings
+- fix(plugins): a reopened song's plug-in windows open again
+- fix(browser): "Click Scan" shows only when no plug-ins are known
+- fix(playlist): the tempo lane shows a starter song's own tempo
+- fix(export): cancelling an export closes the dialog without an error box
+- fix(engine): a sample loaded right after adding a sampler is never lost
+- fix(files): Windows paths no longer show the \\?\ prefix
+- fix(playlist): renaming a channel renames the playlist row made for it
+- fix(playlist): Edit > Auto-crossfade overlaps exists and crossfades as one undo step
+- fix(browser): the Plug-ins tab lists the known plug-ins without a Scan
+- fix(audio): FL's 909 Clap and Snare load: a WAV holding Ogg Vorbis is read
