@@ -22,7 +22,7 @@
 use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use hardwave_project::clip::DeclickMode;
 use raw_window_handle::RawWindowHandle;
@@ -1069,6 +1069,18 @@ impl HostedPlugin for NativeSampler {
                 Ok(())
             }
             None => Err("sampler: malformed sample state".into()),
+        }
+    }
+
+    /// An instrument sounds while any voice does, releasing included; the
+    /// host already keeps calling it while notes are held. Without a sample
+    /// loaded nothing can sound.
+    fn tail(&self) -> Tail {
+        let loaded = self.sample.as_ref().is_some_and(|s| s.frames() > 0);
+        if loaded && self.voices.iter().any(|v| v.stage != EnvStage::Idle) {
+            Tail::Infinite
+        } else {
+            Tail::Samples(0)
         }
     }
 

@@ -1259,6 +1259,32 @@ impl DawEngine {
         }
     }
 
+    /// Send a command that only mirrors what the project already holds (a
+    /// slot's "Allow smart disable" box). A full queue is tried again for a
+    /// moment; if it stays full the graph is rebuilt, and the rebuild sets
+    /// every slot's flag from the project, so the live chain and the song
+    /// never disagree. With the engine not started there is no live chain:
+    /// the next start builds it from the project. Returns whether the
+    /// command itself went through.
+    pub fn send_insert_command_or_resync(&self, cmd: crate::insert_chain::InsertCommand) -> bool {
+        let mut cmd = cmd;
+        for _ in 0..20 {
+            if self.insert_command_sender.lock().is_none() {
+                return false;
+            }
+            match self.try_send_insert_command(cmd) {
+                Ok(()) => return true,
+                Err(back) => {
+                    cmd = back;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
+        log::warn!("insert queue stayed full; rebuilding the graph to set the slot from the song");
+        self.rebuild_graph();
+        false
+    }
+
     /// A different song is coming in: have the audio thread drop every live
     /// plug-in (`InsertCommand::ClearAll`) before the new song's own arrive.
     /// Waits a moment for room in the queue rather than lose it, since the
@@ -4708,7 +4734,8 @@ impl EngineCallback {
         let sr = self.sample_rate as f64;
         // Snapshot the insert plan under the project lock, then instantiate
         // outside it (plug-in loads can be slow and must not hold the lock).
-        // (track_id, slot_id, plugin_id, enabled, wet, sidechained, saved_state)
+        // (track_id, slot_id, plugin_id, enabled, wet, sidechained,
+        // allow_smart_disable, saved_state)
         let mut hydrated_any = false;
         let plan = {
             let project = self.project.lock();
@@ -4728,13 +4755,14 @@ impl EngineCallback {
                         s.enabled,
                         s.wet,
                         s.sidechain_source.is_some(),
+                        s.allow_smart_disable,
                         state,
                     ));
                 }
             }
             acc
         };
-        for (track_id, slot_id, plugin_id, enabled, wet, sidechained, state) in plan {
+        for (track_id, slot_id, plugin_id, enabled, wet, sidechained, smart, state) in plan {
             let Some(node_id) = self.track_id_to_node.get(&track_id).copied() else {
                 continue;
             };
@@ -4747,6 +4775,7 @@ impl EngineCallback {
             hydrated_any = true;
             if let Some(node) = self.graph.node_mut(node_id) {
                 let slot = crate::insert_chain::LiveSlot {
+                    sleep: Box::new(crate::insert_chain::SlotSleep::allowed(smart)),
                     param_ranges: crate::insert_chain::LiveSlot::ranges_of(plugin.as_ref()),
                     levels: Default::default(),
                     slot_id,
@@ -5047,9 +5076,10 @@ impl EngineCallback {
                 new_node.carry_on_from(old_node.as_mut());
             }
         }
-        for (node, slot_id, active) in &old.sidechain_flags {
+        for (node, slot_id, active, smart) in &old.sidechain_flags {
             if let Some(node) = self.graph.node_mut(*node) {
                 node.set_slot_sidechain(slot_id, *active);
+                node.set_slot_smart_disable(slot_id, *smart);
             }
         }
         self.graph.carry_delays_from(&mut old.graph);
@@ -5804,6 +5834,7 @@ impl EngineCallback {
         }
 
         let ctx = ProcessContext {
+            smart_disable: self.audio_prefs.smart_disable(),
             sample_rate: self.sample_rate as f64,
             buffer_size: num_frames as u32,
             position_ticks,
@@ -6228,6 +6259,7 @@ mod offline_insert_tests {
                 row: None,
             });
             t.inserts.push(PluginSlot {
+                allow_smart_disable: None,
                 id: "slot1".into(),
                 plugin_id: "test.silencer".into(),
                 enabled: true,
@@ -7700,6 +7732,7 @@ mod rt_safety_tests {
             taken: Arc::clone(&taken),
         });
         let slot = LiveSlot {
+            sleep: Default::default(),
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             levels: Default::default(),
             slot_id: "shape".into(),
@@ -7755,6 +7788,7 @@ mod rt_safety_tests {
                 .unwrap()
                 .inserts
                 .push(hardwave_project::track::PluginSlot {
+                    allow_smart_disable: None,
                     id: name.into(),
                     plugin_id: "test.gain".into(),
                     enabled: true,
@@ -7831,6 +7865,7 @@ mod rt_safety_tests {
             .unwrap()
             .inserts
             .push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: None,
                 id: "fx".into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,
@@ -7953,6 +7988,7 @@ mod rt_safety_tests {
         // audio thread.
         project_arc.lock().track_mut(&id).unwrap().inserts.push(
             hardwave_project::track::PluginSlot {
+                allow_smart_disable: None,
                 id: "eq".into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,
@@ -8063,6 +8099,7 @@ mod rt_safety_tests {
             .push(Track::new_bus("fed".into(), "Fed".into()));
         let mut fx = Track::new_bus("fx".into(), "With effect".into());
         fx.inserts.push(PluginSlot {
+            allow_smart_disable: None,
             id: "s".into(),
             plugin_id: "test.gain".into(),
             enabled: true,
@@ -8095,6 +8132,7 @@ mod rt_safety_tests {
             .unwrap()
             .inserts
             .push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: None,
                 id: "slot-x".into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,
@@ -8757,6 +8795,7 @@ mod monitoring_tests {
             });
         } else {
             vox.inserts.push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: None,
                 id: "comp".into(),
                 plugin_id: "compressor".into(),
                 enabled: true,
@@ -9711,6 +9750,40 @@ mod tempo_follow_tests {
         assert!(
             (peak_live - peak_bounced).abs() < 1e-3,
             "{peak_live} against {peak_bounced}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod smart_disable_resync_tests {
+    use super::*;
+    use crate::insert_chain::InsertCommand;
+
+    /// A slot's "Allow smart disable" box sent while the audio thread's
+    /// queue is full is not lost: the graph is rebuilt, which sets every
+    /// slot from the song.
+    #[test]
+    fn a_full_queue_rebuilds_rather_than_dropping_the_box() {
+        let engine = DawEngine::new();
+        let (tx, _rx) = crate::insert_chain::command_channel(1);
+        *engine.insert_command_sender.lock() = Some(tx);
+        let cmd = |allowed| InsertCommand::SetSmartDisable {
+            track_id: "t".into(),
+            slot_id: "s".into(),
+            allowed: Some(allowed),
+        };
+        assert!(
+            engine.send_insert_command_or_resync(cmd(true)),
+            "room for one"
+        );
+        while engine.command_rx.try_recv().is_ok() {}
+        assert!(!engine.send_insert_command_or_resync(cmd(false)), "full");
+        assert!(
+            engine
+                .command_rx
+                .try_iter()
+                .any(|c| matches!(c, EngineCommand::RebuildGraph)),
+            "a rebuild was asked for"
         );
     }
 }

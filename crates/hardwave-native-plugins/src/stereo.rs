@@ -3,10 +3,11 @@
 //! Enhancer's main controls.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::stereo::{apply_ms_balance, apply_width, BassMono};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -276,6 +277,16 @@ impl HostedPlugin for NativeStereo {
                 .set_crossover(self.sample_rate, self.crossover_hz);
         }
         Ok(())
+    }
+
+    /// Width and balance are instant; the bass-mono crossover rings out
+    /// when it is on.
+    fn tail(&self) -> Tail {
+        if !self.bass_mono_on {
+            return Tail::Samples(0);
+        }
+        let secs = tail::filter_ring_secs(self.crossover_hz as f64, 0.707, 2);
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

@@ -363,6 +363,11 @@ struct Vst3Inner {
     events_ptr: Option<ComPtr<IEventList>>,
     /// Input copies kept between blocks.
     input_scratch: Vec<Vec<f32>>,
+    /// The host's word that the next block's input is exact silence, sent
+    /// as the input bus's silence flags.
+    input_silent: bool,
+    /// The plug-in flagged every output channel of its last block silent.
+    output_silent: bool,
 }
 
 /// Bridges the plugin's editor → host parameter notifications back to
@@ -675,6 +680,8 @@ impl Vst3PluginInstance {
             events_ptr: events.to_com_ptr::<IEventList>(),
             events,
             input_scratch: Vec::new(),
+            input_silent: false,
+            output_silent: false,
         });
 
         let editor = Arc::new(Mutex::new(Vst3EditorSide {
@@ -1132,9 +1139,17 @@ impl HostedPlugin for Vst3PluginInstance {
             *ptr = out.as_mut_ptr();
         }
 
+        // Every input channel flagged silent when the host knows it is, so
+        // a plug-in that reads the flags can skip its work on it.
+        let in_flags = if inner.input_silent {
+            channel_mask(n_in)
+        } else {
+            0
+        };
+        inner.output_silent = false;
         let mut in_bus = vst3::Steinberg::Vst::AudioBusBuffers {
             numChannels: n_in as i32,
-            silenceFlags: 0,
+            silenceFlags: in_flags,
             __field0: vst3::Steinberg::Vst::AudioBusBuffers__type0 {
                 channelBuffers32: input_channel_ptrs.as_mut_ptr(),
             },
@@ -1204,7 +1219,45 @@ impl HostedPlugin for Vst3PluginInstance {
                         *s = 0.0;
                     }
                 }
+            } else if inner.output_bus_count > 0 && n_out > 0 {
+                // Every channel flagged silent: a hint only. The buffer is
+                // what is played, as before, and the host counts the block
+                // silent only when the buffer is.
+                let flags = out_bus.silenceFlags;
+                inner.output_silent = flags & channel_mask(n_out) == channel_mask(n_out);
             }
+        }
+    }
+
+    fn tail(&self) -> Tail {
+        let Some(processor) = &self.inner.processor else {
+            return Tail::Unknown;
+        };
+        if !self.inner.processing {
+            return Tail::Unknown;
+        }
+        // VST3 has no "I do not know": kNoTail is also what a plug-in that
+        // never thought about its tail returns, so zero is treated as
+        // unknown and the host waits a few seconds and for the output to
+        // die away, rather than cutting a reverb that forgot to say.
+        match unsafe { processor.getTailSamples() } {
+            vst3::Steinberg::Vst::kNoTail => Tail::Unknown,
+            vst3::Steinberg::Vst::kInfiniteTail => Tail::Infinite,
+            n => Tail::Samples(n),
+        }
+    }
+
+    fn process_hint(&self) -> ProcessHint {
+        if self.inner.output_silent {
+            ProcessHint::OutputSilent
+        } else {
+            ProcessHint::None
+        }
+    }
+
+    fn set_input_silent(&mut self, silent: bool) {
+        if let Ok(inner) = self.inner_mut() {
+            inner.input_silent = silent;
         }
     }
 
@@ -1748,6 +1801,15 @@ const MAX_QUEUES: usize = 128;
 const MAX_POINTS: usize = 64;
 
 /// The song position as VST3 wants it.
+/// Silence flags with a bit for each of `channels` channels.
+fn channel_mask(channels: usize) -> u64 {
+    if channels >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << channels) - 1
+    }
+}
+
 fn process_context(t: &TransportInfo, sample_rate: f64) -> ProcessContext {
     // SAFETY: a plain C struct; zero is a valid value for every field.
     let mut c: ProcessContext = unsafe { std::mem::zeroed() };

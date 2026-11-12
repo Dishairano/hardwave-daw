@@ -11,7 +11,9 @@
 //! `HW_DEVICE_FRAMES` sets the device block, `HW_PLAY_SECONDS` plays only
 //! the start of the song, `HW_PLAY_DUMP=<file>` writes the sound played
 //! (raw little-endian f32 stereo) and `HW_PLAY_COMPARE=<file>` compares
-//! the sound with one written before, sample for sample. A second test
+//! the sound with one written before, sample for sample.
+//! `HW_SMART_DISABLE=0` plays with smart disable off (it is on by default),
+//! so its cost and its sound can be set against smart disable on. A second test
 //! plays the song and counts every allocation and free made on the thread
 //! playing it, after the first blocks (which build the graph). The song is
 //! never part of the repository.
@@ -116,6 +118,7 @@ fn open_song() -> Option<(DawEngine, hardwave_project::Project)> {
             track.inserts.insert(
                 0,
                 PluginSlot {
+                    allow_smart_disable: None,
                     id: slot_id.clone(),
                     plugin_id: NativeSampler::ID.to_string(),
                     enabled: true,
@@ -213,6 +216,9 @@ fn an_fl_songs_playback_block_by_block() {
         song_samples as f64 / rate as f64,
     );
     *engine.project.lock() = song;
+    let smart = std::env::var("HW_SMART_DISABLE").map_or(true, |v| v != "0");
+    engine.audio_prefs().set_smart_disable(smart);
+    eprintln!("smart disable {}", if smart { "on" } else { "off" });
 
     // The sound is written or compared as it is played, a block at a time.
     use std::io::{Read, Write};

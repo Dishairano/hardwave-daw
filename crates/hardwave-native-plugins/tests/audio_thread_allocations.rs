@@ -92,6 +92,7 @@ const BAR: u64 = 3840;
 
 fn slot(id: &str, plugin_id: &str) -> PluginSlot {
     PluginSlot {
+        allow_smart_disable: None,
         id: id.into(),
         plugin_id: plugin_id.into(),
         enabled: true,

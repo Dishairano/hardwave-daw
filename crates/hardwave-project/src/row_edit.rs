@@ -691,6 +691,7 @@ mod tests {
             .unwrap()
             .inserts
             .push(crate::track::PluginSlot {
+                allow_smart_disable: None,
                 id: "fx".into(),
                 plugin_id: "hardwave.hardclip".into(),
                 enabled: true,

@@ -774,7 +774,7 @@ impl ChannelUtility {
     /// Whether silence in gives silence out with nothing changing: no delay
     /// line, and the filter off or with nothing left ringing in it. Swap and
     /// polarity on silence are silence.
-    fn at_rest(&self) -> bool {
+    pub(crate) fn at_rest(&self) -> bool {
         let no_delay = self.delay_samples <= 0 || self.delay_buf_l.is_empty();
         no_delay && (self.filter_kind == TrackFilterType::Off || self.filter.at_rest())
     }
@@ -1253,6 +1253,11 @@ impl AudioNode for TrackNode {
             InsertCommand::LoadFactoryPreset { slot_id, index, .. } => {
                 self.chain.load_factory_preset(&slot_id, index);
             }
+            InsertCommand::SetSmartDisable {
+                slot_id, allowed, ..
+            } => {
+                self.chain.set_slot_smart_disable(&slot_id, allowed);
+            }
             InsertCommand::ClearAll => self.chain.bury_all(graveyard),
         }
     }
@@ -1307,6 +1312,10 @@ impl AudioNode for TrackNode {
 
     fn set_slot_sidechain(&mut self, slot_id: &str, active: bool) {
         self.chain.set_slot_sidechain(slot_id, active);
+    }
+
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) {
+        self.chain.set_slot_smart_disable(slot_id, allowed);
     }
 
     /// Muted, stopped, or a placeholder: each of those leaves the track
@@ -1442,11 +1451,12 @@ impl AudioNode for TrackNode {
             }
         }
 
-        // Whether anything reaches this track from others this block. A bus
-        // fed by tracks that are all silent hears nothing.
+        // Whether anything reaches this track from others this block, on its
+        // input or its sidechain. A bus fed by tracks that are all silent
+        // hears nothing.
         let input_heard = inputs
             .iter()
-            .take(2)
+            .take(4)
             .any(|ch| ch.iter().take(buf_size).any(|s| *s != 0.0));
 
         // Mix in send inputs arriving at this track (return routing). Sends
@@ -1608,12 +1618,29 @@ impl AudioNode for TrackNode {
         // utility, filter, fader and meters over a block of zeros: three
         // quarters of the audio thread's time on a 127-track FL song. What
         // those stages remember moves on as it would have.
+        //
+        // A track with plug-ins takes the same way when every one of them
+        // is asleep (smart disable): a reverb on an empty track used to run
+        // for the whole song.
+        let transport = hardwave_plugin_host::types::TransportInfo {
+            playing: ctx.playing,
+            tempo: ctx.tempo,
+            position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
+            time_sig: ctx.time_sig,
+            sample_rate: ctx.sample_rate,
+            position_samples: ctx.position_samples,
+        };
+        // Where the song is, so a plug-in in this chain can work in beats
+        // rather than only in milliseconds.
+        self.chain.set_smart_disable(ctx.smart_disable);
+        self.chain.set_transport(transport);
         if !input_heard
             && !session_playing
             && !clip_heard
-            && self.chain.slots.is_empty()
+            && self.chain.asleep_through(midi_in, None)
             && (self.frozen || self.utility.at_rest())
         {
+            self.chain.pass_asleep(transport, buf_size);
             self.pass_silence(buf_size);
             return;
         }
@@ -1671,17 +1698,6 @@ impl AudioNode for TrackNode {
             let (out_left, out_rest) = outputs.split_at_mut(1);
             let out_l = &mut out_left[0];
             let out_r = &mut out_rest[0];
-            // Where the song is, so a plug-in in this chain can work in
-            // beats rather than only in milliseconds.
-            self.chain
-                .set_transport(hardwave_plugin_host::types::TransportInfo {
-                    playing: ctx.playing,
-                    tempo: ctx.tempo,
-                    position_beats: ctx.position_ticks as f64 / hardwave_midi::PPQ as f64,
-                    time_sig: ctx.time_sig,
-                    sample_rate: ctx.sample_rate,
-                    position_samples: ctx.position_samples,
-                });
             self.chain.process(
                 out_l,
                 out_r,
@@ -1859,6 +1875,7 @@ mod tests {
 
     fn block(node: &mut TrackNode, position: u64, size: usize) -> Vec<f32> {
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: size as u32,
@@ -1957,6 +1974,7 @@ mod tests {
         Arc::clone(&node.meter).set_mix(1.0, 1.0, 0.0);
         let _ = block(&mut node, 96_256, 256);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: 256,
@@ -2037,6 +2055,7 @@ mod tests {
             treat,
         }]);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: 256,
@@ -2138,6 +2157,7 @@ mod tests {
             treat,
         }]);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 512,
             tempo: 120.0,
@@ -2242,6 +2262,7 @@ mod tests {
             treat: ClipTreat::default(),
         }]);
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             buffer_size: 512,
             tempo: 120.0,
@@ -2361,6 +2382,7 @@ mod tests {
         node.set_volume_db(-100.0); // fader at -inf
 
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48000.0,
             position_ticks: 0,
             buffer_size: 64,
@@ -2517,6 +2539,7 @@ mod silence_tests {
     /// left side, and whether the node said the block was silent.
     fn heard(node: &mut TrackNode, position: u64, input: f32) -> (Vec<f32>, bool) {
         let ctx = ProcessContext {
+            smart_disable: true,
             sample_rate: 48_000.0,
             position_ticks: 0,
             buffer_size: 512,
@@ -2589,5 +2612,125 @@ mod silence_tests {
         let (tail, silent) = heard(&mut node, 512, 0.0);
         assert!(!silent);
         assert!(tail.iter().any(|s| *s != 0.0), "the tail is heard");
+    }
+}
+
+#[cfg(test)]
+mod smart_disable_tests {
+    use super::*;
+    use crate::insert_chain::tests::Ringer;
+    use hardwave_plugin_host::types::Tail;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// A track with a reverb on it and nothing to play: the reverb is called
+    /// until it has rung out, then the track writes silence without calling
+    /// it, and says its output is silent so nothing downstream sums it.
+    #[test]
+    fn a_reverb_on_an_empty_track_stops_being_called() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let skipped = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), skipped.clone());
+        ringer.tail = Tail::Samples(4_800);
+        let mut node = TrackNode::new(
+            "t".into(),
+            "T".into(),
+            AudioPool::new(),
+            Arc::new(TrackMeterState::default()),
+        );
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "verb".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: false,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let inputs: [&[f32]; 0] = [];
+        let mut run = |k: usize, smart: bool| {
+            let ctx = ProcessContext {
+                smart_disable: smart,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: (k * 256) as u64,
+                playing: true,
+            };
+            let mut out = vec![vec![0.0; 256]; 4];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+            node.output_is_silent()
+        };
+        for k in 0..100 {
+            run(k, true);
+        }
+        let asleep = calls.load(Ordering::Relaxed);
+        assert!(asleep < 60, "called {asleep} times on silence");
+        for k in 100..200 {
+            assert!(run(k, true), "silence, said as such");
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), asleep, "not called");
+        assert_eq!(skipped.load(Ordering::Relaxed), (200 - asleep) * 256);
+        // Smart disable off: called every block again.
+        for k in 200..210 {
+            run(k, false);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), asleep + 10);
+    }
+
+    /// A sleeping plug-in keyed from another track wakes when the key
+    /// sounds, though nothing plays on the track itself.
+    #[test]
+    fn a_loud_sidechain_wakes_a_keyed_plugin_on_a_quiet_track() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), Arc::new(AtomicU32::new(0)));
+        ringer.tail = Tail::Samples(0);
+        let mut node = TrackNode::new(
+            "t".into(),
+            "T".into(),
+            AudioPool::new(),
+            Arc::new(TrackMeterState::default()),
+        );
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "duck".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: true,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let silence = vec![0.0_f32; 256];
+        let key = vec![0.5_f32; 256];
+        for k in 0..12u64 {
+            let ctx = ProcessContext {
+                smart_disable: true,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: k * 256,
+                playing: true,
+            };
+            let sc: &[f32] = if k < 4 { &silence } else { &key };
+            let inputs: [&[f32]; 4] = [&silence, &silence, sc, sc];
+            let mut out = vec![vec![0.0; 256]; 4];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1 + 8);
     }
 }
