@@ -920,9 +920,9 @@ impl AudioGraph {
             // only writes its own slots.
             unsafe { shared.process_node(node_id) };
         };
-        for level in &self.levels.levels {
-            pool.run_level(level, &run);
-        }
+        // A level with too little work in it runs here alone rather than
+        // pay for waking a worker.
+        pool.run_levels(&mut self.levels, &run);
     }
 
     /// Get the output buffer of a specific node (e.g., the master node).
