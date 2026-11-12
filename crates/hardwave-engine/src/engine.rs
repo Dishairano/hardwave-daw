@@ -1855,7 +1855,7 @@ impl DawEngine {
         {
             let mut project = self.project.lock();
             for ((_, slot_id), bytes) in states {
-                project.set_plugin_state(slot_id, "unknown", bytes);
+                project.take_live_plugin_state(slot_id, bytes);
             }
         } else {
             log::warn!(
@@ -3668,7 +3668,7 @@ impl DawEngine {
         let mut project_snapshot = self.project.lock().clone();
         if let Some(states) = live_plugin_states {
             for ((_track_id, slot_id), bytes) in states {
-                project_snapshot.set_plugin_state(slot_id, "unknown", bytes);
+                project_snapshot.take_live_plugin_state(slot_id, bytes);
             }
         }
         prepare(&mut project_snapshot);

@@ -102,13 +102,7 @@ impl LiveState {
                 // A VST3 or CLAP that fails to hand over its state answers
                 // with nothing. Written over the settings it had, the next
                 // open gave it nothing to load and the patch was gone.
-                let had_some = project
-                    .plugin_state(&slot_id)
-                    .is_some_and(|saved| !saved.chunk.is_empty());
-                if bytes.is_empty() && had_some {
-                    continue;
-                }
-                project.set_plugin_state(slot_id, "unknown", bytes);
+                project.take_live_plugin_state(slot_id, bytes);
             }
         }
     }

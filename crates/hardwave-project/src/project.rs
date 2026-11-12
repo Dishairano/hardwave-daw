@@ -1056,6 +1056,27 @@ impl Project {
         }
     }
 
+    /// What a playing plug-in answered when asked for its settings, in
+    /// place of the saved ones. An empty answer (a VST3 or CLAP that failed
+    /// to hand its state over, a sampler that lost its sample) leaves saved
+    /// settings alone: written over them, the next load or render had
+    /// nothing to give the plug-in, and an export of a sampler with a saved
+    /// sample came out silent.
+    pub fn take_live_plugin_state(
+        &mut self,
+        plugin_instance_id: impl Into<String>,
+        chunk: Vec<u8>,
+    ) {
+        let id = plugin_instance_id.into();
+        let saved = self
+            .plugin_state(&id)
+            .is_some_and(|entry| !entry.chunk.is_empty());
+        if chunk.is_empty() && saved {
+            return;
+        }
+        self.set_plugin_state(id, "unknown", chunk);
+    }
+
     pub fn plugin_state(&self, plugin_instance_id: &str) -> Option<&PluginStateEntry> {
         self.plugin_states
             .iter()
@@ -1682,6 +1703,19 @@ mod tests {
             p.save(&path).is_err(),
             "save into missing dir must error, not panic"
         );
+    }
+
+    #[test]
+    fn an_empty_live_state_keeps_the_saved_one() {
+        let mut p = Project::default();
+        p.set_plugin_state("smp", "native-sampler", vec![1, 2, 3]);
+        p.take_live_plugin_state("smp", Vec::new());
+        assert_eq!(p.plugin_state("smp").unwrap().chunk, vec![1, 2, 3]);
+        p.take_live_plugin_state("smp", vec![4, 5]);
+        assert_eq!(p.plugin_state("smp").unwrap().chunk, vec![4, 5]);
+        // A slot with nothing saved takes what it answered, even nothing.
+        p.take_live_plugin_state("new", Vec::new());
+        assert!(p.plugin_state("new").is_some());
     }
 
     #[test]
