@@ -122,6 +122,8 @@ struct Shared {
     /// Counts the batches published; the batch number is its low 40
     /// bits.
     epoch: AtomicU64,
+    /// Set while a thread is handing out a level.
+    publishing: AtomicBool,
     /// Set, under the batch lock, when the pool is dropped.
     shutdown: AtomicBool,
     #[cfg(test)]
@@ -168,6 +170,7 @@ impl WorkerPool {
             claim: AtomicU64::new(0),
             remaining: AtomicUsize::new(0),
             epoch: AtomicU64::new(0),
+            publishing: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             #[cfg(test)]
             hooks,
@@ -200,6 +203,19 @@ impl WorkerPool {
         // too big for the claim word's index (16 million nodes, never in
         // practice) runs here as well.
         if nodes.len() == 1 || self.workers.is_empty() || nodes.len() > MAX_SHARED_LEVEL {
+            for &node in nodes {
+                run(node);
+            }
+            return;
+        }
+
+        // One level at a time. The graphs that use the pool share it,
+        // and the pool hands out one batch: a second thread publishing
+        // over a level in flight would reset its claim word and count
+        // under it, so nodes would be skipped or the wait would never
+        // end. Playback is the only caller today; anything else that
+        // gets here at the same time runs its level on its own thread.
+        if self.shared.publishing.swap(true, Ordering::Acquire) {
             for &node in nodes {
                 run(node);
             }
@@ -252,8 +268,11 @@ impl WorkerPool {
             }
         }
 
-        let mut slot = self.shared.batch.lock().expect("batch lock");
-        *slot = None;
+        {
+            let mut slot = self.shared.batch.lock().expect("batch lock");
+            *slot = None;
+        }
+        self.shared.publishing.store(false, Ordering::Release);
     }
 }
 
@@ -751,5 +770,37 @@ mod tests {
             wait_until(|| shared.upgrade().is_none()),
             "every worker stopped"
         );
+    }
+
+    #[test]
+    fn two_threads_sharing_a_pool_each_run_every_node_once() {
+        let pool = Arc::new(WorkerPool::new(2));
+        let (done, done_rx) = std::sync::mpsc::channel();
+        for _ in 0..2 {
+            let pool = Arc::clone(&pool);
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let counts: Vec<AtomicU32> = (0..16).map(|_| AtomicU32::new(0)).collect();
+                let nodes: Vec<usize> = (0..16).collect();
+                let run = |node: usize| {
+                    counts[node].fetch_add(1, Ordering::SeqCst);
+                };
+                let mut wrong = 0;
+                for _ in 0..2_000 {
+                    pool.run_level(&nodes, &run);
+                    wrong += counts
+                        .iter()
+                        .filter(|count| count.swap(0, Ordering::SeqCst) != 1)
+                        .count();
+                }
+                let _ = done.send(wrong);
+            });
+        }
+        for _ in 0..2 {
+            let wrong = done_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("both threads got through their levels");
+            assert_eq!(wrong, 0, "a node ran other than once");
+        }
     }
 }
