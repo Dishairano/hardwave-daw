@@ -16,7 +16,11 @@ pub struct ModulatedDelay {
     buffer: Vec<f32>,
     write_pos: usize,
     base_delay: f32,
+    /// Where the LFO is in its cycle, `[0, 1)`; it only ever moves on.
     lfo_phase: f32,
+    /// Added to `lfo_phase` when the sweep is read, so voices can sit
+    /// apart in the cycle without restarting it.
+    lfo_phase_offset: f32,
     lfo_rate_hz: f32,
     lfo_depth_samples: f32,
     feedback: f32,
@@ -30,6 +34,7 @@ impl ModulatedDelay {
             write_pos: 0,
             base_delay: 100.0,
             lfo_phase: 0.0,
+            lfo_phase_offset: 0.0,
             lfo_rate_hz: 1.0,
             lfo_depth_samples: 0.0,
             feedback: 0.0,
@@ -52,11 +57,13 @@ impl ModulatedDelay {
         self.lfo_depth_samples = depth_samples.max(0.0);
     }
 
-    /// LFO starting phase in `[0, 1)`. Used for multi-voice chorus —
-    /// each voice has its own delay + an offset phase so they produce
-    /// decorrelated modulation.
+    /// How far ahead in the cycle this line's LFO sits, in `[0, 1)`. Used
+    /// for multi-voice chorus: each voice has its own delay and an offset
+    /// phase so they produce decorrelated modulation. It moves the sweep
+    /// by the offset only: the LFO itself runs on, so setting it again
+    /// (as an effect does on every parameter change) causes no jump.
     pub fn set_lfo_phase_offset(&mut self, phase: f32) {
-        self.lfo_phase = phase.rem_euclid(1.0);
+        self.lfo_phase_offset = phase.rem_euclid(1.0);
     }
 
     /// Feedback amount in `[-0.95, 0.95]`. Negative feedback flips the
@@ -78,7 +85,7 @@ impl ModulatedDelay {
     /// dry + wet to taste.
     pub fn process(&mut self, input: f32) -> f32 {
         // Current sine-LFO delay deviation, in samples.
-        let lfo = (2.0 * PI * self.lfo_phase).sin();
+        let lfo = (2.0 * PI * (self.lfo_phase + self.lfo_phase_offset)).sin();
         let modulated_delay = (self.base_delay + lfo * self.lfo_depth_samples).max(1.0);
         let cap = self.buffer.len() as f32;
         let read_pos_f = (self.write_pos as f32 + cap - modulated_delay).rem_euclid(cap);
@@ -217,6 +224,36 @@ mod tests {
             assert_eq!(
                 ran.process(x).to_bits(),
                 skipped.process(x).to_bits(),
+                "{i}"
+            );
+        }
+    }
+
+    /// Setting the phase offset again mid-sweep leaves the sweep where it
+    /// is. It used to set the LFO back to the offset, a jump in the delay
+    /// time every time an effect refreshed its settings.
+    #[test]
+    fn setting_the_offset_again_keeps_the_sweep_in_place() {
+        let make = || {
+            let mut d = ModulatedDelay::new(2048, 48_000.0);
+            d.set_base_delay(300.0);
+            d.set_lfo_rate(0.7);
+            d.set_lfo_depth(120.0);
+            d.set_lfo_phase_offset(0.25);
+            d
+        };
+        let (mut set_again, mut left_alone) = (make(), make());
+        for i in 0..10_000 {
+            let x = (i as f32 * 0.01).sin();
+            set_again.process(x);
+            left_alone.process(x);
+        }
+        set_again.set_lfo_phase_offset(0.25);
+        for i in 10_000..14_000 {
+            let x = (i as f32 * 0.01).sin();
+            assert_eq!(
+                set_again.process(x).to_bits(),
+                left_alone.process(x).to_bits(),
                 "{i}"
             );
         }

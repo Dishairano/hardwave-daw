@@ -319,4 +319,79 @@ mod tests {
             );
         }
     }
+
+    /// Turning a knob does not restart the sweep. Two instances play the
+    /// same music; halfway, one has Mix set again to the value it
+    /// already had. Nothing about the sound changed, so both must go on
+    /// giving the same samples, bit for bit. Every parameter change used to set both LFOs back to the start of their cycle, an audible jump while a knob was turned or automated.
+    #[test]
+    fn a_knob_turn_keeps_the_sweep_going() {
+        let make = || {
+            let mut p = NativeChorus::new();
+            p.activate(48_000.0, 512).unwrap();
+            p
+        };
+        let (mut turned, mut left_alone) = (make(), make());
+        let block = |n: usize| -> Vec<f32> {
+            (0..512)
+                .map(|i| (std::f32::consts::TAU * 330.0 * (n * 512 + i) as f32 / 48_000.0).sin())
+                .collect()
+        };
+        let run = |p: &mut NativeChorus, x: &[f32]| {
+            let mut out = vec![Vec::new(), Vec::new()];
+            p.process(&[x, x], &mut out, &[], &mut Vec::new(), x.len());
+            out
+        };
+        for n in 0..20 {
+            let x = block(n);
+            run(&mut turned, &x);
+            run(&mut left_alone, &x);
+        }
+        let value = turned.get_parameter_value(PARAM_MIX);
+        turned.set_parameter_value(PARAM_MIX, value);
+        for n in 20..30 {
+            let x = block(n);
+            let (a, b) = (run(&mut turned, &x), run(&mut left_alone, &x));
+            for ch in 0..2 {
+                for (i, (s, t)) in a[ch].iter().zip(&b[ch]).enumerate() {
+                    assert_eq!(
+                        s.to_bits(),
+                        t.to_bits(),
+                        "block {n} channel {ch} sample {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Width moves the right side's sweep against the left's, nothing more:
+    /// the left side plays on exactly as before the change.
+    #[test]
+    fn width_leaves_the_left_sweep_alone() {
+        let make = || {
+            let mut p = NativeChorus::new();
+            p.activate(48_000.0, 512).unwrap();
+            p
+        };
+        let (mut turned, mut left_alone) = (make(), make());
+        let x: Vec<f32> = (0..512 * 30)
+            .map(|i| (std::f32::consts::TAU * 330.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        let run = |p: &mut NativeChorus, x: &[f32]| {
+            let mut out = vec![Vec::new(), Vec::new()];
+            p.process(&[x, x], &mut out, &[], &mut Vec::new(), x.len());
+            out
+        };
+        run(&mut turned, &x[..512 * 20]);
+        run(&mut left_alone, &x[..512 * 20]);
+        turned.set_parameter_value(PARAM_WIDTH, 0.9);
+        let (a, b) = (
+            run(&mut turned, &x[512 * 20..]),
+            run(&mut left_alone, &x[512 * 20..]),
+        );
+        for (i, (s, t)) in a[0].iter().zip(&b[0]).enumerate() {
+            assert_eq!(s.to_bits(), t.to_bits(), "left sample {i}");
+        }
+        assert_ne!(a[1], b[1], "the right side moved with the width");
+    }
 }
