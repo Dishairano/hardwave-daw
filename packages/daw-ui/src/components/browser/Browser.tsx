@@ -19,6 +19,12 @@ import { t, tf, useLanguage } from '../../i18n'
 
 type Tab = 'favorites' | 'folders' | 'audio' | 'lists' | 'search'
 
+/** The tabs that list plug-ins: Plug-ins, and Favorites and Search, which
+ *  list them beside files. */
+export function tabListsPlugins(tab: Tab): boolean {
+  return tab === 'lists' || tab === 'favorites' || tab === 'search'
+}
+
 export function Browser() {
   useLanguage()
   const [activeTab, setActiveTab] = useState<Tab>('folders')
@@ -29,6 +35,12 @@ export function Browser() {
   const fileRecentCount = useBrowserStore(s => s.fileRecents.length)
   const pluginFavCount = useBrowserStore(s => s.pluginFavorites.size)
   const folderCount = useBrowserStore(s => s.folders.length)
+  // The plug-ins the app knows from its last scan (and the built-ins) show
+  // as soon as a tab lists plug-ins. Nothing asked for them, so the
+  // Plug-ins tab stayed empty until Scan was pressed.
+  useEffect(() => {
+    if (tabListsPlugins(activeTab)) void usePluginStore.getState().showKnownPlugins()
+  }, [activeTab])
   const headerCount =
     activeTab === 'favorites' ? (fileFavCount + pluginFavCount) :
     activeTab === 'folders'   ? (fileFavCount + fileRecentCount + folderCount) :

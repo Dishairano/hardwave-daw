@@ -36,6 +36,10 @@ interface PluginState {
 
   scanPlugins: () => Promise<void>
   loadCachedPlugins: () => Promise<void>
+  /** The plug-ins the app already knows (the last scan's cache and the
+   *  built-ins), for a list that is about to show; nothing while a scan
+   *  runs, which fills the list itself. */
+  showKnownPlugins: () => Promise<void>
   refreshScanDiff: () => Promise<void>
   loadBlocklist: () => Promise<void>
   setBlocklist: (ids: string[]) => Promise<void>
@@ -76,6 +80,13 @@ export const usePluginStore = create<PluginState>((set, get) => ({
     const plugins = await invoke<PluginDescriptor[]>('get_plugins')
     const lastDiff = await invoke<ScanDiff>('get_last_scan_diff')
     set({ plugins, lastDiff })
+  },
+
+  showKnownPlugins: async () => {
+    if (get().scanning) return
+    const plugins = await invoke<PluginDescriptor[]>('get_plugins').catch(() => null)
+    // A scan that started meanwhile has the newer list.
+    if (plugins && !get().scanning) set({ plugins })
   },
 
   refreshScanDiff: async () => {
