@@ -112,6 +112,22 @@ impl NativeAutoFilter {
             _ => v as f32,
         }
     }
+
+    /// Set both filters for an envelope level (0 is at rest, the base
+    /// cutoff).
+    fn retune(&mut self, env: f32) {
+        let octave_offset = env.clamp(0.0, 1.0) * self.sensitivity * self.range_octaves;
+        let cutoff = (self.base_hz * 2.0_f32.powf(octave_offset)).clamp(20.0, 18_000.0);
+        for biquad in [&mut self.biquad_l, &mut self.biquad_r] {
+            biquad.set(
+                BiquadKind::LowPass,
+                self.sample_rate,
+                cutoff,
+                self.resonance,
+                0.0,
+            );
+        }
+    }
 }
 
 impl Default for NativeAutoFilter {
@@ -133,6 +149,9 @@ impl HostedPlugin for NativeAutoFilter {
             .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         self.biquad_l.reset();
         self.biquad_r.reset();
+        // Tuned at rest from the start: until the first retune, 16 samples
+        // in, the filters had no settings and let nothing through.
+        self.retune(0.0);
         self.active = true;
         Ok(())
     }
@@ -170,22 +189,7 @@ impl HostedPlugin for NativeAutoFilter {
             let env_avg = (env_l + env_r) * 0.5;
             self.block_counter = self.block_counter.wrapping_add(1);
             if self.block_counter.is_multiple_of(16) {
-                let octave_offset = env_avg.clamp(0.0, 1.0) * self.sensitivity * self.range_octaves;
-                let cutoff = (self.base_hz * 2.0_f32.powf(octave_offset)).clamp(20.0, 18_000.0);
-                self.biquad_l.set(
-                    BiquadKind::LowPass,
-                    self.sample_rate,
-                    cutoff,
-                    self.resonance,
-                    0.0,
-                );
-                self.biquad_r.set(
-                    BiquadKind::LowPass,
-                    self.sample_rate,
-                    cutoff,
-                    self.resonance,
-                    0.0,
-                );
+                self.retune(env_avg);
             }
             outputs[0][i] = self.biquad_l.process_mono(in_l);
             outputs[1][i] = self.biquad_r.process_mono(in_r);
@@ -413,6 +417,27 @@ mod tests {
             assert!(af.parameter_options(id).is_none());
             for step in 0..=10 {
                 assert!(af.parameter_text(id, step as f64 / 10.0).is_some());
+            }
+        }
+    }
+
+    /// A fresh instance passes sound from its first sample. Its filter had
+    /// no settings until the first retune, 16 samples in, so the first 15
+    /// samples of the first sound through it came out as silence.
+    #[test]
+    fn sound_comes_through_from_the_first_sample() {
+        let mut af = NativeAutoFilter::new();
+        af.activate(48_000.0, 512).unwrap();
+        // A low tone, under the resting cutoff, so it passes the low-pass.
+        let x: Vec<f32> = (0..64)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 60.0 * i as f32 / 48_000.0).cos())
+            .collect();
+        let mut out = vec![Vec::new(), Vec::new()];
+        af.process(&[&x, &x], &mut out, &[], &mut Vec::new(), x.len());
+        for ch in 0..2 {
+            assert_ne!(out[ch][0], 0.0, "channel {ch} is silent at sample 0");
+            for (i, s) in out[ch][1..16].iter().enumerate() {
+                assert!(*s > 0.0, "channel {ch} sample {} is {s}", i + 1);
             }
         }
     }
