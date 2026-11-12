@@ -18,7 +18,7 @@
 //! either way: the tests check that the parallel path and the plain one
 //! produce identical samples.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Which level each node belongs to, and the nodes of each level in
@@ -63,6 +63,24 @@ impl Levels {
     }
 }
 
+/// How the claim word is split: the batch number above, the index of
+/// the next node below.
+const INDEX_BITS: u32 = 24;
+const INDEX_MASK: u64 = (1 << INDEX_BITS) - 1;
+/// Batch numbers count up to this and start again at zero. 2^40
+/// batches is about four months even at a hundred thousand levels a
+/// second, so a worker would have to be held up that long for an old
+/// batch number to match again.
+const EPOCH_MASK: u64 = (1 << (64 - INDEX_BITS)) - 1;
+/// The most nodes a level can have and still be shared out: an index
+/// below this plus one still fits under the batch number.
+const MAX_SHARED_LEVEL: usize = INDEX_MASK as usize;
+
+/// The claim word for node `index` of batch `epoch`.
+fn pack(epoch: u64, index: usize) -> u64 {
+    (epoch << INDEX_BITS) | index as u64
+}
+
 /// One batch of work: the nodes of a level, and the function that runs
 /// one node. The pointers are to the publisher's own stack frame, which
 /// is only certain to be alive while a node of this batch is claimed
@@ -72,7 +90,7 @@ impl Levels {
 struct Batch {
     /// Which batch this is. A claim only succeeds while the claim word
     /// still carries this number.
-    epoch: u32,
+    epoch: u64,
     nodes: *const usize,
     count: usize,
     /// The closure, as a bare pointer pair. A trait-object pointer
@@ -92,19 +110,18 @@ struct Shared {
     batch: Mutex<Option<Batch>>,
     /// Woken when a batch is published.
     ready: Condvar,
-    /// The current batch's number in the top 32 bits and the index of
-    /// the next node to take out of it in the low 32. One word, so a
+    /// The current batch's number in the top 40 bits and the index of
+    /// the next node to take out of it in the low 24. One word, so a
     /// worker still holding an older batch cannot take a node out of
-    /// the new one: its claim sees a different number and fails. The
-    /// number wraps after 2^32 batches, more than a day of playback, so
-    /// a worker would have to sleep that long to be fooled by it.
+    /// the new one: its claim sees a different number and fails.
     claim: AtomicU64,
     /// How many nodes of the batch are still unfinished. Only a thread
     /// that claimed a node of the current batch takes one off, so the
     /// count cannot be touched by a batch that is already over.
     remaining: AtomicUsize,
-    /// The number of the last batch published.
-    epoch: AtomicU32,
+    /// Counts the batches published; the batch number is its low 40
+    /// bits.
+    epoch: AtomicU64,
     shutdown: AtomicBool,
     /// Called by a worker before each claim, so a test can hold it at
     /// the point where the scheduler could take it off the core.
@@ -142,7 +159,7 @@ impl WorkerPool {
             ready: Condvar::new(),
             claim: AtomicU64::new(0),
             remaining: AtomicUsize::new(0),
-            epoch: AtomicU32::new(0),
+            epoch: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             #[cfg(test)]
             before_claim,
@@ -172,9 +189,9 @@ impl WorkerPool {
             return;
         }
         // One node on its own is not worth waking anybody for. A level
-        // too big for the claim word's index (never, in practice) runs
-        // here as well.
-        if nodes.len() == 1 || self.workers.is_empty() || nodes.len() > u32::MAX as usize {
+        // too big for the claim word's index (16 million nodes, never in
+        // practice) runs here as well.
+        if nodes.len() == 1 || self.workers.is_empty() || nodes.len() > MAX_SHARED_LEVEL {
             for &node in nodes {
                 run(node);
             }
@@ -191,7 +208,8 @@ impl WorkerPool {
             .shared
             .epoch
             .fetch_add(1, Ordering::Relaxed)
-            .wrapping_add(1);
+            .wrapping_add(1)
+            & EPOCH_MASK;
         let batch = Batch {
             epoch,
             nodes: nodes.as_ptr(),
@@ -202,9 +220,7 @@ impl WorkerPool {
         // The count first, then the claim word: a thread whose claim
         // sees the new number also sees the new count.
         self.shared.remaining.store(nodes.len(), Ordering::Relaxed);
-        self.shared
-            .claim
-            .store(u64::from(epoch) << 32, Ordering::Release);
+        self.shared.claim.store(pack(epoch, 0), Ordering::Release);
         {
             let mut slot = self.shared.batch.lock().expect("batch lock");
             *slot = Some(batch);
@@ -255,15 +271,15 @@ impl Drop for WorkerPool {
 /// with it: the closure's frame was gone, and the new level lost a node
 /// and its unfinished count. Here the batch number travels with the
 /// index, so the claim fails instead.
-fn claim(shared: &Shared, epoch: u32, count: usize) -> Option<usize> {
+fn claim(shared: &Shared, epoch: u64, count: usize) -> Option<usize> {
     let mut current = shared.claim.load(Ordering::Acquire);
     loop {
-        let index = (current & u64::from(u32::MAX)) as usize;
-        if (current >> 32) as u32 != epoch || index >= count {
+        let index = (current & INDEX_MASK) as usize;
+        if current >> INDEX_BITS != epoch || index >= count {
             return None;
         }
-        // index < count <= u32::MAX, so the add cannot reach the
-        // batch number's bits.
+        // index < count <= MAX_SHARED_LEVEL, so the add cannot reach
+        // the batch number's bits.
         match shared.claim.compare_exchange_weak(
             current,
             current + 1,
@@ -319,7 +335,7 @@ fn worker_loop(shared: Arc<Shared>) {
     // normal priority any busy program on the machine delays a level,
     // and the audio thread waits for it. Same class as the audio thread.
     WORKER_PRIORITY.set(hardwave_audio_io::thread_priority::raise_current_thread());
-    let mut seen_epoch = 0u32;
+    let mut seen_epoch = 0u64;
     loop {
         let batch = {
             let mut slot = shared.batch.lock().expect("batch lock");
@@ -355,6 +371,7 @@ pub fn default_worker_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU32;
 
     #[test]
     #[cfg(target_arch = "x86_64")]
@@ -629,5 +646,37 @@ mod tests {
             0,
             "a node ran outside its level"
         );
+    }
+
+    #[test]
+    fn a_claim_from_a_batch_two_to_the_32_back_fails() {
+        // With a 32-bit batch number these two were the same batch.
+        let pool = WorkerPool::new(0);
+        let now = 5 + (1u64 << 32);
+        pool.shared.claim.store(pack(now, 0), Ordering::SeqCst);
+        assert_eq!(claim(&pool.shared, 5, 10), None);
+        assert_eq!(claim(&pool.shared, now, 10), Some(0));
+        assert_eq!(claim(&pool.shared, now, 10), Some(1));
+    }
+
+    #[test]
+    fn the_batch_number_starts_again_without_losing_a_node() {
+        let pool = WorkerPool::new(2);
+        pool.shared.epoch.store(EPOCH_MASK - 3, Ordering::SeqCst);
+        let counts: Vec<AtomicU32> = (0..16).map(|_| AtomicU32::new(0)).collect();
+        let nodes: Vec<usize> = (0..16).collect();
+        let run = |node: usize| {
+            counts[node].fetch_add(1, Ordering::SeqCst);
+        };
+        for level in 0..10 {
+            pool.run_level(&nodes, &run);
+            for (node, count) in counts.iter().enumerate() {
+                assert_eq!(
+                    count.swap(0, Ordering::SeqCst),
+                    1,
+                    "level {level} node {node}"
+                );
+            }
+        }
     }
 }
