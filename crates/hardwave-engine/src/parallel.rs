@@ -122,11 +122,22 @@ struct Shared {
     /// Counts the batches published; the batch number is its low 40
     /// bits.
     epoch: AtomicU64,
+    /// Set, under the batch lock, when the pool is dropped.
     shutdown: AtomicBool,
-    /// Called by a worker before each claim, so a test can hold it at
-    /// the point where the scheduler could take it off the core.
     #[cfg(test)]
+    hooks: TestHooks,
+}
+
+/// Places where a test can hold a worker, to stand in for the scheduler
+/// taking it off the core there.
+#[cfg(test)]
+#[derive(Default)]
+struct TestHooks {
+    /// Before each claim.
     before_claim: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Holding the batch lock, after finding nothing to do and before
+    /// waiting for the next batch.
+    before_wait: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// A handful of threads that stay alive between blocks.
@@ -146,14 +157,11 @@ impl WorkerPool {
         Self::start(
             threads,
             #[cfg(test)]
-            None,
+            TestHooks::default(),
         )
     }
 
-    fn start(
-        threads: usize,
-        #[cfg(test)] before_claim: Option<Box<dyn Fn() + Send + Sync>>,
-    ) -> Self {
+    fn start(threads: usize, #[cfg(test)] hooks: TestHooks) -> Self {
         let shared = Arc::new(Shared {
             batch: Mutex::new(None),
             ready: Condvar::new(),
@@ -162,7 +170,7 @@ impl WorkerPool {
             epoch: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             #[cfg(test)]
-            before_claim,
+            hooks,
         });
         let mut workers = Vec::with_capacity(threads);
         for index in 0..threads {
@@ -251,11 +259,25 @@ impl WorkerPool {
 
 impl Drop for WorkerPool {
     fn drop(&mut self) {
-        self.shared.shutdown.store(true, Ordering::Release);
-        self.shared.ready.notify_all();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
+        // Under the lock: a worker checks for shutdown and then waits
+        // while holding it, so it has either seen the flag or is already
+        // waiting and gets the wake. Set without the lock, a worker
+        // between its check and its wait missed both and slept forever.
+        {
+            let _slot = self
+                .shared
+                .batch
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.shared.shutdown.store(true, Ordering::Release);
         }
+        self.shared.ready.notify_all();
+        // The workers are let go, not joined. Each holds only its own
+        // handle on the shared state and stops at its next wake, and a
+        // join would make whichever thread drops the last handle on the
+        // pool wait for all of them. That can be the audio thread: with
+        // no graph builder thread it frees the graph it replaces itself.
+        self.workers.clear();
     }
 }
 
@@ -298,7 +320,7 @@ fn take_work(shared: &Shared, batch: &Batch, on_worker: bool) {
     loop {
         #[cfg(test)]
         if on_worker {
-            if let Some(hook) = &shared.before_claim {
+            if let Some(hook) = &shared.hooks.before_claim {
                 hook();
             }
         }
@@ -348,6 +370,10 @@ fn worker_loop(shared: Arc<Shared>) {
                         seen_epoch = batch.epoch;
                         break batch;
                     }
+                }
+                #[cfg(test)]
+                if let Some(hook) = &shared.hooks.before_wait {
+                    hook();
                 }
                 slot = shared.ready.wait(slot).expect("batch wait");
             }
@@ -477,6 +503,13 @@ mod tests {
         passed: usize,
     }
 
+    fn hooks_before_claim(hook: impl Fn() + Send + Sync + 'static) -> TestHooks {
+        TestHooks {
+            before_claim: Some(Box::new(hook)),
+            ..TestHooks::default()
+        }
+    }
+
     fn on_worker() -> bool {
         std::thread::current()
             .name()
@@ -511,7 +544,7 @@ mod tests {
         let hook_gate = Arc::clone(&gate);
         let pool = WorkerPool::start(
             1,
-            Some(Box::new(move || {
+            hooks_before_claim(move || {
                 let (lock, cond) = &*hook_gate;
                 let mut g = lock.lock().unwrap();
                 while g.hold {
@@ -522,7 +555,7 @@ mod tests {
                 g.waiting = false;
                 g.passed += 1;
                 cond.notify_all();
-            })),
+            }),
         );
         let gate_state = |f: &dyn Fn(&Gate) -> bool| f(&gate.0.lock().unwrap());
 
@@ -601,7 +634,7 @@ mod tests {
         let seed = AtomicU64::new(0x9e37_79b9_7f4a_7c15);
         let pool = WorkerPool::start(
             3,
-            Some(Box::new(move || {
+            hooks_before_claim(move || {
                 // A shared xorshift is random enough for this.
                 let mut x = seed.load(Ordering::Relaxed);
                 x ^= x << 13;
@@ -613,7 +646,7 @@ mod tests {
                     1..=4 => std::thread::yield_now(),
                     _ => {}
                 }
-            })),
+            }),
         );
         let current = AtomicUsize::new(0);
         let overlaps = AtomicUsize::new(0);
@@ -678,5 +711,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dropping_the_pool_lets_every_worker_go() {
+        // A worker that has checked for shutdown and not yet started to
+        // wait must still hear about it, and dropping the pool must not
+        // wait for the workers to stop.
+        let at_wait = Arc::new(AtomicUsize::new(0));
+        let hook_at_wait = Arc::clone(&at_wait);
+        let pool = WorkerPool::start(
+            1,
+            TestHooks {
+                before_wait: Some(Box::new(move || {
+                    hook_at_wait.fetch_add(1, Ordering::SeqCst);
+                    // Stay between the check and the wait for a while.
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                })),
+                ..TestHooks::default()
+            },
+        );
+        let shared = Arc::downgrade(&pool.shared);
+        assert!(
+            wait_until(|| at_wait.load(Ordering::SeqCst) > 0),
+            "worker idle"
+        );
+        let (dropped, dropped_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(pool);
+            let _ = dropped.send(());
+        });
+        assert!(
+            dropped_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "dropping the pool returned"
+        );
+        assert!(
+            wait_until(|| shared.upgrade().is_none()),
+            "every worker stopped"
+        );
     }
 }
