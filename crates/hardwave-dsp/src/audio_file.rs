@@ -179,7 +179,9 @@ impl AudioFileReader {
     /// decoding it. None when the header does not say (a stream with no
     /// frame count) or the file cannot be read.
     pub fn probe(path: &Path) -> Option<AudioFileInfo> {
-        if crate::aiff_reader::looks_like_aiff(path) {
+        if crate::aiff_reader::looks_like_aiff(path)
+            || matches!(crate::ogg_in_wav::ogg_stream(path), Ok(Some(_)))
+        {
             return Self::read(path).ok().map(|(info, _)| info);
         }
         let file = std::fs::File::open(path).ok()?;
@@ -212,6 +214,23 @@ impl AudioFileReader {
         // symphonia 0.5 lacks AIFF — dispatch to our own reader.
         let (info, channels) = if crate::aiff_reader::looks_like_aiff(path) {
             crate::aiff_reader::read_aiff(path)?
+        } else if let Some(ogg) = crate::ogg_in_wav::ogg_stream(path)? {
+            // A WAV holding Ogg Vorbis (FL's 909 Clap and Snare): the
+            // stream inside it, read as the .ogg it is, to the sample's
+            // own length.
+            let mss = MediaSourceStream::new(
+                Box::new(std::io::Cursor::new(ogg.stream)),
+                Default::default(),
+            );
+            let mut hint = Hint::new();
+            hint.with_extension("ogg");
+            let (info, mut channels) = Self::decode(mss, &hint)?;
+            if let Some(frames) = ogg.frames {
+                for ch in &mut channels {
+                    ch.truncate(frames as usize);
+                }
+            }
+            (info, channels)
         } else {
             Self::read_with_symphonia(path)?
         };
@@ -227,10 +246,17 @@ impl AudioFileReader {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
+        Self::decode(mss, &hint)
+    }
 
+    /// Decode a whole stream into deinterleaved f32 channels.
+    fn decode(
+        mss: MediaSourceStream,
+        hint: &Hint,
+    ) -> Result<(AudioFileInfo, Vec<Vec<f32>>), AudioFileError> {
         let probed = symphonia::default::get_probe()
             .format(
-                &hint,
+                hint,
                 mss,
                 &FormatOptions::default(),
                 &MetadataOptions::default(),
@@ -385,6 +411,29 @@ mod hostile_files {
         let out = AudioFileReader::read(&path);
         let _ = std::fs::remove_file(&path);
         out
+    }
+
+    /// FL's 909 Clap and Snare: a .wav whose audio is an Ogg Vorbis
+    /// stream. They were refused as an unsupported format.
+    #[test]
+    fn a_wav_holding_ogg_vorbis_reads_as_its_audio() {
+        let wav = crate::ogg_in_wav::tests::wav_holding(0x674f, crate::ogg_in_wav::tests::TONE);
+        let (info, ch) = read(&wav).expect("the Vorbis inside is read");
+        assert_eq!((info.sample_rate, info.channels), (44_100, 1));
+        // A quarter of a second, as the fact chunk says, not the last
+        // Vorbis block whole.
+        assert_eq!(ch[0].len(), 11_025);
+        let peak = ch[0].iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!((0.4..0.6).contains(&peak), "the tone at half scale: {peak}");
+        // The header alone says the same.
+        let path = std::env::temp_dir().join(format!("hw-oggwav-probe-{}.wav", std::process::id()));
+        std::fs::write(&path, &wav).unwrap();
+        let probed = AudioFileReader::probe(&path).expect("a header");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            (probed.sample_rate, probed.total_frames),
+            (44_100, ch[0].len() as u64)
+        );
     }
 
     #[test]

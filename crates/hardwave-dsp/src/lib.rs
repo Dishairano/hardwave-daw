@@ -28,6 +28,7 @@ pub mod modulation;
 pub mod modulation_matrix;
 pub mod multiband;
 pub mod note_tune;
+pub mod ogg_in_wav;
 pub mod onset;
 pub mod oversample;
 pub mod parametric_eq;
