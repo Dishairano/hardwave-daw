@@ -11,7 +11,11 @@
 //! So every thread that renders audio registers itself with the
 //! Multimedia Class Scheduler (MMCSS) as "Pro Audio" at high priority,
 //! the way other DAWs do, and falls back to time-critical priority when
-//! MMCSS refuses. It happens once per thread, on the thread's first
+//! MMCSS refuses. Some ASIO drivers register their own callback thread
+//! with MMCSS before they call us; that thread is left exactly as the
+//! driver set it, since time-critical (15) sits below the real-time
+//! range MMCSS gives (around 26 on the test machine) and would lower it.
+//! It happens once per thread, on the thread's first
 //! block: later blocks only read a flag the stream closure keeps. The
 //! registration is handed back when the thread ends; MMCSS has a limit
 //! on registered threads, and a stream is opened again on every device
@@ -30,6 +34,9 @@ pub enum PriorityOutcome {
     Pending,
     /// Registered with MMCSS as "Pro Audio" at high priority.
     Mmcss,
+    /// The thread was already registered with MMCSS by its owner (an
+    /// ASIO driver that does this itself); left untouched.
+    AlreadyRegistered,
     /// MMCSS refused (its error code is kept); the thread runs at
     /// time-critical priority instead.
     TimeCritical(u32),
@@ -47,6 +54,7 @@ impl PriorityOutcome {
             PriorityOutcome::TimeCritical(code) => (2, code),
             PriorityOutcome::Failed(code) => (3, code),
             PriorityOutcome::NotApplicable => (4, 0),
+            PriorityOutcome::AlreadyRegistered => (5, 0),
         };
         (kind << 32) | code as u64
     }
@@ -58,6 +66,7 @@ impl PriorityOutcome {
             2 => PriorityOutcome::TimeCritical(code),
             3 => PriorityOutcome::Failed(code),
             4 => PriorityOutcome::NotApplicable,
+            5 => PriorityOutcome::AlreadyRegistered,
             _ => PriorityOutcome::Pending,
         }
     }
@@ -67,6 +76,7 @@ impl PriorityOutcome {
         match self {
             PriorityOutcome::Pending => "not started".to_string(),
             PriorityOutcome::Mmcss => "mmcss Pro Audio ok".to_string(),
+            PriorityOutcome::AlreadyRegistered => "driver mmcss (already registered)".to_string(),
             PriorityOutcome::TimeCritical(code) => {
                 format!("fallback time critical (mmcss error 0x{code:08x})")
             }
@@ -92,6 +102,41 @@ impl PriorityStatus {
 
     pub fn set(&self, outcome: PriorityOutcome) {
         self.0.store(outcome.encode(), Ordering::Relaxed);
+    }
+}
+
+/// What to do when MMCSS refuses to register a thread.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnRefusal {
+    /// Someone else already registered this thread: leave its priority
+    /// alone.
+    LeaveAlone,
+    /// A real failure (no MMCSS service, bad task name): raise the
+    /// thread to time-critical ourselves.
+    TimeCritical,
+}
+
+/// `ERROR_THREAD_ALREADY_IN_TASK`: the thread is already in an MMCSS task.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const ERROR_THREAD_ALREADY_IN_TASK: u32 = 1552;
+
+/// Decide from the error MMCSS gave (as the HRESULT the Windows bindings
+/// return, or the bare Win32 code) whether the thread is already
+/// registered by its owner or registration really failed.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn on_refusal(code: u32) -> OnRefusal {
+    // HRESULT_FROM_WIN32 puts a Win32 code in the low 16 bits under
+    // facility 7 (FACILITY_WIN32) with the failure bit set.
+    let win32 = if code & 0xffff_0000 == 0x8007_0000 {
+        code & 0xffff
+    } else {
+        code
+    };
+    if win32 == ERROR_THREAD_ALREADY_IN_TASK {
+        OnRefusal::LeaveAlone
+    } else {
+        OnRefusal::TimeCritical
     }
 }
 
@@ -159,7 +204,7 @@ fn raise_once(
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::PriorityOutcome;
+    use super::{on_refusal, OnRefusal, PriorityOutcome};
     use windows::core::w;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Threading::{
@@ -183,6 +228,11 @@ mod platform {
             }
             Err(e) => e.code().0 as u32,
         };
+        if on_refusal(mmcss_error) == OnRefusal::LeaveAlone {
+            // An ASIO driver registered its own thread before calling us;
+            // its MMCSS priority is above anything we could set.
+            return (PriorityOutcome::AlreadyRegistered, 0);
+        }
         // SAFETY: GetCurrentThread is a pseudo handle valid on this thread.
         match unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) } {
             Ok(()) => (PriorityOutcome::TimeCritical(mmcss_error), 0),
@@ -286,6 +336,7 @@ mod tests {
             PriorityOutcome::TimeCritical(0x8007_0005),
             PriorityOutcome::Failed(0xffff_ffff),
             PriorityOutcome::NotApplicable,
+            PriorityOutcome::AlreadyRegistered,
             PriorityOutcome::Pending,
         ] {
             status.set(outcome);
@@ -301,6 +352,34 @@ mod tests {
             "fallback time critical (mmcss error 0x80070005)"
         );
         assert_eq!(PriorityOutcome::Failed(5).describe(), "failed 0x00000005");
+        assert_eq!(
+            PriorityOutcome::AlreadyRegistered.describe(),
+            "driver mmcss (already registered)"
+        );
+    }
+
+    #[test]
+    fn a_thread_the_driver_already_registered_is_left_alone() {
+        // What FL Studio ASIO's callback thread gave on the test machine.
+        assert_eq!(on_refusal(0x8007_0610), OnRefusal::LeaveAlone);
+        // The same code bare, as GetLastError gives it.
+        assert_eq!(on_refusal(1552), OnRefusal::LeaveAlone);
+    }
+
+    #[test]
+    fn a_real_mmcss_failure_still_falls_back_to_time_critical() {
+        for code in [
+            0x8007_0005, // access denied
+            0x8007_060e, // ERROR_INVALID_TASK_NAME
+            0x8007_060f, // ERROR_INVALID_TASK_INDEX
+            0x8007_0426, // ERROR_SERVICE_NOT_ACTIVE (MMCSS not running)
+            0x8007_0002, // the task is not in the registry
+            0x8000_0610, // 0x610 under another facility is not this error
+            0x0000_0610 | 0x0001_0000,
+            0,
+        ] {
+            assert_eq!(on_refusal(code), OnRefusal::TimeCritical, "{code:08x}");
+        }
     }
 
     #[test]
