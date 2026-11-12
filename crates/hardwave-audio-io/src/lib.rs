@@ -1075,6 +1075,10 @@ impl AudioDeviceManager {
             log::info!("Input stream stopped");
         }
         let _ = self.input_peaks.take();
+        // No input thread any more: its priority reads "not started"
+        // again. A fresh status, so a callback still finishing on the
+        // old stream cannot write into it.
+        self.input_priority = Arc::new(PriorityStatus::new());
         self.latency.set_input(0);
         self.input_active_sample_rate = 0;
         self.input_active_buffer_size = 0;
@@ -1341,5 +1345,16 @@ mod start_tests {
             "a stream that did not start is not running"
         );
         assert_eq!(manager.active_device_name(), None);
+    }
+    /// Once the input stream stops, the diagnostics no longer report the
+    /// priority its thread had.
+    #[test]
+    fn a_stopped_input_reports_its_thread_as_not_started() {
+        let mut manager = AudioDeviceManager::new();
+        manager.input_priority.set(PriorityOutcome::Mmcss);
+        assert_eq!(manager.input_thread_priority(), PriorityOutcome::Mmcss);
+        manager.stop_input_stream();
+        assert_eq!(manager.input_thread_priority(), PriorityOutcome::Pending);
+        assert_eq!(manager.input_thread_priority().describe(), "not started");
     }
 }
