@@ -25,6 +25,7 @@ mod plugin_window_host;
 mod plugin_window_pool;
 mod prefs;
 mod process_memory;
+mod process_priority;
 mod scripting;
 #[cfg(test)]
 mod security_tests;
@@ -242,6 +243,9 @@ pub fn run() {
         let empty: [u16; 1] = [0];
         windows_sys::Win32::System::LibraryLoader::SetDllDirectoryW(empty.as_ptr());
     }
+    // Out of the below-normal class a launcher may have started us in,
+    // before any child process can inherit it. See process_priority.rs.
+    process_priority::raise_to_normal();
 
     let args: Vec<String> = std::env::args().collect();
     // The child modes are only ever the first argument, which is how

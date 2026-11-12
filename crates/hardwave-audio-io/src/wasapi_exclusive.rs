@@ -32,6 +32,7 @@ impl WasapiExclusiveStream {
         sample_rate: u32,
         callback: C,
         error_flag: Arc<AtomicBool>,
+        priority: Arc<crate::thread_priority::PriorityStatus>,
     ) -> Result<Self, AudioIoError> {
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = Arc::clone(&running);
@@ -48,6 +49,7 @@ impl WasapiExclusiveStream {
                     callback,
                     running_thread,
                     error_flag,
+                    priority,
                     init_tx,
                 );
             })
@@ -94,6 +96,7 @@ fn run_render_thread<C: AudioCallback>(
     mut callback: C,
     running: Arc<AtomicBool>,
     error_flag: Arc<AtomicBool>,
+    priority: Arc<crate::thread_priority::PriorityStatus>,
     init_tx: mpsc::Sender<Result<(), AudioIoError>>,
 ) {
     if let Err(e) = initialize_mta().ok() {
@@ -185,6 +188,10 @@ fn run_render_thread<C: AudioCallback>(
     let bytes_per_frame: usize = 2 /* channels */ * 4 /* bytes/f32 */;
     let mut scratch = vec![0f32; buffer_frame_count as usize * 2];
     let mut bytes = vec![0u8; buffer_frame_count as usize * bytes_per_frame];
+
+    // This thread is ours and renders every block from here on: raise it
+    // to real-time priority once, before the first one.
+    priority.set(crate::thread_priority::raise_current_thread());
 
     while running.load(Ordering::Relaxed) {
         if h_event.wait_for_event(500).is_err() {

@@ -2769,6 +2769,7 @@ impl DawEngine {
     /// is forced only when it will not start, or when it fails again within
     /// five seconds of the last restart.
     pub fn poll_audio_health(&mut self) -> Result<Option<String>, String> {
+        self.audio_device.log_thread_priority();
         if !self.audio_device.take_stream_error() {
             return Ok(None);
         }
@@ -2890,6 +2891,22 @@ impl DawEngine {
         };
         *self.worker_pool.lock() = pool;
         self.rebuild_graph();
+    }
+
+    /// What the audio threads got when they asked for real-time priority,
+    /// in words: the output stream's thread, the input stream's, and the
+    /// helper threads'. For the diagnostics the test machine reads.
+    pub fn audio_thread_priorities(&self) -> (String, String, String) {
+        let workers = if self.worker_threads() == 0 {
+            "no worker threads".to_string()
+        } else {
+            crate::parallel::WORKER_PRIORITY.get().describe()
+        };
+        (
+            self.audio_device.output_thread_priority().describe(),
+            self.audio_device.input_thread_priority().describe(),
+            workers,
+        )
     }
 
     /// How many threads are set to help, zero when none are.

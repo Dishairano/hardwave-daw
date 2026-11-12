@@ -6,10 +6,12 @@ use parking_lot::Mutex as PlMutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
+use thread_priority::{PriorityOutcome, PriorityStatus};
 
 pub use rtrb;
 
 pub mod denormals;
+pub mod thread_priority;
 pub mod upsample;
 
 #[cfg(target_os = "windows")]
@@ -263,6 +265,15 @@ pub struct AudioDeviceManager {
     /// The rate `negotiate_output_rate` last settled on, so a second call
     /// with nothing changed keeps the factor it found.
     negotiated_rate: u32,
+    /// What the running output stream's audio thread got when it asked
+    /// for real-time priority (see `thread_priority`). A new one per
+    /// stream, so a stream that is going away cannot write into it.
+    output_priority: Arc<PriorityStatus>,
+    /// The same for the input stream's thread.
+    input_priority: Arc<PriorityStatus>,
+    /// The outcomes last written to the log, so each stream's is logged
+    /// once, from the engine's thread rather than the audio thread.
+    logged_priority: (PriorityOutcome, PriorityOutcome),
 }
 
 impl AudioDeviceManager {
@@ -326,6 +337,9 @@ impl AudioDeviceManager {
             latency: Arc::new(StreamLatency::default()),
             output_factor: 1,
             negotiated_rate: 0,
+            output_priority: Arc::new(PriorityStatus::new()),
+            input_priority: Arc::new(PriorityStatus::new()),
+            logged_priority: (PriorityOutcome::Pending, PriorityOutcome::Pending),
         }
     }
 
@@ -343,6 +357,31 @@ impl AudioDeviceManager {
     /// Latency the running streams report, shared with the callbacks.
     pub fn latency(&self) -> Arc<StreamLatency> {
         Arc::clone(&self.latency)
+    }
+
+    /// What the output stream's audio thread got when it asked for
+    /// real-time priority, `Pending` until its first block.
+    pub fn output_thread_priority(&self) -> PriorityOutcome {
+        self.output_priority.get()
+    }
+
+    /// The same for the input stream's thread.
+    pub fn input_thread_priority(&self) -> PriorityOutcome {
+        self.input_priority.get()
+    }
+
+    /// Log each stream's priority outcome once it is known. Called from
+    /// the engine's health poll: formatting a log line allocates, which
+    /// the audio thread itself must not do.
+    pub fn log_thread_priority(&mut self) {
+        let now = (self.output_priority.get(), self.input_priority.get());
+        if now.0 != self.logged_priority.0 && now.0 != PriorityOutcome::Pending {
+            log::info!("Audio output thread priority: {}", now.0.describe());
+        }
+        if now.1 != self.logged_priority.1 && now.1 != PriorityOutcome::Pending {
+            log::info!("Audio input thread priority: {}", now.1.describe());
+        }
+        self.logged_priority = now;
     }
 
     /// Whether the current stream is running in WASAPI exclusive mode.
@@ -614,6 +653,7 @@ impl AudioDeviceManager {
 
         self.running.store(true, Ordering::Relaxed);
         self.stream_error.store(false, Ordering::Relaxed);
+        self.output_priority = Arc::new(PriorityStatus::new());
 
         #[cfg(target_os = "windows")]
         {
@@ -627,6 +667,7 @@ impl AudioDeviceManager {
                     self.sample_rate,
                     callback,
                     Arc::clone(&self.stream_error),
+                    Arc::clone(&self.output_priority),
                 )?;
                 self.wasapi_stream = Some(stream);
                 self.active_exclusive = true;
@@ -691,6 +732,8 @@ impl AudioDeviceManager {
         let latency = Arc::clone(&self.latency);
         let stream_rate = self.sample_rate;
         let mut cb = callback;
+        let priority = Arc::clone(&self.output_priority);
+        let mut priority_raised = false;
 
         // On macOS, the first invocation of the callback (which runs on the
         // CoreAudio IOProc thread) joins the device's IO workgroup so the
@@ -706,6 +749,12 @@ impl AudioDeviceManager {
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                    // The thread the host calls us on, whichever host it
+                    // is, asks for real-time priority on its first block.
+                    if !priority_raised {
+                        priority.set(thread_priority::raise_current_thread());
+                        priority_raised = true;
+                    }
                     #[cfg(target_os = "macos")]
                     {
                         if !workgroup_joined {
@@ -878,6 +927,9 @@ impl AudioDeviceManager {
             channels,
         );
 
+        self.input_priority = Arc::new(PriorityStatus::new());
+        let priority = Arc::clone(&self.input_priority);
+        let mut priority_raised = false;
         let peaks = Arc::clone(&self.input_peaks);
         let monitor_producer = Arc::clone(&self.input_monitor_producer);
         let latency = Arc::clone(&self.latency);
@@ -891,6 +943,10 @@ impl AudioDeviceManager {
             .build_input_stream(
                 &config,
                 move |data: &[f32], info: &cpal::InputCallbackInfo| {
+                    if !priority_raised {
+                        priority.set(thread_priority::raise_current_thread());
+                        priority_raised = true;
+                    }
                     if data.is_empty() {
                         return;
                     }
