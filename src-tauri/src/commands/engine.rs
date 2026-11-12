@@ -61,6 +61,17 @@ pub struct AudioConfig {
     pub device: Option<String>,
     pub sample_rate: u32,
     pub buffer_size: u32,
+    /// What the output stream's audio thread got when it asked for
+    /// real-time priority: "mmcss Pro Audio ok", "fallback time critical
+    /// (...)", "failed 0x...", or "not started" before its first block.
+    pub audio_thread_priority: String,
+    /// The same for the input stream's thread.
+    pub input_thread_priority: String,
+    /// The same for the threads that share the work, when there are any.
+    pub worker_thread_priority: String,
+    /// The process's priority class, and the one it started in when the
+    /// DAW lifted it.
+    pub process_priority: String,
 }
 
 #[tauri::command]
@@ -262,11 +273,18 @@ mod test_tone_tests {
 
 #[tauri::command]
 pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
-    let (device, sample_rate, buffer_size) = state.engine.lock().audio_config();
+    let engine = state.engine.lock();
+    let (device, sample_rate, buffer_size) = engine.audio_config();
+    let (audio_thread_priority, input_thread_priority, worker_thread_priority) =
+        engine.audio_thread_priorities();
     AudioConfig {
         device,
         sample_rate,
         buffer_size,
+        audio_thread_priority,
+        input_thread_priority,
+        worker_thread_priority,
+        process_priority: crate::process_priority::describe(),
     }
 }
 
