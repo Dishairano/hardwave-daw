@@ -157,6 +157,44 @@ pub struct AppState {
     pub frontend_launch_plan: Arc<Mutex<Option<frontend_updater::LaunchPlanCacheEntry>>>,
 }
 
+#[cfg(test)]
+impl AppState {
+    /// The app's state around `engine`, with everything else empty, for
+    /// tests of the code that takes the whole state.
+    pub(crate) fn for_test(engine: DawEngine) -> Self {
+        let midi_input = Arc::clone(&engine.midi_input);
+        let midi_clock = Arc::new(MidiClockState::new());
+        let midi_timecode = Arc::new(MidiTimecodeState::with_output(Arc::clone(
+            &midi_clock.output,
+        )));
+        Self {
+            engine: Arc::new(Mutex::new(engine)),
+            midi_input,
+            export_cancel: Default::default(),
+            midi_mappings: Default::default(),
+            automation_write: Arc::new(commands::automation_write::AutomationWriteSessions::new()),
+            midi_clock,
+            midi_sync: Arc::new(MidiClockSyncState::new()),
+            midi_timecode,
+            plugin_editors: Default::default(),
+            slot_editors: Default::default(),
+            slot_param_queues: Default::default(),
+            slot_param_shadow: Default::default(),
+            control_surface: Arc::new(crate::control_surface::ControlSurface::new()),
+            reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
+            sandboxed_plugins: Default::default(),
+            sandbox_health: Default::default(),
+            collab: Default::default(),
+            osc_enabled: Default::default(),
+            osc_port: Default::default(),
+            slot_gui_edit_logs: Default::default(),
+            slot_levels: Default::default(),
+            slot_gain_reduction: Default::default(),
+            frontend_launch_plan: Default::default(),
+        }
+    }
+}
+
 /// Every command, timed for the FPS meter (see `backend_stats`). A command
 /// without `async` runs inside this call, so the time is what it held the
 /// main thread for; an `async` one only counts its hand-off.
