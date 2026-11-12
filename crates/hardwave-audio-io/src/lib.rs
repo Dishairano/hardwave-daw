@@ -271,9 +271,10 @@ pub struct AudioDeviceManager {
     output_priority: Arc<PriorityStatus>,
     /// The same for the input stream's thread.
     input_priority: Arc<PriorityStatus>,
-    /// The outcomes last written to the log, so each stream's is logged
-    /// once, from the engine's thread rather than the audio thread.
-    logged_priority: (PriorityOutcome, PriorityOutcome),
+    /// The output and input statuses whose outcome is already in the log,
+    /// so each new stream's is logged once (even when it matches the last
+    /// one), from the engine's thread rather than the audio thread.
+    logged_priority: (Option<Arc<PriorityStatus>>, Option<Arc<PriorityStatus>>),
 }
 
 impl AudioDeviceManager {
@@ -339,7 +340,7 @@ impl AudioDeviceManager {
             negotiated_rate: 0,
             output_priority: Arc::new(PriorityStatus::new()),
             input_priority: Arc::new(PriorityStatus::new()),
-            logged_priority: (PriorityOutcome::Pending, PriorityOutcome::Pending),
+            logged_priority: (None, None),
         }
     }
 
@@ -374,14 +375,46 @@ impl AudioDeviceManager {
     /// the engine's health poll: formatting a log line allocates, which
     /// the audio thread itself must not do.
     pub fn log_thread_priority(&mut self) {
-        let now = (self.output_priority.get(), self.input_priority.get());
-        if now.0 != self.logged_priority.0 && now.0 != PriorityOutcome::Pending {
-            log::info!("Audio output thread priority: {}", now.0.describe());
+        for line in self.thread_priority_lines() {
+            log::info!("{line}");
         }
-        if now.1 != self.logged_priority.1 && now.1 != PriorityOutcome::Pending {
-            log::info!("Audio input thread priority: {}", now.1.describe());
+    }
+
+    /// The log lines due now: one per stream whose thread has run its
+    /// first block and has not been logged yet.
+    fn thread_priority_lines(&mut self) -> Vec<String> {
+        fn due(
+            label: &str,
+            status: &Arc<PriorityStatus>,
+            logged: &mut Option<Arc<PriorityStatus>>,
+            lines: &mut Vec<String>,
+        ) {
+            let outcome = status.get();
+            if outcome == PriorityOutcome::Pending
+                || logged.as_ref().is_some_and(|l| Arc::ptr_eq(l, status))
+            {
+                return;
+            }
+            lines.push(format!(
+                "Audio {label} thread priority: {}",
+                outcome.describe()
+            ));
+            *logged = Some(Arc::clone(status));
         }
-        self.logged_priority = now;
+        let mut lines = Vec::new();
+        due(
+            "output",
+            &self.output_priority,
+            &mut self.logged_priority.0,
+            &mut lines,
+        );
+        due(
+            "input",
+            &self.input_priority,
+            &mut self.logged_priority.1,
+            &mut lines,
+        );
+        lines
     }
 
     /// Whether the current stream is running in WASAPI exclusive mode.
@@ -1356,5 +1389,36 @@ mod start_tests {
         manager.stop_input_stream();
         assert_eq!(manager.input_thread_priority(), PriorityOutcome::Pending);
         assert_eq!(manager.input_thread_priority().describe(), "not started");
+    }
+
+    /// Every new stream gets its own line in the session log, even when
+    /// its thread got the same priority as the stream before it.
+    #[test]
+    fn each_new_stream_logs_its_priority_once() {
+        let mut manager = AudioDeviceManager::new();
+        assert!(manager.thread_priority_lines().is_empty(), "nothing yet");
+
+        manager.output_priority.set(PriorityOutcome::Mmcss);
+        assert_eq!(
+            manager.thread_priority_lines(),
+            vec!["Audio output thread priority: mmcss Pro Audio ok".to_string()]
+        );
+        assert!(manager.thread_priority_lines().is_empty(), "logged once");
+
+        // A device or buffer change opens a new stream with the same outcome.
+        manager.output_priority = Arc::new(PriorityStatus::new());
+        assert!(manager.thread_priority_lines().is_empty(), "not run yet");
+        manager.output_priority.set(PriorityOutcome::Mmcss);
+        assert_eq!(manager.thread_priority_lines().len(), 1);
+
+        manager.input_priority = Arc::new(PriorityStatus::new());
+        manager
+            .input_priority
+            .set(PriorityOutcome::AlreadyRegistered);
+        assert_eq!(
+            manager.thread_priority_lines(),
+            vec!["Audio input thread priority: driver mmcss (already registered)".to_string()]
+        );
+        assert!(manager.thread_priority_lines().is_empty());
     }
 }
