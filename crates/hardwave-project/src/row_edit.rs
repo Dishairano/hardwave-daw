@@ -156,6 +156,62 @@ impl Project {
         Ok(())
     }
 
+    /// Rename a track (a channel or an insert). Returns false when there
+    /// is no such track or the name is empty.
+    ///
+    /// A row is FL's playlist track and keeps a name of its own, but a row
+    /// made for this track (a new song's, a starter's or an older song's,
+    /// named after the track as `claim_row` and `lay_out_as_before` name
+    /// them) that still carries the track's old name follows the rename,
+    /// in every arrangement. Such a row is the track's place in the
+    /// playlist or a row its clips are drawn on. A row named anything
+    /// else, or another track's row of the same name, keeps its name.
+    pub fn rename_track(&mut self, track_id: &str, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            return false;
+        }
+        let Some(index) = self.tracks.iter().position(|t| t.id == track_id) else {
+            return false;
+        };
+        let old = std::mem::replace(&mut self.tracks[index].name, name.to_string());
+        if old == name {
+            return true;
+        }
+        let place = crate::layout::track_places(&self.tracks)[index];
+        let follow = |rows: &mut [PlaylistRow], drawn: &[u32]| {
+            let mine: std::collections::BTreeSet<u32> =
+                drawn.iter().copied().chain(place).collect();
+            for row in mine {
+                if let Some(r) = rows.get_mut(row as usize).filter(|r| r.name == old) {
+                    r.name = name.to_string();
+                }
+            }
+        };
+        let shown = crate::layout::shown_rows(&self.tracks).swap_remove(index);
+        let live: Vec<u32> = (shown.clips.into_iter())
+            .chain(shown.automation_clips)
+            .chain(shown.lanes)
+            .collect();
+        follow(&mut self.rows, &live);
+        let active = self.active_arrangement.clone();
+        for arrangement in &mut self.arrangements {
+            // The open arrangement's clips are the live ones.
+            let drawn: Vec<u32> = if arrangement.id == active {
+                live.clone()
+            } else {
+                (arrangement.timelines.get(track_id).into_iter())
+                    .flat_map(|tl| {
+                        (tl.clips.iter().filter_map(|c| c.row))
+                            .chain(tl.automation_clips.iter().filter_map(|c| c.row))
+                    })
+                    .collect()
+            };
+            follow(&mut arrangement.rows, &drawn);
+        }
+        true
+    }
+
     /// Colour a row (`#rrggbb`), or none for the default.
     pub fn set_row_color(&mut self, row: u32, color: Option<&str>) -> Result<(), String> {
         if let Some(c) = color {
@@ -731,6 +787,58 @@ mod tests {
         now.set_row_name(500, "Kept").unwrap();
         let again = Project::from_bytes(&now.to_bytes().unwrap()).unwrap();
         assert_eq!(again.rows[500].name, "Kept");
+    }
+
+    #[test]
+    fn a_renamed_channel_takes_the_row_made_for_it_along() {
+        let mut p = Project::default();
+        let kick = p.claim_row(1, "Kick", true);
+        assert!(p.rename_track(&kick, "  Big Kick "));
+        assert_eq!(p.track(&kick).unwrap().name, "Big Kick");
+        assert_eq!(p.rows[0].name, "Big Kick", "the row made for it follows");
+        // An insert's row, named after it with the song, follows too.
+        assert!(p.rename_track("insert-004", "Vocals"));
+        assert_eq!(p.rows[3].name, "Vocals");
+        assert_eq!(p.rows[4].name, "Insert 5", "the others stay");
+        assert!(!p.rename_track(&kick, "   "), "an empty name is refused");
+        assert!(!p.rename_track("nope", "X"));
+    }
+
+    #[test]
+    fn a_row_named_by_hand_or_never_named_keeps_its_name() {
+        let mut p = song();
+        // Bass's clip moves to row 4, which nobody named ("Track 5"), and
+        // the lead's row is given a name of its own.
+        p.set_clip_rows(&[("bass".into(), "c".into(), 4)]).unwrap();
+        p.set_row_name(0, "Hook").unwrap();
+        p.rename_track("bass", "Sub");
+        p.rename_track("lead", "Pluck");
+        assert_eq!(p.rows[0].name, "Hook");
+        assert_eq!(p.rows[1].name, "Sub", "still the bass's place");
+        assert_eq!(p.rows.get(4).map_or("", |r| r.name.as_str()), "");
+    }
+
+    #[test]
+    fn only_the_renamed_tracks_row_follows_when_two_share_a_name() {
+        let mut p = song();
+        p.track_mut("bass").unwrap().name = "Lead".into();
+        p.rows[1].name = "Lead".into();
+        p.rename_track("bass", "Bass 2");
+        assert_eq!(p.rows[0].name, "Lead", "the lead's row stays");
+        assert_eq!(p.rows[1].name, "Bass 2");
+    }
+
+    #[test]
+    fn a_renamed_channel_takes_its_row_along_in_every_arrangement() {
+        let mut p = song();
+        p.ensure_arrangements();
+        let first = p.active_arrangement.clone();
+        p.create_arrangement("Two", true);
+        p.rename_track("bass", "Sub");
+        assert_eq!(p.rows[1].name, "Sub");
+        p.capture_active_arrangement();
+        p.apply_arrangement(&first).unwrap();
+        assert_eq!(p.rows[1].name, "Sub", "the stored arrangement's row too");
     }
 
     #[test]

@@ -875,6 +875,8 @@ export const useTrackStore = create<TrackState>((set, get) => ({
     const prev = get().tracks.find(t => t.id === id)?.name ?? ''
     await mut('set_track_name', { trackId: id, name: trimmed }, `Rename "${prev}" to "${trimmed}"`)
     await get().refreshTrack(id)
+    // The playlist row made for the track follows the new name.
+    void usePlaylistRowsStore.getState().fetch()
   },
 
   setTrackColor: async (id, color) => {

@@ -62,7 +62,7 @@ fn most_used_row(clips: &[ClipPlacement]) -> Option<u32> {
 /// Each track's place in the playlist: its position among the tracks that
 /// are not the master (none for the master). A song built row by row (a
 /// new song, a starter, a template) has each track's clips on this row.
-fn track_places(tracks: &[Track]) -> Vec<Option<u32>> {
+pub(crate) fn track_places(tracks: &[Track]) -> Vec<Option<u32>> {
     let mut next = 0u32;
     tracks
         .iter()
