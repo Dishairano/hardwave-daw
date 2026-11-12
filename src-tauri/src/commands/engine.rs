@@ -69,6 +69,9 @@ pub struct AudioConfig {
     pub input_thread_priority: String,
     /// The same for the threads that share the work, when there are any.
     pub worker_thread_priority: String,
+    /// How many threads share the work beside the audio thread (the audio
+    /// setting), zero for the audio thread alone.
+    pub worker_threads: usize,
     /// The process's priority class, and the one it started in when the
     /// DAW lifted it.
     pub process_priority: String,
@@ -284,6 +287,7 @@ pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
         audio_thread_priority,
         input_thread_priority,
         worker_thread_priority,
+        worker_threads: engine.worker_threads(),
         process_priority: crate::process_priority::describe(),
     }
 }
@@ -814,17 +818,31 @@ pub struct WorkerThreads {
     /// What this machine would use when asked for "as many as it can".
     pub suggested: usize,
     pub cores: usize,
+    /// Levels of the graph handed out to the threads since they started.
+    pub levels_shared: u64,
+    /// Levels kept on the audio thread because they had too little work
+    /// in them to be worth waking a thread for.
+    pub levels_alone: u64,
+    /// Times the audio thread slept waiting for a thread to finish.
+    pub waits_slept: u64,
+    /// Sleeping threads woken for a level.
+    pub worker_wakes: u64,
 }
 
 #[tauri::command]
 pub fn get_worker_threads(state: State<AppState>) -> WorkerThreads {
     let engine = state.engine.lock();
+    let stats = engine.worker_pool_stats().unwrap_or_default();
     WorkerThreads {
         threads: engine.worker_threads(),
         suggested: hardwave_engine::parallel::default_worker_count(),
         cores: std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1),
+        levels_shared: stats.levels_shared,
+        levels_alone: stats.levels_alone,
+        waits_slept: stats.waits_slept,
+        worker_wakes: stats.worker_wakes,
     }
 }
 

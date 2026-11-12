@@ -2909,6 +2909,13 @@ impl DawEngine {
         )
     }
 
+    /// What the helper threads have done since they were started: levels
+    /// shared out and kept on the audio thread, sleeps and wake-ups. None
+    /// when there are no helper threads. For the diagnostics.
+    pub fn worker_pool_stats(&self) -> Option<crate::parallel::PoolStats> {
+        self.worker_pool.lock().as_ref().map(|p| p.stats())
+    }
+
     /// How many threads are set to help, zero when none are.
     pub fn worker_threads(&self) -> usize {
         self.worker_pool
@@ -3372,6 +3379,9 @@ impl DawEngine {
     ) -> LiveProfile {
         let buffer_size = (self.audio_device.buffer_size as usize).max(1);
         let device_frames = device_frames.max(1);
+        // With the helper threads set on this engine, as playback would
+        // have them (`set_worker_threads`). The nodes are only timed one
+        // by one on the one-thread path.
         let mut callback = self.offline_callback(
             sample_rate,
             buffer_size,
@@ -3379,7 +3389,7 @@ impl DawEngine {
             None,
             instantiate,
             |_| {},
-            Arc::new(Mutex::new(None)),
+            Arc::clone(&self.worker_pool),
         );
         // As on the audio thread, which the sound card's callback sets up
         // this way.
