@@ -24,6 +24,11 @@
 //! On other platforms this does nothing (macOS joins the device's
 //! workgroup in `coreaudio_workgroup` instead).
 //!
+//! Every thread raised here is also listed by its system id
+//! ([`is_audio_thread`]), so tools that stop threads to look at them (the
+//! freeze log) can leave the audio threads alone, whatever priority they
+//! ended up at and whoever created them (an ASIO driver makes its own).
+//!
 //! The other way round, [`lower_current_thread`] puts background work
 //! (stretch and warp bakes) below normal priority, so it never competes
 //! with the audio threads or the window.
@@ -154,6 +159,9 @@ struct ThreadState {
 
 impl Drop for ThreadState {
     fn drop(&mut self) {
+        if self.outcome.get().is_some() {
+            forget_audio_thread(platform::current_thread_id());
+        }
         let handle = self.handle.get();
         if handle != 0 {
             if let Some(revert) = self.revert.get() {
@@ -197,6 +205,7 @@ fn raise_once(
                 return done;
             }
             let (outcome, handle) = raise();
+            remember_audio_thread(platform::current_thread_id());
             t.outcome.set(Some(outcome));
             t.handle.set(handle);
             t.revert.set(Some(revert));
@@ -204,6 +213,47 @@ fn raise_once(
         })
         // The thread is shutting down: nothing worth raising any more.
         .unwrap_or(PriorityOutcome::Pending)
+}
+
+/// Most audio threads listed at once: an output, an input, the exclusive
+/// render thread and the workers, with room to spare.
+const MAX_AUDIO_THREADS: usize = 64;
+
+/// The system ids of the threads raised here, zero for a free entry.
+static AUDIO_THREADS: [AtomicU64; MAX_AUDIO_THREADS] =
+    [const { AtomicU64::new(0) }; MAX_AUDIO_THREADS];
+
+fn remember_audio_thread(id: u64) {
+    if id == 0 || is_audio_thread(id) {
+        return;
+    }
+    for entry in &AUDIO_THREADS {
+        if entry
+            .compare_exchange(0, id, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
+    }
+}
+
+fn forget_audio_thread(id: u64) {
+    if id == 0 {
+        return;
+    }
+    for entry in &AUDIO_THREADS {
+        let _ = entry.compare_exchange(id, 0, Ordering::AcqRel, Ordering::Relaxed);
+    }
+}
+
+/// Whether the thread with this system id (`GetCurrentThreadId` on
+/// Windows) renders audio: it was raised by [`raise_current_thread`] and
+/// has not ended. Always false where threads have no id here.
+pub fn is_audio_thread(id: u64) -> bool {
+    id != 0
+        && AUDIO_THREADS
+            .iter()
+            .any(|entry| entry.load(Ordering::Acquire) == id)
 }
 
 /// Put the calling thread below normal priority, for work that may take
@@ -223,9 +273,14 @@ mod platform {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Threading::{
         AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, AvSetMmThreadPriority,
-        GetCurrentThread, SetThreadPriority, AVRT_PRIORITY_HIGH, THREAD_PRIORITY_BELOW_NORMAL,
-        THREAD_PRIORITY_TIME_CRITICAL,
+        GetCurrentThread, GetCurrentThreadId, SetThreadPriority, AVRT_PRIORITY_HIGH,
+        THREAD_PRIORITY_BELOW_NORMAL, THREAD_PRIORITY_TIME_CRITICAL,
     };
+
+    pub(super) fn current_thread_id() -> u64 {
+        // SAFETY: a plain call with no arguments.
+        unsafe { GetCurrentThreadId() as u64 }
+    }
 
     pub(super) fn lower() -> bool {
         // SAFETY: GetCurrentThread is a pseudo handle valid on this thread.
@@ -276,6 +331,11 @@ mod platform {
     }
 
     pub(super) fn revert(_handle: usize) {}
+
+    /// Nothing outside Windows asks for a thread by its id.
+    pub(super) fn current_thread_id() -> u64 {
+        0
+    }
 
     #[cfg(target_os = "linux")]
     pub(super) fn lower() -> bool {
@@ -421,6 +481,35 @@ mod tests {
         ] {
             assert_eq!(on_refusal(code), OnRefusal::TimeCritical, "{code:08x}");
         }
+    }
+
+    #[test]
+    fn an_audio_thread_is_listed_until_it_ends() {
+        // System ids are faked here: the list works on whatever id the
+        // platform gives, and only Windows gives one.
+        let id = 0x5eed_0001;
+        assert!(!is_audio_thread(id));
+        remember_audio_thread(id);
+        remember_audio_thread(id);
+        assert!(is_audio_thread(id));
+        forget_audio_thread(id);
+        assert!(!is_audio_thread(id), "listed once, so gone once forgotten");
+        // No id: never listed.
+        remember_audio_thread(0);
+        assert!(!is_audio_thread(0));
+    }
+
+    #[test]
+    fn a_raised_thread_is_an_audio_thread_until_it_ends() {
+        let id = std::thread::spawn(|| {
+            raise_current_thread();
+            let id = platform::current_thread_id();
+            assert_eq!(is_audio_thread(id), id != 0);
+            id
+        })
+        .join()
+        .unwrap();
+        assert!(!is_audio_thread(id));
     }
 
     #[test]

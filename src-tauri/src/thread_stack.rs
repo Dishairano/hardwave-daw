@@ -45,6 +45,33 @@ pub fn describe(frames: &[Frame]) -> String {
     }
 }
 
+/// The names our sound-making threads are given: cpal's WASAPI output and input threads, the
+/// WASAPI exclusive render thread and the worker pool's threads.
+#[cfg_attr(not(windows), allow(dead_code))]
+const AUDIO_THREAD_NAMES: [&str; 4] = [
+    "cpal_wasapi_out",
+    "cpal_wasapi_in",
+    "hardwave-wasapi-excl",
+    "hardwave-audio-worker",
+];
+
+/// Whether a thread may be stopped for a moment to read its stack. Never one that makes the
+/// sound, whatever its priority: a stopped audio thread is a dropout, and a priority can change
+/// (MMCSS lowers a thread that used up its share) or never be raised (cpal 0.15 raised its own
+/// thread with the wrong handle, so it stayed at normal). Such a thread is known by its name, or
+/// by having been raised for audio (`raised_for_audio`), which also covers a thread an ASIO
+/// driver made itself once it has called us; past that, anything above normal is left alone.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn may_suspend(name: Option<&str>, raised_for_audio: bool, priority: i32, normal: i32) -> bool {
+    if raised_for_audio {
+        return false;
+    }
+    if name.is_some_and(|n| AUDIO_THREAD_NAMES.iter().any(|a| n.starts_with(a))) {
+        return false;
+    }
+    priority <= normal
+}
+
 #[cfg(windows)]
 pub use windows_stack::{capture, main_thread, others, remember_main_thread};
 
@@ -120,8 +147,8 @@ mod windows_stack {
     }
 
     /// The other threads of this process that are running code of `exe`, with their name and
-    /// frames: who holds what a stuck main thread waits for. Threads above normal priority (the
-    /// audio threads) are never stopped, so a snapshot cannot make the sound drop out.
+    /// frames: who holds what a stuck main thread waits for. The audio threads are never stopped
+    /// (see `may_suspend`), so a snapshot cannot make the sound drop out.
     pub fn others(exe: &str) -> Vec<(String, Vec<Frame>)> {
         // SAFETY: plain calls; the snapshot handle is closed below.
         let (me, pid, snapshot) = unsafe {
@@ -167,8 +194,10 @@ mod windows_stack {
             }
             // SAFETY: the handle just opened.
             let priority = unsafe { GetThreadPriority(handle) };
-            if priority <= THREAD_PRIORITY_NORMAL {
-                let name = thread_name(handle).unwrap_or_else(|| format!("thread {id}"));
+            let name = thread_name(handle);
+            let audio = hardwave_engine::thread_priority::is_audio_thread(id as u64);
+            if super::may_suspend(name.as_deref(), audio, priority, THREAD_PRIORITY_NORMAL) {
+                let name = name.unwrap_or_else(|| format!("thread {id}"));
                 let frames = capture(handle as isize);
                 if frames.iter().any(|f| f.module.as_deref() == Some(exe)) {
                     found.push((name, frames));
@@ -290,7 +319,46 @@ mod windows_stack {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, Frame};
+    use super::{describe, may_suspend, Frame};
+
+    const NORMAL: i32 = 0;
+
+    /// The freeze log stops threads at normal priority or below. An audio thread that ended up
+    /// there (cpal's WASAPI thread stayed at normal before v0.266.47; MMCSS can drop a thread)
+    /// was stopped with them, and the sound dropped out while the log was written.
+    #[test]
+    fn the_audio_threads_are_never_stopped_whatever_their_priority() {
+        for name in [
+            "cpal_wasapi_out",
+            "cpal_wasapi_in",
+            "hardwave-wasapi-excl",
+            "hardwave-audio-worker-0",
+            "hardwave-audio-worker-11",
+        ] {
+            for priority in [-15, -2, NORMAL, 2, 15] {
+                assert!(
+                    !may_suspend(Some(name), false, priority, NORMAL),
+                    "{name} at {priority}"
+                );
+            }
+        }
+        // An ASIO driver's thread has no name of ours; it is known by having been raised.
+        assert!(!may_suspend(None, true, NORMAL, NORMAL));
+        assert!(!may_suspend(Some("thread 4242"), true, -2, NORMAL));
+    }
+
+    #[test]
+    fn other_threads_at_normal_or_below_are_stopped_and_higher_ones_are_not() {
+        assert!(may_suspend(
+            Some("tokio-runtime-worker"),
+            false,
+            NORMAL,
+            NORMAL
+        ));
+        assert!(may_suspend(None, false, -2, NORMAL));
+        assert!(may_suspend(Some("hw-bake"), false, -1, NORMAL));
+        assert!(!may_suspend(None, false, 2, NORMAL));
+    }
 
     fn frame(module: &str, offset: usize) -> Frame {
         Frame {
