@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::bridge_protocol::*;
-use crate::types::{HostedPlugin, PluginEditor, SharedParamQueue};
+use crate::types::{HostedPlugin, PluginEditor, SharedEditLog};
 
 /// Take standard input and output for frames, leaving the plug-in a stdin
 /// and stdout that go nowhere. Call before the plug-in is loaded.
@@ -345,7 +345,7 @@ fn serve_frames<R: Read, W: Write>(
 
 /// Knobs moved in the plug-in's own window since last time, sent to the
 /// host so it can record them and show where they are.
-fn send_moves<W: Write>(out: &Out<W>, gui_log: Option<&SharedParamQueue>) {
+fn send_moves<W: Write>(out: &Out<W>, gui_log: Option<&SharedEditLog>) {
     let Some(log) = gui_log else {
         return;
     };
@@ -379,7 +379,7 @@ mod window {
         _editor: Option<Arc<dyn PluginEditor>>,
         commands: Receiver<UiCommand>,
         out: &Out<W>,
-        gui_log: Option<&SharedParamQueue>,
+        gui_log: Option<&SharedEditLog>,
         _title: &str,
     ) {
         loop {
@@ -517,7 +517,7 @@ mod window {
         editor: Option<Arc<dyn PluginEditor>>,
         commands: Receiver<UiCommand>,
         out: &Out<W>,
-        gui_log: Option<&SharedParamQueue>,
+        gui_log: Option<&SharedEditLog>,
         title: &str,
     ) {
         // Safety: Win32 calls on this thread's own windows and messages;
@@ -661,7 +661,7 @@ mod tests {
     /// its "window".
     struct Fake {
         desc: PluginDescriptor,
-        gui_log: SharedParamQueue,
+        gui_log: SharedEditLog,
         tempo: Arc<Mutex<f64>>,
         cutoff: f64,
     }
@@ -734,7 +734,7 @@ mod tests {
         fn has_editor(&self) -> bool {
             false
         }
-        fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+        fn gui_edit_log(&self) -> Option<SharedEditLog> {
             Some(Arc::clone(&self.gui_log))
         }
         fn set_transport(&mut self, transport: TransportInfo) {
@@ -746,7 +746,7 @@ mod tests {
     fn the_child_lists_parameters_plays_notes_and_passes_on_its_window_s_knob_moves() {
         let (from_host, to_child) = std::io::pipe().expect("pipe");
         let (from_child, to_host) = std::io::pipe().expect("pipe");
-        let gui_log: SharedParamQueue = Arc::new(parking_lot::Mutex::new(vec![(11, 0.75)]));
+        let gui_log: SharedEditLog = Arc::new(parking_lot::Mutex::new(vec![(11, 0.75)]));
         let tempo = Arc::new(Mutex::new(0.0));
         let fake = Fake {
             desc: PluginDescriptor {

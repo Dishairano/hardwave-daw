@@ -22,7 +22,7 @@ use std::sync::{mpsc, Arc, Mutex};
 
 use hardwave_plugin_host::bridge_protocol::*;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginDescriptor, SharedParamQueue, TransportInfo,
+    HostedPlugin, ParameterInfo, PluginDescriptor, SharedEditLog, SharedParamQueue, TransportInfo,
 };
 use raw_window_handle::RawWindowHandle;
 
@@ -232,7 +232,7 @@ struct Shared {
     /// window moved it.
     values: parking_lot::Mutex<Vec<(u32, f64)>>,
     /// Knob moves in the plug-in's window, for the app to record.
-    gui_log: SharedParamQueue,
+    gui_log: SharedEditLog,
     /// The plug-in's state, as last fetched or set.
     state: parking_lot::Mutex<Vec<u8>>,
     /// Its window is open, or its knobs moved since the state was fetched.
@@ -734,7 +734,7 @@ impl HostedPlugin for SandboxedPlugin {
         None
     }
 
-    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+    fn gui_edit_log(&self) -> Option<SharedEditLog> {
         Some(Arc::clone(&self.shared.gui_log))
     }
 

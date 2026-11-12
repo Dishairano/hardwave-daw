@@ -83,8 +83,9 @@ pub struct AppState {
     /// editor and chain hold separate queues and GUI knob movements
     /// never reach the audio thread.
     #[allow(clippy::type_complexity)]
-    pub slot_param_queues:
-        Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
+    pub slot_param_queues: Arc<
+        Mutex<std::collections::HashMap<(String, String), hardwave_plugin_host::SharedParamQueue>>,
+    >,
     /// The last value the app sent each insert's parameters, by slot. A
     /// window opening reads the live state from the audio thread; when
     /// the audio thread is not running (the device dropped out, as the

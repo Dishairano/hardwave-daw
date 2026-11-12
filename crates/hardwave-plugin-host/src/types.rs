@@ -186,7 +186,7 @@ pub trait HostedPlugin: Send {
     /// plug-in window could be heard but never recorded. This second
     /// queue is written at the same moment and drained only by the app,
     /// which is what lets automation record a knob the plug-in owns.
-    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+    fn gui_edit_log(&self) -> Option<SharedEditLog> {
         None
     }
 
@@ -257,10 +257,14 @@ impl TransportInfo {
 }
 
 /// Shared queue for GUI → audio parameter edits, used by both VST3 and
-/// CLAP hosts. The editor pushes `(param_id, normalized_value)` entries;
-/// the audio thread drains them under `try_lock`/`lock` at the start of
-/// each `process` block and applies them to the chain instance.
-pub type SharedParamQueue = std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>;
+/// CLAP hosts. The editor pushes `(param_id, normalized_value)` changes;
+/// the instance that plays takes them at the start of each block without
+/// ever waiting (see [`crate::param_queue`]).
+pub type SharedParamQueue = std::sync::Arc<crate::param_queue::ParamChangeQueue>;
+
+/// The app's copy of the edits made in a plug-in's own window, drained by
+/// the app (never by the audio thread) for automation recording.
+pub type SharedEditLog = std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>;
 
 /// A plug-in's own window on the instance that plays. Every call is made on
 /// the thread that owns the app's windows; the instance closes the window

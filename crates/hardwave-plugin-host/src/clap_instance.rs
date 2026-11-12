@@ -57,7 +57,7 @@ pub struct ClapPluginInstance {
     /// injects `CLAP_EVENT_PARAM_VALUE` events into the plugin each block.
     /// Shared with a separate editor instance via `load_with_shared_pending`.
     pending_params: SharedParamQueue,
-    gui_edit_log: SharedParamQueue,
+    gui_edit_log: SharedEditLog,
     /// True between a successful `open_editor` and `close_editor` so we
     /// don't double-create / leak the plugin's GUI.
     gui_open: bool,
@@ -234,7 +234,7 @@ struct ClapHostContext {
     resize_request: SharedResizeRequest,
     pending: SharedParamQueue,
     /// Every GUI edit again, drained by the app for automation recording.
-    gui_edit_log: SharedParamQueue,
+    gui_edit_log: SharedEditLog,
 }
 
 // SAFETY: all pointers point into the plugin binary (lifetime bound
@@ -260,7 +260,7 @@ impl ClapPluginInstance {
     pub fn load_with_shared_pending(
         descriptor: PluginDescriptor,
         shared: SharedParamQueue,
-        shared_log: Option<SharedParamQueue>,
+        shared_log: Option<SharedEditLog>,
     ) -> Result<Self, String> {
         Self::load_inner(descriptor, Some(shared), shared_log)
     }
@@ -268,7 +268,7 @@ impl ClapPluginInstance {
     fn load_inner(
         descriptor: PluginDescriptor,
         shared_pending: Option<SharedParamQueue>,
-        shared_log: Option<SharedParamQueue>,
+        shared_log: Option<SharedEditLog>,
     ) -> Result<Self, String> {
         let path = descriptor.path.clone();
         if !path.exists() {
@@ -308,9 +308,8 @@ impl ClapPluginInstance {
         // edits into it. Both the Box<ClapHostContext> and Box<ClapHost>
         // are heap-stable, so the raw pointers we hand the plugin stay
         // valid even after the boxes move into `Self`.
-        let pending_params: SharedParamQueue =
-            shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
-        let gui_edit_log: SharedParamQueue =
+        let pending_params: SharedParamQueue = shared_pending.unwrap_or_default();
+        let gui_edit_log: SharedEditLog =
             shared_log.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
         let resize_request: SharedResizeRequest = Arc::new(Mutex::new(None));
         let mut host_ctx = Box::new(ClapHostContext {
@@ -415,33 +414,32 @@ impl ClapPluginInstance {
     /// Start the event list over with the waiting parameter changes
     /// (automation, generic knob UI, the set_plugin_parameter IPC, and
     /// editor GUI edits captured via request_flush) as
-    /// CLAP_EVENT_PARAM_VALUE events at its head. Draining empties the
-    /// shared queue for next time and keeps its room.
+    /// CLAP_EVENT_PARAM_VALUE events at its head. Never waits on the
+    /// threads that push (the audio thread used to lock their queue here
+    /// every block), and what does not fit in this block's list stays
+    /// queued for the next one instead of being dropped.
     fn take_param_events(&mut self) {
         let events = &mut self.event_queue.events;
         events.clear();
-        let mut pending = self.pending_params.lock();
-        for (param_id, value) in pending.drain(..) {
-            if events.len() >= MAX_BLOCK_EVENTS {
-                break;
-            }
-            events.push(EncodedEvent::ParamValue(ClapEventParamValue {
-                header: ClapEventHeader {
-                    size: std::mem::size_of::<ClapEventParamValue>() as u32,
-                    time: 0,
-                    space_id: CLAP_CORE_EVENT_SPACE_ID,
-                    event_type: CLAP_EVENT_PARAM_VALUE,
-                    flags: 0,
-                },
-                param_id,
-                cookie: std::ptr::null_mut(),
-                note_id: -1,
-                port_index: -1,
-                channel: -1,
-                key: -1,
-                value,
-            }));
-        }
+        self.pending_params
+            .drain(MAX_BLOCK_EVENTS, |param_id, value| {
+                events.push(EncodedEvent::ParamValue(ClapEventParamValue {
+                    header: ClapEventHeader {
+                        size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                        time: 0,
+                        space_id: CLAP_CORE_EVENT_SPACE_ID,
+                        event_type: CLAP_EVENT_PARAM_VALUE,
+                        flags: 0,
+                    },
+                    param_id,
+                    cookie: std::ptr::null_mut(),
+                    note_id: -1,
+                    port_index: -1,
+                    channel: -1,
+                    key: -1,
+                    value,
+                }));
+            });
     }
 
     fn params_ext(&self) -> Option<*const ClapPluginParams> {
@@ -810,20 +808,14 @@ impl HostedPlugin for ClapPluginInstance {
         // CLAP_EVENT_PARAM_VALUE at the start of the next block, which is
         // the plugin's own synchronization path. De-dupe consecutive
         // edits to the same param so a fast automation ramp or knob spin
-        // doesn't pile up redundant entries between blocks.
-        let mut q = self.pending_params.lock();
-        if let Some(last) = q.last_mut() {
-            if last.0 == id {
-                last.1 = value;
-                return;
-            }
-        }
-        q.push((id, value));
+        // doesn't pile up redundant entries between blocks: the queue
+        // keeps the newest value per parameter, and pushing never waits.
+        self.pending_params.push(id, value);
     }
 
     fn flush_parameters(&mut self) {
         // Inactive, the first block after activation takes them.
-        if !self.active || self.plugin.is_null() || self.pending_params.lock().is_empty() {
+        if !self.active || self.plugin.is_null() || !self.pending_params.has_pending() {
             return;
         }
         // The extension's id as it is stored (it ends in a nul), so the
@@ -970,7 +962,7 @@ impl HostedPlugin for ClapPluginInstance {
         self.descriptor.has_editor
     }
 
-    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+    fn gui_edit_log(&self) -> Option<SharedEditLog> {
         Some(Arc::clone(&self.gui_edit_log))
     }
 
@@ -1308,7 +1300,7 @@ struct ParamCapture {
     /// The same edits again, for the app. `out` is drained on the audio
     /// path, so without a second copy a knob moved in the plug-in's own
     /// window can be heard but never recorded.
-    log: SharedParamQueue,
+    log: SharedEditLog,
 }
 
 /// Output-event sink passed to `params.flush`: records param-value
@@ -1324,15 +1316,7 @@ unsafe extern "C" fn param_capture_push(
     let header = &*event;
     if header.space_id == CLAP_CORE_EVENT_SPACE_ID && header.event_type == CLAP_EVENT_PARAM_VALUE {
         let pv = &*(event as *const ClapEventParamValue);
-        let mut q = cap.out.lock();
-        if let Some(last) = q.last_mut() {
-            if last.0 == pv.param_id {
-                last.1 = pv.value;
-                return true;
-            }
-        }
-        q.push((pv.param_id, pv.value));
-        drop(q);
+        cap.out.push(pv.param_id, pv.value);
         let mut log = cap.log.lock();
         if let Some(last) = log.last_mut() {
             if last.0 == pv.param_id {
@@ -1795,13 +1779,8 @@ mod flush_tests {
         0
     }
 
-    /// A value set while no block runs (the song stopped) reaches the
-    /// plug-in through `params.flush`, so the plug-in, its window and its
-    /// saved state have it at once instead of after play starts.
-    #[test]
-    fn a_value_set_between_blocks_reaches_the_plug_in_on_flush() {
-        TAKEN.store(0.333f64.to_bits(), Ordering::SeqCst);
-        let plugin = Box::new(ClapPlugin {
+    fn fake_plugin() -> Box<ClapPlugin> {
+        Box::new(ClapPlugin {
             desc: std::ptr::null(),
             plugin_data: std::ptr::null_mut(),
             init,
@@ -1814,15 +1793,19 @@ mod flush_tests {
             process,
             get_extension,
             on_main_thread: nothing,
-        });
-        let pending_params: SharedParamQueue = Arc::new(Mutex::new(Vec::new()));
+        })
+    }
+
+    /// An active instance of the fake plug-in, with no library behind it.
+    fn fake_instance(plugin: &ClapPlugin) -> ClapPluginInstance {
+        let pending_params: SharedParamQueue = Default::default();
         let host_ctx = Box::new(ClapHostContext {
-            plugin: &*plugin,
+            plugin,
             resize_request: Arc::new(Mutex::new(None)),
             pending: Arc::clone(&pending_params),
             gui_edit_log: Arc::new(Mutex::new(Vec::new())),
         });
-        let mut instance = ClapPluginInstance {
+        ClapPluginInstance {
             descriptor: PluginDescriptor {
                 id: "clap:test.fake".into(),
                 name: "Fake".into(),
@@ -1842,7 +1825,7 @@ mod flush_tests {
             max_block: 256,
             library: None,
             entry: std::ptr::null(),
-            plugin: &*plugin,
+            plugin,
             host: Box::new(crate::clap_ffi::build_static_host()),
             host_ctx,
             cached_params: Vec::new(),
@@ -1853,7 +1836,7 @@ mod flush_tests {
             gui_open: false,
             transport: TransportInfo::default(),
             editor: Arc::new(Mutex::new(ClapEditorSide {
-                plugin: &*plugin,
+                plugin,
                 gui: std::ptr::null(),
                 name: String::new(),
                 open: false,
@@ -1866,19 +1849,47 @@ mod flush_tests {
             event_queue: Box::new(EncodedEventQueue {
                 events: Vec::with_capacity(MAX_BLOCK_EVENTS),
             }),
-        };
+        }
+    }
+
+    /// A value set while no block runs (the song stopped) reaches the
+    /// plug-in through `params.flush`, so the plug-in, its window and its
+    /// saved state have it at once instead of after play starts.
+    #[test]
+    fn a_value_set_between_blocks_reaches_the_plug_in_on_flush() {
+        TAKEN.store(0.333f64.to_bits(), Ordering::SeqCst);
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
         instance.set_parameter_value(7, 0.73);
         assert_eq!(instance.get_parameter_value(7), 0.333, "waits for a block");
         instance.flush_parameters();
         assert_eq!(instance.get_parameter_value(7), 0.73);
-        assert!(
-            instance.pending_params.lock().is_empty(),
-            "handed over once"
-        );
+        assert!(!instance.pending_params.has_pending(), "handed over once");
         // Nothing waiting: nothing is sent.
         TAKEN.store(0.5f64.to_bits(), Ordering::SeqCst);
         instance.flush_parameters();
         assert_eq!(instance.get_parameter_value(7), 0.5);
+        drop(instance);
+    }
+
+    /// More changes than one block's event list holds: the rest used to be
+    /// thrown away with the drained queue. Now they wait for the next block.
+    #[test]
+    fn changes_past_a_full_event_list_arrive_in_the_next_block() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let window = Arc::clone(&instance.pending_params);
+        let total = MAX_BLOCK_EVENTS + 10;
+        for id in 0..total as u32 {
+            window.push(id, 0.5);
+        }
+        instance.take_param_events();
+        assert_eq!(instance.event_queue.events.len(), MAX_BLOCK_EVENTS);
+        assert!(instance.pending_params.has_pending());
+        instance.take_param_events();
+        assert_eq!(instance.event_queue.events.len(), 10);
+        assert!(!instance.pending_params.has_pending());
+        instance.event_queue.events.clear();
         drop(instance);
     }
 }

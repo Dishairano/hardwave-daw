@@ -336,7 +336,7 @@ struct Vst3Inner {
     /// about them and the live audio kept rendering from stale values.
     pending_params: crate::types::SharedParamQueue,
     /// Every GUI edit again, drained by the app for automation recording.
-    gui_edit_log: crate::types::SharedParamQueue,
+    gui_edit_log: crate::types::SharedEditLog,
     /// Holds the IComponentHandler ComWrapper alive for the lifetime
     /// of the plugin instance. Dropping the wrapper would invalidate
     /// the pointer the controller still holds.
@@ -377,7 +377,7 @@ struct HardwaveComponentHandler {
     /// The same edits again, for the app rather than the audio thread.
     /// Nothing on the audio path drains this, so a knob moved in the
     /// plug-in's own window can be recorded as automation.
-    log: crate::types::SharedParamQueue,
+    log: crate::types::SharedEditLog,
 }
 
 impl vst3::Class for HardwaveComponentHandler {
@@ -393,22 +393,11 @@ impl IComponentHandlerTrait for HardwaveComponentHandler {
         kResultOk
     }
     unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
-        // Capture the change for the audio thread. We try_lock to keep
-        // GUI events non-blocking; if the audio thread is mid-drain we
-        // skip this notification — the next move re-fires it.
-        // ParamID is already u32 and ParamValue is already f64 — no
-        // cast needed; rename for clarity in the queue tuple below.
-        if let Some(mut q) = self.pending.try_lock() {
-            // De-dupe consecutive edits on the same param so a fast
-            // knob spin doesn't queue a thousand intermediate values.
-            if let Some(last) = q.last_mut() {
-                if last.0 == id {
-                    last.1 = value;
-                    return kResultOk;
-                }
-            }
-            q.push((id, value));
-        }
+        // Capture the change for the audio thread. The queue keeps the
+        // newest value per parameter and never waits, so a fast knob spin
+        // costs one slot and the last move of a gesture always arrives.
+        // (It used to be dropped when the audio thread was mid-drain.)
+        self.pending.push(id, value);
         if let Some(mut log) = self.log.try_lock() {
             if let Some(last) = log.last_mut() {
                 if last.0 == id {
@@ -451,7 +440,7 @@ impl Vst3PluginInstance {
     pub fn load_with_shared_pending(
         descriptor: PluginDescriptor,
         shared: crate::types::SharedParamQueue,
-        shared_log: Option<crate::types::SharedParamQueue>,
+        shared_log: Option<crate::types::SharedEditLog>,
     ) -> Result<Self, String> {
         Self::load_inner(descriptor, Some(shared), shared_log)
     }
@@ -459,7 +448,7 @@ impl Vst3PluginInstance {
     fn load_inner(
         descriptor: PluginDescriptor,
         shared_pending: Option<crate::types::SharedParamQueue>,
-        shared_log: Option<crate::types::SharedParamQueue>,
+        shared_log: Option<crate::types::SharedEditLog>,
     ) -> Result<Self, String> {
         let binary = resolve_vst3_binary(&descriptor.path).ok_or_else(|| {
             format!(
@@ -624,9 +613,8 @@ impl Vst3PluginInstance {
         // the handler's COM pointer to the controller so the plugin
         // notifies us on every performEdit. The wrapper is held in
         // Vst3Inner so its lifetime tracks the plugin instance.
-        let pending_params: crate::types::SharedParamQueue =
-            shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
-        let gui_edit_log: crate::types::SharedParamQueue =
+        let pending_params: crate::types::SharedParamQueue = shared_pending.unwrap_or_default();
+        let gui_edit_log: crate::types::SharedEditLog =
             shared_log.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
         let handler_wrapper = vst3::ComWrapper::new(HardwaveComponentHandler {
             pending: Arc::clone(&pending_params),
@@ -710,15 +698,16 @@ impl Vst3PluginInstance {
 impl Vst3Inner {
     /// Move the waiting parameter changes (the plug-in window's edits and
     /// the host's) into this block's change list, which keeps its room.
+    /// Never waits on the threads that push window edits: the audio thread
+    /// used to lock their queue here every block. Window edits that do not
+    /// fit beside the host's this block stay queued for the next one.
     fn take_param_changes(&mut self) {
         self.in_changes.clear();
-        {
-            let mut q = self.pending_params.lock();
-            for &(id, value) in q.iter() {
-                self.in_changes.add(id as ParamID, 0, value);
-            }
-            q.clear();
-        }
+        let room = MAX_QUEUES.saturating_sub(self.host_param_changes.len());
+        let changes = &self.in_changes;
+        self.pending_params.drain(room, |id, value| {
+            changes.add(id as ParamID, 0, value);
+        });
         for &(id, value) in self.host_param_changes.iter() {
             self.in_changes.add(id as ParamID, 0, value);
         }
@@ -1248,7 +1237,7 @@ impl HostedPlugin for Vst3PluginInstance {
         if !inner.processing || inner.processor.is_none() || inner.in_changes_ptr.is_none() {
             return;
         }
-        if inner.host_param_changes.is_empty() && inner.pending_params.lock().is_empty() {
+        if inner.host_param_changes.is_empty() && !inner.pending_params.has_pending() {
             return;
         }
         inner.take_param_changes();
@@ -1400,7 +1389,7 @@ impl HostedPlugin for Vst3PluginInstance {
         Some(Arc::clone(&self.inner.pending_params))
     }
 
-    fn gui_edit_log(&self) -> Option<crate::types::SharedParamQueue> {
+    fn gui_edit_log(&self) -> Option<crate::types::SharedEditLog> {
         Some(Arc::clone(&self.inner.gui_edit_log))
     }
 
@@ -1487,8 +1476,7 @@ impl HostedPlugin for Vst3PluginInstance {
             // The audio side reads program changes through the same
             // queue a GUI edit uses, so the change is heard on the next
             // block rather than at the next reload.
-            let mut q = self.inner.pending_params.lock();
-            q.push((param, normalised));
+            self.inner.pending_params.push(param, normalised);
         }
         Ok(())
     }
