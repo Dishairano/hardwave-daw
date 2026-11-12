@@ -2055,7 +2055,6 @@ dependencies = [
  "hound",
  "log",
  "parking_lot",
- "parking_lot_core",
  "petgraph",
  "raw-window-handle",
  "rtrb",

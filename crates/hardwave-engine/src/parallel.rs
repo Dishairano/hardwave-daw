@@ -18,17 +18,19 @@
 //! no lock and no condition variable. It then works on the level itself,
 //! and waits for the rest by spinning for a few microseconds and, if the
 //! last node is still running after that, by sleeping until the worker
-//! that finishes it wakes it. Idle workers spin for a moment after each
-//! level, because the next one usually follows within microseconds, and
-//! then sleep on their own thread's wake-up. A level that takes too
-//! little work to be worth a wake-up runs on the audio thread alone.
+//! that finishes it wakes it. Only that sleep takes a lock, and only when
+//! the audio thread is going to wait anyway. Idle workers spin for a
+//! moment after each level, because the next one usually follows within
+//! microseconds, and then sleep on their own thread's wake-up. A level
+//! that takes too little work to be worth a wake-up runs on the audio
+//! thread alone.
 //!
 //! The pool is off until it is switched on, and the render is the same
 //! either way: the tests check that the parallel path and the plain one
 //! produce identical samples.
 
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
@@ -211,8 +213,19 @@ struct Shared {
     /// The current batch's closure: a pointer to the publisher's own
     /// reference to it, on its stack frame. Same rules as `nodes`.
     run: AtomicPtr<()>,
-    /// Nanoseconds the workers spent on the current batch.
+    /// Nanoseconds the workers spent on the current batch: wall time from
+    /// a worker's first claim to the end of its last node, so a worker
+    /// taken off the core mid-node counts the time it was away. That only
+    /// makes a level look heavier and keeps it shared, the safe side.
     busy_ns: AtomicU64,
+    /// Where the audio thread sleeps when the last node of a level is
+    /// still running after its spin. A plain lock and condition variable:
+    /// nothing in them is made per thread or on first use (on Windows and
+    /// Linux), so the audio thread's first sleep allocates nothing, and the
+    /// lock is only taken by a thread that is about to wait or by the one
+    /// worker that wakes it.
+    waiter: Mutex<()>,
+    woken: Condvar,
     /// Set while a thread is handing out a level.
     publishing: AtomicBool,
     /// A node of the current level panicked on a worker.
@@ -235,6 +248,7 @@ struct Counters {
     alone: AtomicU64,
     waits_slept: AtomicU64,
     wakes: AtomicU64,
+    stalls: AtomicU64,
 }
 
 /// What the pool has done since it started, for the diagnostics.
@@ -249,6 +263,12 @@ pub struct PoolStats {
     pub waits_slept: u64,
     /// Sleeping workers woken.
     pub worker_wakes: u64,
+    /// Blocks in which the audio thread was still waiting for a worker
+    /// when the block's time was up: a node claimed by a worker that was
+    /// not given the core. Nothing can be done about it then (the node is
+    /// half run and only that worker can finish it), so it is counted, for
+    /// the diagnostics to tell such a dropout from one of too much work.
+    pub stalls: u64,
 }
 
 /// Places where a test can hold a worker, to stand in for the scheduler
@@ -299,6 +319,8 @@ impl WorkerPool {
             nodes: AtomicPtr::new(std::ptr::null_mut()),
             run: AtomicPtr::new(std::ptr::null_mut()),
             busy_ns: AtomicU64::new(0),
+            waiter: Mutex::new(()),
+            woken: Condvar::new(),
             publishing: AtomicBool::new(false),
             worker_panicked: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
@@ -319,6 +341,16 @@ impl WorkerPool {
                     .expect("audio worker thread"),
             );
         }
+        // Where a platform sets the lock and condition variable up on first
+        // use (macOS), that happens here, not in the audio thread's first
+        // sleep.
+        drop(
+            shared
+                .waiter
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        shared.woken.notify_one();
         // Before anything is published, so a worker passing a wake-up on
         // always finds the others.
         let _ = shared
@@ -340,19 +372,29 @@ impl WorkerPool {
             levels_alone: s.alone.load(Ordering::Relaxed),
             waits_slept: s.waits_slept.load(Ordering::Relaxed),
             worker_wakes: s.wakes.load(Ordering::Relaxed),
+            stalls: s.stalls.load(Ordering::Relaxed),
         }
     }
 
     /// Run `run` for every node of the level, across the pool and this
     /// thread, and return once they are all done.
     pub fn run_level(&self, nodes: &[usize], run: &(dyn Fn(usize) + Sync)) {
-        self.share_level(nodes, run);
+        self.share_level(nodes, run, None);
     }
 
     /// Run every level in turn, each across the pool or, when it has
     /// been taking too little work to be worth waking anybody for, on
     /// this thread alone.
-    pub fn run_levels(&self, levels: &mut Levels, run: &(dyn Fn(usize) + Sync)) {
+    ///
+    /// `deadline` is when the block's time is up. Past it the audio thread
+    /// still waits for a node a worker is running (there is no safe way to
+    /// leave it), but the wait is counted as a stall.
+    pub fn run_levels(
+        &self,
+        levels: &mut Levels,
+        run: &(dyn Fn(usize) + Sync),
+        deadline: Option<Instant>,
+    ) {
         if self.workers.is_empty() {
             for nodes in &levels.levels {
                 run_alone(nodes, run);
@@ -362,11 +404,11 @@ impl WorkerPool {
         let Levels { levels, cost } = levels;
         for (index, nodes) in levels.iter().enumerate() {
             let Some(cost) = cost.get_mut(index) else {
-                self.share_level(nodes, run);
+                self.share_level(nodes, run, deadline);
                 continue;
             };
             if cost.worth_sharing(nodes.len()) {
-                if let Some(work) = self.share_level(nodes, run) {
+                if let Some(work) = self.share_level(nodes, run, deadline) {
                     cost.note(work, true);
                 }
             } else {
@@ -383,7 +425,12 @@ impl WorkerPool {
     /// Share one level out and wait for it. Returns the nanoseconds of
     /// work it took, summed over the threads, or None when it ran here
     /// alone without being shared.
-    fn share_level(&self, nodes: &[usize], run: &(dyn Fn(usize) + Sync)) -> Option<u64> {
+    fn share_level(
+        &self,
+        nodes: &[usize],
+        run: &(dyn Fn(usize) + Sync),
+        deadline: Option<Instant>,
+    ) -> Option<u64> {
         // One node on its own is not worth waking anybody for. A level
         // too big for the claim word's count (16 million nodes, never in
         // practice) runs here as well.
@@ -438,7 +485,7 @@ impl WorkerPool {
 
         // This thread takes work too rather than standing idle.
         let here = take_work(shared, epoch, false);
-        wait_for_rest(shared);
+        wait_for_rest(shared, deadline);
         let work = here.busy_ns + shared.busy_ns.load(Ordering::Relaxed);
 
         let panicked_on_worker = shared.worker_panicked.swap(false, Ordering::Relaxed);
@@ -519,18 +566,15 @@ fn claim(shared: &Shared, epoch: u64) -> Option<usize> {
 /// it was the last and the audio thread is asleep waiting for it.
 fn finish_one(shared: &Shared) {
     if shared.remaining.fetch_sub(1, Ordering::AcqRel) == WAITER | 1 {
-        // SAFETY: the key is the address of a field of `Shared`, which
-        // this thread holds; parking_lot only compares it.
-        unsafe {
-            parking_lot_core::unpark_one(remaining_key(shared), |_| {
-                parking_lot_core::DEFAULT_UNPARK_TOKEN
-            });
-        }
+        // The audio thread set the flag holding the lock and holds it
+        // until it waits, so taking it here means it is waiting (or has
+        // seen the count reach zero itself).
+        let _held = shared
+            .waiter
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        shared.woken.notify_one();
     }
-}
-
-fn remaining_key(shared: &Shared) -> usize {
-    &shared.remaining as *const AtomicU64 as usize
 }
 
 /// What a thread did with a batch.
@@ -606,45 +650,74 @@ fn take_work(shared: &Shared, epoch: u64, on_worker: bool) -> Took {
 
 /// Wait until every node of the batch has finished: spin a little, then
 /// sleep until the worker that finishes the last node wakes this thread.
-fn wait_for_rest(shared: &Shared) {
-    let started = Instant::now();
-    let mut spins = 0u32;
-    loop {
-        if shared.remaining.load(Ordering::Acquire) == 0 {
-            return;
-        }
-        std::hint::spin_loop();
-        spins = spins.wrapping_add(1);
-        if spins.is_multiple_of(64) && started.elapsed() >= shared.spin.publisher {
-            break;
-        }
+fn wait_for_rest(shared: &Shared, deadline: Option<Instant>) {
+    if spin_until(shared.spin.publisher, || {
+        shared.remaining.load(Ordering::Acquire) == 0
+    }) {
+        return;
     }
-    // Say this thread is sleeping on the count. A worker taking the last
-    // node off after this sees the flag and wakes it; one that took it
-    // off before leaves the count at zero, seen here.
+    let mut held = shared
+        .waiter
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Say this thread is sleeping on the count, holding the lock. A worker
+    // taking the last node off after this sees the flag and takes the lock
+    // to wake it, which it only gets once this thread waits; one that took
+    // it off before leaves the count at zero, seen here.
     if shared.remaining.fetch_or(WAITER, Ordering::AcqRel) == 0 {
         shared.remaining.store(0, Ordering::Relaxed);
         return;
     }
     shared.stats.waits_slept.fetch_add(1, Ordering::Relaxed);
-    let key = remaining_key(shared);
+    let mut stalled = false;
     while shared.remaining.load(Ordering::Acquire) != WAITER {
-        // SAFETY: the key is the address of a field of `Shared`; the
-        // closures do not park or unpark. The check runs under
-        // parking_lot's queue lock, which the waking worker takes too, so
-        // its wake-up cannot fall between the check and the sleep.
-        unsafe {
-            parking_lot_core::park(
-                key,
-                || shared.remaining.load(Ordering::Acquire) != WAITER,
-                || {},
-                |_, _| {},
-                parking_lot_core::DEFAULT_PARK_TOKEN,
-                None,
-            );
-        }
+        held = match deadline.filter(|_| !stalled) {
+            Some(at) => {
+                let left = at.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    // Past the block's end with a node still out on a
+                    // worker. It cannot be taken back half run, so the
+                    // wait goes on, untimed, and is counted.
+                    stalled = true;
+                    shared.stats.stalls.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                shared
+                    .woken
+                    .wait_timeout(held, left)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .0
+            }
+            None => shared
+                .woken
+                .wait(held)
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        };
     }
     shared.remaining.store(0, Ordering::Relaxed);
+}
+
+/// Spin until `done` or for `budget`. With no budget, one look and no
+/// spinning at all.
+fn spin_until(budget: Duration, done: impl Fn() -> bool) -> bool {
+    if done() {
+        return true;
+    }
+    if budget.is_zero() {
+        return false;
+    }
+    let started = Instant::now();
+    let mut spins = 0u32;
+    loop {
+        std::hint::spin_loop();
+        if done() {
+            return true;
+        }
+        spins = spins.wrapping_add(1);
+        if spins.is_multiple_of(64) && started.elapsed() >= budget {
+            return false;
+        }
+    }
 }
 
 /// Wake one sleeping worker, if there is one.
@@ -671,29 +744,44 @@ fn wake_one(shared: &Shared) {
     }
 }
 
-/// Spin until a new batch than `seen` is out (true) or the worker's
-/// spin time is up (false).
+/// Spin until a newer batch than `seen` is out or the pool is shutting
+/// down (true), or the worker's spin time is up (false).
 fn spin_for_batch(shared: &Shared, seen: u64) -> bool {
-    let started = Instant::now();
-    let mut spins = 0u32;
-    loop {
-        if shared.claim.load(Ordering::Relaxed) >> INDEX_BITS != seen
+    spin_until(shared.spin.worker, || {
+        shared.claim.load(Ordering::Relaxed) >> INDEX_BITS != seen
             || shared.shutdown.load(Ordering::Relaxed)
-        {
-            return true;
-        }
-        std::hint::spin_loop();
-        spins = spins.wrapping_add(1);
-        if spins.is_multiple_of(64) && started.elapsed() >= shared.spin.worker {
-            return false;
-        }
+    })
+}
+
+/// The worst any worker got when it asked for real-time priority, for
+/// the diagnostics: one worker left at normal priority holds every level
+/// up, so that is the one to show.
+pub static WORKER_PRIORITY: hardwave_audio_io::thread_priority::PriorityStatus =
+    hardwave_audio_io::thread_priority::PriorityStatus::new();
+
+/// Workers start together; they note their outcome one at a time.
+static WORKER_PRIORITY_NOTE: Mutex<()> = Mutex::new(());
+
+/// How bad an outcome is for the diagnostics, higher worse.
+fn priority_rank(outcome: hardwave_audio_io::thread_priority::PriorityOutcome) -> u8 {
+    use hardwave_audio_io::thread_priority::PriorityOutcome as P;
+    match outcome {
+        P::Pending => 0,
+        P::NotApplicable => 1,
+        P::Mmcss | P::AlreadyRegistered => 2,
+        P::TimeCritical(_) => 3,
+        P::Failed(_) => 4,
     }
 }
 
-/// What the last worker to start got when it asked for real-time
-/// priority, for the diagnostics.
-pub static WORKER_PRIORITY: hardwave_audio_io::thread_priority::PriorityStatus =
-    hardwave_audio_io::thread_priority::PriorityStatus::new();
+fn note_worker_priority(outcome: hardwave_audio_io::thread_priority::PriorityOutcome) {
+    let _one_at_a_time = WORKER_PRIORITY_NOTE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if priority_rank(outcome) >= priority_rank(WORKER_PRIORITY.get()) {
+        WORKER_PRIORITY.set(outcome);
+    }
+}
 
 fn worker_loop(shared: Arc<Shared>, index: usize) {
     // These threads run plug-ins and effects like the audio thread does,
@@ -704,7 +792,7 @@ fn worker_loop(shared: Arc<Shared>, index: usize) {
     // They also have to keep up with the audio thread they work for: at
     // normal priority any busy program on the machine delays a level,
     // and the audio thread waits for it. Same class as the audio thread.
-    WORKER_PRIORITY.set(hardwave_audio_io::thread_priority::raise_current_thread());
+    note_worker_priority(hardwave_audio_io::thread_priority::raise_current_thread());
     let bit = 1u64 << index;
     let mut seen = 0u64;
     loop {
@@ -777,7 +865,7 @@ mod tests {
     }
 
     fn all_asleep(pool: &WorkerPool) -> bool {
-        let all = (1u64 << pool.threads()) - 1;
+        let all = u64::MAX >> (64 - pool.threads().clamp(1, 64));
         pool.shared.sleeping.load(Ordering::SeqCst) == all
     }
 
@@ -888,7 +976,7 @@ mod tests {
                 Levels::build(&order, 4, |n| if n == 3 { vec![0, 1, 2] } else { vec![] });
             let seen: Mutex<Vec<usize>> = Mutex::new(Vec::new());
             for _ in 0..3 {
-                pool.run_levels(&mut levels, &|node| seen.lock().unwrap().push(node));
+                pool.run_levels(&mut levels, &|node| seen.lock().unwrap().push(node), None);
             }
             assert_eq!(*seen.lock().unwrap(), [0, 1, 2, 3].repeat(3));
             assert_eq!(pool.stats(), PoolStats::default(), "nothing was handed out");
@@ -945,7 +1033,7 @@ mod tests {
             }
         };
         levels.cost[0].note(1_000, true);
-        pool.run_levels(&mut levels, &run);
+        pool.run_levels(&mut levels, &run, None);
         assert_eq!(
             on_workers.load(Ordering::SeqCst),
             0,
@@ -956,7 +1044,7 @@ mod tests {
         assert!(levels.cost[0].measured && !levels.cost[0].shared);
 
         levels.cost[0].note(10_000_000, false);
-        pool.run_levels(&mut levels, &run);
+        pool.run_levels(&mut levels, &run, None);
         assert_eq!(pool.stats().levels_shared, 1);
         assert_eq!(pool.stats().levels_alone, 1);
         assert!(levels.cost[0].shared, "noted as shared");

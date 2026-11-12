@@ -20,9 +20,6 @@ hardwave-dsp = { path = "../hardwave-dsp" }
 rtrb.workspace = true
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
-# The audio thread sleeps on the pool's unfinished count while the last
-# worker finishes (parallel.rs); the same crate parking_lot is built on.
-parking_lot_core = "0.9"
 atomic_float.workspace = true
 petgraph.workspace = true
 serde.workspace = true

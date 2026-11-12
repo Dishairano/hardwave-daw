@@ -835,6 +835,9 @@ pub struct WorkerThreads {
     pub waits_slept: u64,
     /// Sleeping threads woken for a level.
     pub worker_wakes: u64,
+    /// Blocks where the audio thread was still waiting for a thread when
+    /// the block's time was up (that thread was not given the core).
+    pub stalls: u64,
 }
 
 #[tauri::command]
@@ -851,6 +854,7 @@ pub fn get_worker_threads(state: State<AppState>) -> WorkerThreads {
         levels_alone: stats.levels_alone,
         waits_slept: stats.waits_slept,
         worker_wakes: stats.worker_wakes,
+        stalls: stats.stalls,
     }
 }
 
