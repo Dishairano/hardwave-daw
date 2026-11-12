@@ -140,7 +140,7 @@ fn render_distortion_fx_wav() {
         let mut project = engine.project.lock();
         if let Some(t) = project.track_mut(&track_id) {
             t.inserts.push(PluginSlot {
-                allow_smart_disable: true,
+                allow_smart_disable: None,
                 id: "slot-dist".into(),
                 plugin_id: NativeDistortion::ID.into(),
                 enabled: true,

@@ -1040,7 +1040,7 @@ mod tests {
         lead.pan = -0.5;
         lead.output_bus = Some("bus".into());
         lead.inserts.push(PluginSlot {
-            allow_smart_disable: true,
+            allow_smart_disable: None,
             id: "s1".into(),
             plugin_id: "vst3:serum".into(),
             enabled: true,
@@ -1049,7 +1049,7 @@ mod tests {
             wet: 1.0,
         });
         lead.inserts.push(PluginSlot {
-            allow_smart_disable: true,
+            allow_smart_disable: None,
             id: "s2".into(),
             plugin_id: "hardwave.native.eq".into(),
             enabled: true,

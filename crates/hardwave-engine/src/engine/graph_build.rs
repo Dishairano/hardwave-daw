@@ -91,7 +91,7 @@ pub(crate) struct PreparedGraph {
     pub(crate) parked_chains: HashMap<String, crate::insert_chain::InsertChain>,
     /// Which plug-in slots have a sidechain routed to them, and which allow
     /// smart disable, set on the chains once they are in their new nodes.
-    pub(crate) sidechain_flags: Vec<(crate::graph::NodeId, String, bool, bool)>,
+    pub(crate) sidechain_flags: Vec<(crate::graph::NodeId, String, bool, Option<bool>)>,
     /// Per node: where its chain's delay and size are published.
     pub(crate) boards: Vec<Option<Arc<ChainBoard>>>,
     /// Per node: the chain delay the compensation was worked out with.

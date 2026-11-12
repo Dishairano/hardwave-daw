@@ -114,7 +114,7 @@ fn external_slot(
     let slot_id = uuid::Uuid::new_v4().to_string();
     (
         crate::track::PluginSlot {
-            allow_smart_disable: true,
+            allow_smart_disable: None,
             id: slot_id.clone(),
             plugin_id: candidates.first().cloned().unwrap_or_default(),
             enabled: enabled && carried,
@@ -1540,7 +1540,7 @@ fn effects(
         };
         let slot_id = uuid::Uuid::new_v4().to_string();
         slots.push(crate::track::PluginSlot {
-            allow_smart_disable: true,
+            allow_smart_disable: None,
             id: slot_id.clone(),
             plugin_id: plugin_id.to_string(),
             enabled: slot.enabled && m.effects_enabled,

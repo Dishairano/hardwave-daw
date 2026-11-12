@@ -203,7 +203,7 @@ pub(crate) fn add_test_tracks(
             ));
             for plugin_id in TEST_CHAIN {
                 track.inserts.push(PluginSlot {
-                    allow_smart_disable: true,
+                    allow_smart_disable: None,
                     id: uuid::Uuid::new_v4().to_string(),
                     plugin_id: plugin_id.to_string(),
                     enabled: true,

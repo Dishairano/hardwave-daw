@@ -536,7 +536,7 @@ impl MidiTrackNode {
             || !matches!(self.instrument, Instrument::BuiltinSine)
             || (self.mpe && !self.mpe_zone_sent)
             || !self.utility.at_rest()
-            || !self.chain.asleep_through(&[])
+            || !self.chain.asleep_through(&[], None)
         {
             return false;
         }
@@ -571,7 +571,7 @@ impl MidiTrackNode {
             && self.session_was.is_none()
             && !self.live_held.iter().any(|h| *h)
             && self.session_held.iter().all(|h| *h == 0)
-            && self.chain.asleep_through(&[]);
+            && self.chain.asleep_through(&[], None);
     }
 
     /// Switch which native instrument voices this track. Cheap — flag
@@ -1289,9 +1289,10 @@ impl AudioNode for MidiTrackNode {
         // Smart disable: nothing sounding, held, routed in or starting, and
         // every plug-in asleep. The block is silence, and only what moves
         // with time moves on: the width, the fader ramp, the meters.
+        // Its input and its sidechain both.
         let inputs_silent = inputs
             .iter()
-            .take(2)
+            .take(4)
             .all(|ch| ch.iter().take(ctx.buffer_size as usize).all(|s| *s == 0.0));
         if midi_in.is_empty() && inputs_silent && self.rests(ctx) {
             let n = outputs
@@ -2390,7 +2391,7 @@ impl AudioNode for MidiTrackNode {
         self.chain.set_slot_sidechain(slot_id, active);
     }
 
-    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: bool) {
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) {
         self.chain.set_slot_smart_disable(slot_id, allowed);
     }
 
@@ -4632,6 +4633,47 @@ mod smart_disable_tests {
             ran * BLOCK + skipped.load(Ordering::Relaxed) as usize,
             (blocks + 1) * BLOCK
         );
+    }
+
+    /// An effect on an instrument track keyed from another track wakes when
+    /// the key sounds, though the track has nothing of its own to play.
+    #[test]
+    fn a_loud_sidechain_wakes_a_keyed_effect_on_a_resting_instrument_track() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), Arc::new(AtomicU32::new(0)));
+        ringer.tail = Tail::Samples(0);
+        let mut node =
+            MidiTrackNode::new("t".into(), "T".into(), Arc::new(TrackMeterState::default()));
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "duck".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: true,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            BLOCK as u32,
+        );
+        let silence = vec![0.0_f32; BLOCK];
+        let key = vec![0.5_f32; BLOCK];
+        for k in 0..12u64 {
+            let sc: &[f32] = if k < 4 { &silence } else { &key };
+            let inputs: [&[f32]; 4] = [&silence, &silence, sc, sc];
+            let mut out = vec![vec![0.0; BLOCK]; 4];
+            node.process(
+                &inputs,
+                &mut out,
+                &[],
+                &mut Vec::new(),
+                &ctx(k * BLOCK as u64, true),
+            );
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1 + 8);
     }
 
     /// With smart disable off, or while a note is held, the track is never

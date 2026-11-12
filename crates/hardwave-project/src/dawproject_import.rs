@@ -415,7 +415,7 @@ impl Importer {
             .unwrap_or(true);
         if let Some(t) = self.project.track_mut(track_id) {
             t.inserts.push(PluginSlot {
-                allow_smart_disable: true,
+                allow_smart_disable: None,
                 id: slot_id.clone(),
                 plugin_id: String::new(),
                 enabled,

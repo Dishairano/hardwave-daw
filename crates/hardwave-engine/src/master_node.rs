@@ -217,7 +217,7 @@ impl AudioNode for MasterNode {
         self.chain.set_slot_sidechain(slot_id, active);
     }
 
-    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: bool) {
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) {
         self.chain.set_slot_smart_disable(slot_id, allowed);
     }
 
@@ -250,16 +250,17 @@ impl AudioNode for MasterNode {
         self.chain.set_smart_disable(ctx.smart_disable);
         self.chain.set_transport(transport);
 
-        // Nothing reaches the master and every plug-in on it is asleep
-        // (smart disable): the block is silence, with nothing to run.
+        // Nothing reaches the master, on its input or its sidechain, and
+        // every plug-in on it is asleep (smart disable): the block is
+        // silence, with nothing to run.
         let input_silent = inputs
             .iter()
-            .take(2)
+            .take(4)
             .all(|ch| ch.iter().take(buf_size).all(|s| *s == 0.0));
         if ctx.smart_disable
             && input_silent
             && !self.reference_on.load(Ordering::Relaxed)
-            && self.chain.asleep_through(&[])
+            && self.chain.asleep_through(&[], None)
         {
             outputs[0][..buf_size].fill(0.0);
             outputs[1][..buf_size].fill(0.0);
@@ -335,13 +336,20 @@ impl AudioNode for MasterNode {
         //    take both channels mutably at once.
         if !self.chain.slots.is_empty() {
             let (left, right) = outputs.split_at_mut(1);
+            // The sidechain bus on ports 2/3, for a slot keyed from a
+            // track, as on any track: the master's plug-ins were given none.
+            let sidechain: Option<(&[f32], &[f32])> = if inputs.len() >= 4 {
+                Some((inputs[2], inputs[3]))
+            } else {
+                None
+            };
             self.chain.process(
                 &mut left[0],
                 &mut right[0],
                 buf_size,
                 &mut self.chain_scratch,
                 &[],
-                None,
+                sidechain,
             );
         }
 
@@ -480,5 +488,50 @@ mod smart_disable_tests {
         assert!(!silent);
         assert_eq!(calls.load(Ordering::Relaxed), asleep + 1);
         assert!(out[0][10] > 0.4, "heard on its own sample");
+    }
+
+    /// A plug-in on the master keyed from another track wakes when the key
+    /// sounds, even with nothing on the master's own input.
+    #[test]
+    fn a_loud_sidechain_wakes_a_keyed_master_plugin() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), Arc::new(AtomicU32::new(0)));
+        ringer.tail = Tail::Samples(0);
+        let mut node = MasterNode::new(Arc::new(AtomicF64::new(0.0)), None);
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "duck".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: true,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let silence = vec![0.0_f32; 256];
+        let key = vec![0.5_f32; 256];
+        for k in 0..12u64 {
+            let ctx = ProcessContext {
+                smart_disable: true,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: k * 256,
+                playing: true,
+            };
+            let sc: &[f32] = if k < 4 { &silence } else { &key };
+            let inputs: [&[f32]; 4] = [&silence, &silence, sc, sc];
+            let mut out = vec![vec![0.0; 256]; 2];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+        }
+        // Asleep after its first block, then called on every keyed block.
+        assert_eq!(calls.load(Ordering::Relaxed), 1 + 8);
     }
 }

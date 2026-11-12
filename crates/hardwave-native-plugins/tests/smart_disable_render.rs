@@ -15,7 +15,7 @@ const BAR: u64 = 4 * 960;
 fn plug_in(track: &mut Track, plugin_id: &str) {
     let n = track.inserts.len();
     track.inserts.push(PluginSlot {
-        allow_smart_disable: true,
+        allow_smart_disable: None,
         id: format!("{}-{n}", track.id),
         plugin_id: plugin_id.into(),
         enabled: true,

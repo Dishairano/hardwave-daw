@@ -2447,7 +2447,7 @@ mod isolate_tests {
 
     fn slot(id: &str) -> PluginSlot {
         PluginSlot {
-            allow_smart_disable: true,
+            allow_smart_disable: None,
             id: id.into(),
             plugin_id: id.into(),
             enabled: true,

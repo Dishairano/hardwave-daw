@@ -942,7 +942,7 @@ pub(crate) fn add_plugin_without_undo_step(
             .ok_or_else(|| format!("Track not found: {}", track_id))?;
         let slot_id = uuid::Uuid::new_v4().to_string();
         track.inserts.push(hardwave_project::track::PluginSlot {
-            allow_smart_disable: true,
+            allow_smart_disable: None,
             id: slot_id.clone(),
             plugin_id: descriptor.id.clone(),
             enabled: true,
@@ -1128,14 +1128,17 @@ fn set_insert_smart_disable_body(
             .iter_mut()
             .find(|s| s.id == slot_id)
             .ok_or_else(|| format!("Insert not found: {}", slot_id))?;
-        slot.allow_smart_disable = allowed;
+        slot.allow_smart_disable = Some(allowed);
     }
     let cmd = InsertCommand::SetSmartDisable {
         track_id: track_id.clone(),
         slot_id: slot_id.clone(),
-        allowed,
+        allowed: Some(allowed),
     };
-    let _ = state.engine.lock().try_send_insert_command(cmd);
+    // The song holds the choice now; a full queue rebuilds the graph,
+    // which sets it on the live chain from the song, so the two never
+    // disagree.
+    state.engine.lock().send_insert_command_or_resync(cmd);
     Ok(())
 }
 
@@ -2648,7 +2651,7 @@ mod reopened_song_tests {
                 .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
                 .unwrap();
             master.inserts.push(hardwave_project::track::PluginSlot {
-                allow_smart_disable: true,
+                allow_smart_disable: None,
                 id: "shape".into(),
                 plugin_id: hardwave_native_plugins::gain::NativeGain::ID.into(),
                 enabled: true,

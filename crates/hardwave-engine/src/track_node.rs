@@ -1314,7 +1314,7 @@ impl AudioNode for TrackNode {
         self.chain.set_slot_sidechain(slot_id, active);
     }
 
-    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: bool) {
+    fn set_slot_smart_disable(&mut self, slot_id: &str, allowed: Option<bool>) {
         self.chain.set_slot_smart_disable(slot_id, allowed);
     }
 
@@ -1451,11 +1451,12 @@ impl AudioNode for TrackNode {
             }
         }
 
-        // Whether anything reaches this track from others this block. A bus
-        // fed by tracks that are all silent hears nothing.
+        // Whether anything reaches this track from others this block, on its
+        // input or its sidechain. A bus fed by tracks that are all silent
+        // hears nothing.
         let input_heard = inputs
             .iter()
-            .take(2)
+            .take(4)
             .any(|ch| ch.iter().take(buf_size).any(|s| *s != 0.0));
 
         // Mix in send inputs arriving at this track (return routing). Sends
@@ -1636,7 +1637,7 @@ impl AudioNode for TrackNode {
         if !input_heard
             && !session_playing
             && !clip_heard
-            && self.chain.asleep_through(midi_in)
+            && self.chain.asleep_through(midi_in, None)
             && (self.frozen || self.utility.at_rest())
         {
             self.chain.pass_asleep(transport, buf_size);
@@ -2682,5 +2683,54 @@ mod smart_disable_tests {
             run(k, false);
         }
         assert_eq!(calls.load(Ordering::Relaxed), asleep + 10);
+    }
+
+    /// A sleeping plug-in keyed from another track wakes when the key
+    /// sounds, though nothing plays on the track itself.
+    #[test]
+    fn a_loud_sidechain_wakes_a_keyed_plugin_on_a_quiet_track() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let mut ringer = Ringer::new(calls.clone(), Arc::new(AtomicU32::new(0)));
+        ringer.tail = Tail::Samples(0);
+        let mut node = TrackNode::new(
+            "t".into(),
+            "T".into(),
+            AudioPool::new(),
+            Arc::new(TrackMeterState::default()),
+        );
+        node.push_offline_slot(
+            crate::insert_chain::LiveSlot {
+                sleep: Default::default(),
+                param_ranges: Vec::new(),
+                levels: Default::default(),
+                slot_id: "duck".into(),
+                plugin: Box::new(ringer),
+                enabled: true,
+                wet: 1.0,
+                sidechain_active: true,
+                gain_reduction_db: crate::insert_chain::LiveSlot::new_gain_reduction(),
+            },
+            48_000.0,
+            256,
+        );
+        let silence = vec![0.0_f32; 256];
+        let key = vec![0.5_f32; 256];
+        for k in 0..12u64 {
+            let ctx = ProcessContext {
+                smart_disable: true,
+                sample_rate: 48_000.0,
+                position_ticks: 0,
+                buffer_size: 256,
+                tempo: 120.0,
+                time_sig: (4, 4),
+                position_samples: k * 256,
+                playing: true,
+            };
+            let sc: &[f32] = if k < 4 { &silence } else { &key };
+            let inputs: [&[f32]; 4] = [&silence, &silence, sc, sc];
+            let mut out = vec![vec![0.0; 256]; 4];
+            node.process(&inputs, &mut out, &[], &mut Vec::new(), &ctx);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1 + 8);
     }
 }

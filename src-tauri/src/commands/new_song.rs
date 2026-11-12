@@ -146,7 +146,7 @@ pub(crate) fn add_new_song_channels_to(project: &mut Project, drums: &Path) -> V
             if sampler_state.is_some() {
                 let slot = uuid::Uuid::new_v4().to_string();
                 track.inserts.push(PluginSlot {
-                    allow_smart_disable: true,
+                    allow_smart_disable: None,
                     id: slot.clone(),
                     plugin_id: NativeSampler::ID.to_string(),
                     enabled: true,

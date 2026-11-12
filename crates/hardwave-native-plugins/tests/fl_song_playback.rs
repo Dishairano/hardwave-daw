@@ -118,7 +118,7 @@ fn open_song() -> Option<(DawEngine, hardwave_project::Project)> {
             track.inserts.insert(
                 0,
                 PluginSlot {
-                    allow_smart_disable: true,
+                    allow_smart_disable: None,
                     id: slot_id.clone(),
                     plugin_id: NativeSampler::ID.to_string(),
                     enabled: true,

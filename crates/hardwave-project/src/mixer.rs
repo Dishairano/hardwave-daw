@@ -186,7 +186,7 @@ mod tests {
     fn feeds_follows_outputs_sends_and_sidechain_keys() {
         let mut vox = track("vox", Some("bus"), false);
         vox.inserts.push(crate::track::PluginSlot {
-            allow_smart_disable: true,
+            allow_smart_disable: None,
             id: "comp".into(),
             plugin_id: "compressor".into(),
             enabled: true,
