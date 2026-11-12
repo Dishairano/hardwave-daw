@@ -3,10 +3,11 @@
 //! `hardwave_dsp::modulation::ModulatedDelay` for the per-channel core.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -263,6 +264,29 @@ impl HostedPlugin for NativeChorus {
         }
         self.refresh();
         Ok(())
+    }
+
+    /// The longest the swept delay reaches, round the feedback loop until it
+    /// has died away.
+    fn tail(&self) -> Tail {
+        let longest = (0.020 * self.sample_rate + self.depth_samples + 2.0)
+            .min(MAX_DELAY_SAMPLES as f32) as f64;
+        let secs = tail::feedback_secs(
+            longest / self.sample_rate as f64,
+            self.feedback.clamp(0.0, 0.95) as f64,
+        );
+        tail::from_secs(secs, self.sample_rate)
+    }
+
+    /// The LFOs run on through silence. The delay line moves its
+    /// sweep and write position on as running silence through it would,
+    /// without reading or writing the line.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        self.delay_l.skip(num_samples);
+        self.delay_r.skip(num_samples);
     }
 
     fn latency_samples(&self) -> u32 {

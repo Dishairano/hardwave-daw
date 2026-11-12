@@ -3,10 +3,11 @@
 //! external VST3 / CLAP plugin.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -413,6 +414,22 @@ impl HostedPlugin for NativeEq {
         }
         self.refresh_coeffs();
         Ok(())
+    }
+
+    /// The slowest-ringing band that is on: a low, sharp or strongly boosted
+    /// band rings longest. A boost or cut sharpens the filter's poles by
+    /// up to the square root of its gain, which is counted in.
+    fn tail(&self) -> Tail {
+        let mut secs = 0.0_f64;
+        for band in self.bands.iter().filter(|b| b.enabled) {
+            let a = 10f64.powf(band.gain_db.abs() / 40.0);
+            secs = secs.max(tail::filter_ring_secs(
+                band.frequency_hz,
+                band.q * a,
+                band.shape.stages(),
+            ));
+        }
+        tail::from_secs(secs, self.sample_rate as f32)
     }
 
     fn latency_samples(&self) -> u32 {

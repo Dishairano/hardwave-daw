@@ -52,6 +52,7 @@ pub mod wavetable;
 
 pub mod sampler;
 pub mod stutter;
+mod tail;
 pub mod vocoder;
 pub mod voices;
 
@@ -318,6 +319,23 @@ mod value_text_tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    /// Every built-in says how long it rings on, so the host can stop
+    /// calling it once its input and its output have gone silent. A fresh
+    /// one has nothing sounding, so no instrument has a voice going.
+    #[test]
+    fn every_built_in_says_its_tail() {
+        use hardwave_plugin_host::types::{PluginCategory, Tail};
+        for mut p in all() {
+            p.activate(48_000.0, 512).unwrap();
+            let name = p.descriptor().name.clone();
+            let tail = p.tail();
+            assert_ne!(tail, Tail::Unknown, "{name}");
+            if p.descriptor().category == PluginCategory::Instrument {
+                assert_eq!(tail, Tail::Samples(0), "{name}");
             }
         }
     }

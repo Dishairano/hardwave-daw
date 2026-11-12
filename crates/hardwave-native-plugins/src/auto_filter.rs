@@ -3,11 +3,12 @@
 //! effects. Distinct from NativeFilter (static cutoff).
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::dynamics::{DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -343,6 +344,28 @@ impl HostedPlugin for NativeAutoFilter {
         self.env_r
             .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         Ok(())
+    }
+
+    /// The filter rings out at its resting cutoff (the lowest the envelope
+    /// leaves it at), and the envelope has to fall back to rest so the next
+    /// sound opens the filter the way it would have.
+    fn tail(&self) -> Tail {
+        let ring = tail::filter_ring_secs(
+            self.base_hz.clamp(20.0, 18_000.0) as f64,
+            self.resonance as f64,
+            1,
+        );
+        let release = tail::release_secs(self.release_ms as f64 / 1000.0);
+        tail::from_secs(ring.max(release), self.sample_rate)
+    }
+
+    /// The filter is retuned every 16 samples counted from the start, not
+    /// from the sound: keep counting through silence.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        self.block_counter = self.block_counter.wrapping_add(num_samples as u32);
     }
 
     fn latency_samples(&self) -> u32 {
