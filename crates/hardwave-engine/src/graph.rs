@@ -944,17 +944,22 @@ impl AudioGraph {
         midi_in: &[hardwave_midi::MidiEvent],
         cpu_turn: usize,
     ) {
-        let Some(pool) = self.pool.clone() else {
+        let Some(pool) = self.pool.as_deref() else {
             return;
         };
+        // When the block's time is up, for the pool to count a wait past it.
+        let deadline = (ctx.sample_rate > 0.0).then(|| {
+            std::time::Instant::now()
+                + std::time::Duration::from_secs_f64(ctx.buffer_size as f64 / ctx.sample_rate)
+        });
         let shared = NodeWork {
-            nodes: self.nodes.as_mut_ptr(),
+            nodes: Slots(self.nodes.as_mut_ptr()),
             node_count: self.nodes.len(),
-            scratch: self.scratch.as_mut_ptr(),
-            buffers: self.buffers.as_mut_ptr(),
-            edge_delays: self.edge_delays.as_mut_ptr(),
+            scratch: Slots(self.scratch.as_mut_ptr()),
+            buffers: Slots(self.buffers.as_mut_ptr()),
+            edge_delays: Slots(self.edge_delays.as_mut_ptr()),
             edge_delay_count: self.edge_delays.len(),
-            silent: self.silent.as_mut_ptr(),
+            silent: Slots(self.silent.as_mut_ptr()),
             edges: &self.edges,
             incoming: &self.incoming,
             accepts_live_midi: &self.accepts_live_midi,
@@ -968,9 +973,9 @@ impl AudioGraph {
             // only writes its own slots.
             unsafe { shared.process_node(node_id) };
         };
-        for level in &self.levels.levels {
-            pool.run_level(level, &run);
-        }
+        // A level with too little work in it runs here alone rather than
+        // pay for waking a worker.
+        pool.run_levels(&mut self.levels, &run, deadline);
     }
 
     /// Get the output buffer of a specific node (e.g., the master node).
@@ -1058,14 +1063,20 @@ impl AudioGraph {
 /// the level grouping in [`crate::parallel::Levels`]: two nodes in a
 /// level have no edge between them, so no two threads ever touch the
 /// same slot.
+///
+/// No hand-written `Send` or `Sync`: the arrays go through [`Slots`],
+/// which asks for its element to be `Send`, and the rest are shared
+/// references, which the compiler checks are `Sync`. A field added later
+/// that may not cross threads stops the build instead of slipping
+/// through.
 struct NodeWork<'a> {
-    nodes: *mut Box<dyn AudioNode>,
+    nodes: Slots<Box<dyn AudioNode>>,
     node_count: usize,
-    scratch: *mut NodeScratch,
-    buffers: *mut Vec<Vec<f32>>,
-    edge_delays: *mut Option<EdgeDelayLine>,
+    scratch: Slots<NodeScratch>,
+    buffers: Slots<Vec<Vec<f32>>>,
+    edge_delays: Slots<Option<EdgeDelayLine>>,
     edge_delay_count: usize,
-    silent: *mut bool,
+    silent: Slots<bool>,
     edges: &'a [Edge],
     incoming: &'a [Vec<usize>],
     accepts_live_midi: &'a [bool],
@@ -1076,10 +1087,47 @@ struct NodeWork<'a> {
     cpu_turn: usize,
 }
 
-// SAFETY: the nodes handed to different threads are distinct, and the
-// batch does not outlive the block that published it.
-unsafe impl Sync for NodeWork<'_> {}
-unsafe impl Send for NodeWork<'_> {}
+/// The start of one of the graph's per-node (or per-edge) arrays, for the
+/// threads of one block.
+struct Slots<T>(*mut T);
+
+impl<T> Slots<T> {
+    /// The element at `index`.
+    ///
+    /// # Safety
+    ///
+    /// `index` is in bounds, and no other thread holds the same element
+    /// mutably while this one is used: an element belongs to the node a
+    /// thread is running, or is read only after the level that writes it.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn at(&self, index: usize) -> &mut T {
+        unsafe { &mut *self.0.add(index) }
+    }
+
+    /// The element at `index`, to read. Several threads may read the same
+    /// one (a source feeding two nodes of a level).
+    ///
+    /// # Safety
+    ///
+    /// `index` is in bounds and nothing writes the element while this is
+    /// used: it belongs to a node of a finished level.
+    unsafe fn read(&self, index: usize) -> &T {
+        unsafe { &*self.0.add(index) }
+    }
+}
+
+// SAFETY: each thread reaches only the elements of the nodes it runs (see
+// `NodeWork`), so what crosses threads is access to distinct elements:
+// sound exactly when the element type may be sent to another thread.
+unsafe impl<T: Send> Send for Slots<T> {}
+unsafe impl<T: Send> Sync for Slots<T> {}
+
+// The closure the pool runs on its workers borrows this, so it has to be
+// `Sync`; checked here as well so the reason is plain when it stops being.
+const _: () = {
+    const fn shared_across_threads<T: Sync>() {}
+    shared_across_threads::<NodeWork<'static>>();
+};
 
 impl NodeWork<'_> {
     /// Gather one node's inputs, run it, and publish its output. The
@@ -1098,12 +1146,11 @@ impl NodeWork<'_> {
         // made once the graph is finished, and a graph used before that
         // has none.
         let delay_of = |edge_idx: usize| -> Option<&mut Option<EdgeDelayLine>> {
-            (edge_idx < self.edge_delay_count)
-                .then(|| unsafe { &mut *self.edge_delays.add(edge_idx) })
+            (edge_idx < self.edge_delay_count).then(|| unsafe { self.edge_delays.at(edge_idx) })
         };
         // Same skip as the one-thread loop: an idle node with a silent
         // output and no delay line feeding it has nothing to do.
-        let node = unsafe { &mut *self.nodes.add(node_id) };
+        let node = unsafe { self.nodes.at(node_id) };
         let hears_keys = !self.midi_in.is_empty()
             && self
                 .accepts_live_midi
@@ -1114,7 +1161,7 @@ impl NodeWork<'_> {
         // are this block's.
         let keyed = self.incoming[node_id].iter().any(|&e| {
             let edge = &self.edges[e];
-            edge.dest_port >= 2 && !unsafe { *self.silent.add(edge.source) }
+            edge.dest_port >= 2 && !unsafe { *self.silent.read(edge.source) }
         });
         let idle = !hears_keys
             && !keyed
@@ -1122,11 +1169,11 @@ impl NodeWork<'_> {
             && self.incoming[node_id]
                 .iter()
                 .all(|&e| delay_of(e).is_none_or(|d| d.is_none()));
-        let silent = unsafe { &mut *self.silent.add(node_id) };
+        let silent = unsafe { self.silent.at(node_id) };
         if idle && *silent {
             return;
         }
-        let scratch = unsafe { &mut *self.scratch.add(node_id) };
+        let scratch = unsafe { self.scratch.at(node_id) };
         // Only the block's frames, as in the one-thread loop.
         let frames = block_frames(self.ctx, self.buffer_size);
         for ch in &mut scratch.ch_bufs {
@@ -1142,12 +1189,12 @@ impl NodeWork<'_> {
             let delay = delay_of(edge_idx).and_then(|d| d.as_mut());
             // A silent source adds nothing, unless a delay line has to
             // take the silence in. Its flag was set in an earlier level.
-            if unsafe { *self.silent.add(e.source) } && delay.is_none() {
+            if unsafe { *self.silent.read(e.source) } && delay.is_none() {
                 continue;
             }
             // The source is a node of an earlier level, which finished
             // before this level started.
-            let source_bufs = unsafe { &*self.buffers.add(e.source) };
+            let source_bufs = unsafe { self.buffers.read(e.source) };
             let Some(src) = source_bufs.get(e.source_port) else {
                 continue;
             };
@@ -1198,7 +1245,7 @@ impl NodeWork<'_> {
             node.report_cpu(started.elapsed().as_nanos() as u64);
         }
 
-        let buffers = unsafe { &mut *self.buffers.add(node_id) };
+        let buffers = unsafe { self.buffers.at(node_id) };
         std::mem::swap(&mut scratch.outputs, buffers);
         *silent = idle || node.output_is_silent();
     }

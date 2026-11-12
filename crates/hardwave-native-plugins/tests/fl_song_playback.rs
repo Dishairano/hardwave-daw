@@ -13,7 +13,11 @@
 //! (raw little-endian f32 stereo) and `HW_PLAY_COMPARE=<file>` compares
 //! the sound with one written before, sample for sample.
 //! `HW_SMART_DISABLE=0` plays with smart disable off (it is on by default),
-//! so its cost and its sound can be set against smart disable on. A second test
+//! so its cost and its sound can be set against smart disable on.
+//! `HW_WORKERS` sets the helper threads, `HW_BUSY_THREADS` runs that many
+//! busy loops beside, standing in for other programs, and `HW_PACED=1`
+//! starts each block when a sound card would rather than at once. A
+//! second test
 //! plays the song and counts every allocation and free made on the thread
 //! playing it, after the first blocks (which build the graph). The song is
 //! never part of the repository.
@@ -219,6 +223,30 @@ fn an_fl_songs_playback_block_by_block() {
     let smart = std::env::var("HW_SMART_DISABLE").map_or(true, |v| v != "0");
     engine.audio_prefs().set_smart_disable(smart);
     eprintln!("smart disable {}", if smart { "on" } else { "off" });
+    // Helper threads beside the playing thread, as the audio settings set
+    // them, and busy threads standing in for other programs on the machine.
+    let workers = env_num("HW_WORKERS", 0.0) as usize;
+    if workers > 0 {
+        engine.set_worker_threads(workers);
+    }
+    let busy = env_num("HW_BUSY_THREADS", 0.0) as usize;
+    let stop_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let busy_threads: Vec<_> = (0..busy)
+        .map(|_| {
+            let stop = std::sync::Arc::clone(&stop_busy);
+            std::thread::spawn(move || {
+                let mut x = 1u64;
+                while !stop.load(Ordering::Relaxed) {
+                    x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    std::hint::black_box(x);
+                }
+            })
+        })
+        .collect();
+    eprintln!("{workers} helper threads, {busy} busy threads beside");
+    if workers > 0 {
+        eprintln!("(with helper threads the nodes are not timed one by one)");
+    }
 
     // The sound is written or compared as it is played, a block at a time.
     use std::io::{Read, Write};
@@ -233,8 +261,22 @@ fn an_fl_songs_playback_block_by_block() {
     let started = std::time::Instant::now();
     let factory = hardwave_native_plugins::create_native;
     let factory: OfflineInsertFactory<'_> = &factory;
+    // Paced, each block starts when a sound card would ask for it, so the
+    // helper threads go idle between blocks as they do in playback.
+    let paced = env_num("HW_PACED", 0.0) > 0.0;
+    let block_time = Duration::from_secs_f64(device_frames as f64 / rate as f64);
+    let mut next_block = std::time::Instant::now();
     let profile =
         engine.profile_live_blocks(rate, samples, device_frames, Some(factory), |block| {
+            if paced {
+                next_block += block_time;
+                let now = std::time::Instant::now();
+                if next_block > now {
+                    std::thread::sleep(next_block - now);
+                } else {
+                    next_block = now;
+                }
+            }
             if let Some(out) = dump.as_mut() {
                 for s in block {
                     out.write_all(&s.to_le_bytes()).unwrap();
@@ -261,6 +303,13 @@ fn an_fl_songs_playback_block_by_block() {
         started.elapsed().as_secs_f64(),
         profile.swaps
     );
+    stop_busy.store(true, Ordering::Relaxed);
+    for t in busy_threads {
+        t.join().unwrap();
+    }
+    if let Some(stats) = engine.worker_pool_stats() {
+        eprintln!("helper threads: {stats:?}");
+    }
 
     let budget = Duration::from_secs_f64(device_frames as f64 / rate as f64);
     let blocks: Vec<u64> = profile.blocks.iter().map(|d| d.as_nanos() as u64).collect();

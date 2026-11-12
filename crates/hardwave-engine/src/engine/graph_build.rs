@@ -160,6 +160,9 @@ pub(crate) struct GraphBuilder {
     pub(crate) buffer_size: usize,
     /// One board per track (and the master), kept from build to build.
     pub(crate) boards: HashMap<String, Arc<ChainBoard>>,
+    /// Set on the builder's own thread, which may wait for a lock. False
+    /// where the build runs on the audio thread (`BuildMode::Inline`).
+    pub(crate) may_wait: bool,
 }
 
 impl GraphBuilder {
@@ -204,10 +207,20 @@ impl GraphBuilder {
         BUILDS_HERE.with(|n| n.set(n.get() + 1));
         let mut p = Box::new(PreparedGraph::new(seq, self.buffer_size));
         // Whether the work is shared across cores is a setting, and a
-        // rebuild is where it is picked up. A busy lock keeps the pool the
-        // graph had, and the next rebuild gets it.
-        if let Some(pool) = self.worker_pool.try_lock() {
-            p.graph.set_worker_pool(pool.clone());
+        // rebuild is where it is picked up. The lock is only ever held for
+        // a moment (the setting changing, the window reading the count), so
+        // the builder thread waits for it: trying it, a rebuild that came
+        // just as the window read the count kept the old pool, and with no
+        // edit after it the new setting was never picked up. On the audio
+        // thread it is only tried; a busy lock keeps the pool the graph had
+        // and asks for another rebuild (`install_graph`).
+        let pool = if self.may_wait {
+            Some(self.worker_pool.lock().clone())
+        } else {
+            self.worker_pool.try_lock().map(|pool| pool.clone())
+        };
+        if let Some(pool) = pool {
+            p.graph.set_worker_pool(pool);
             p.pool_read = true;
         }
         // Boards for tracks that are gone go too.
@@ -1620,7 +1633,8 @@ impl Drop for BuilderLink {
 impl GraphBuilder {
     /// Start the builder thread with this builder. Graphs it finishes wait
     /// in the link for the audio thread.
-    pub(crate) fn spawn(self: Box<Self>, first_seq: u64) -> std::io::Result<BuilderLink> {
+    pub(crate) fn spawn(mut self: Box<Self>, first_seq: u64) -> std::io::Result<BuilderLink> {
+        self.may_wait = true;
         let requests = Arc::new(BuildRequests::default());
         requests.seq.store(first_seq, Ordering::Release);
         let (ready_tx, ready_rx) = rtrb::RingBuffer::<Box<PreparedGraph>>::new(1);

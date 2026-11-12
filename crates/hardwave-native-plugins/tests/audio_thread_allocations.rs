@@ -217,9 +217,32 @@ fn song() -> DawEngine {
     engine
 }
 
+/// The tests count into the same totals: one at a time.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn playing_a_song_allocates_nothing_on_the_audio_thread() {
+    play_the_song_and_count(0);
+}
+
+/// The same with helper threads sharing the work: the audio thread hands
+/// levels out, wakes helpers and sleeps for the last node without an
+/// allocation. (The helpers run the same nodes the one-thread path runs,
+/// which the test above watches; the pool's own work on every thread is
+/// watched in hardwave-engine's pool_allocations test.)
+#[test]
+fn playing_a_song_with_helper_threads_allocates_nothing_on_the_audio_thread() {
+    play_the_song_and_count(2);
+}
+
+fn play_the_song_and_count(workers: usize) {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    LARGEST.store(0, Ordering::Relaxed);
     let engine = song();
+    if workers > 0 {
+        engine.set_worker_threads(workers);
+    }
     let factory = |id: &str| -> Option<Box<dyn HostedPlugin>> {
         match id {
             NativeEq::ID => Some(Box::new(NativeEq::new())),
@@ -322,6 +345,7 @@ fn playing_a_song_allocates_nothing_on_the_audio_thread() {
 /// when it is used, was found only by ear.
 #[test]
 fn no_built_in_plug_in_allocates_on_the_audio_thread() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let mut failures = Vec::new();
     for descriptor in hardwave_native_plugins::native_plugin_descriptors() {
         let started = std::time::Instant::now();
