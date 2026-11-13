@@ -1,26 +1,44 @@
-//! The update the DAW installs is ours, and it unpacks to exactly what we signed.
+//! The updates the DAW's two feeds offer are ours, and unpack to exactly what we signed.
 //!
-//! On Windows the updater downloads the `.nsis.zip` named in `latest.json`
-//! when the running build does not know it was installed with NSIS, checks
-//! it against the minisign key in tauri.conf.json, and unpacks it with
-//! `zip::ZipArchive::extract` (tauri-plugin-updater 2.14.1, zip 9). This
-//! takes the latest real release through the same steps: the updater's own
-//! signature check (including the version the signature was made for), the
-//! same extract call on the same zip crate, and then the installer that came
-//! out of the archive against the signature published for the bare
-//! installer, which only passes if the unpacked file is byte for byte the
-//! one we signed.
+//! The updater signing key changed with v0.266.47 (incident 2026-11-12), so there are two
+//! feeds (scripts/updater_feeds.py writes and checks them for every release):
+//! - `latest.json`, read by every DAW up to v0.266.46. Those trust only the old key, so this
+//!   feed always offers an update signed with it: the newest release up to v0.266.47, and
+//!   v0.266.47 itself from then on.
+//! - `latest-v2.json`, the endpoint in tauri.conf.json, read from v0.266.47 on. Its update is
+//!   signed with the key in tauri.conf.json, apart from v0.266.47's own entry, which was
+//!   published before the signing secret switched and carries the old key (no copy reading
+//!   this feed installs it: they already run v0.266.47 or later).
 //!
-//! It downloads about 15 MB, so it only runs when asked:
+//! For each feed this takes the update it offers through the same steps the updater does.
+//! On Windows the updater downloads the `.nsis.zip` named in the feed when the running build
+//! does not know it was installed with NSIS, checks it against its minisign key, and unpacks
+//! it with `zip::ZipArchive::extract` (tauri-plugin-updater 2.14.1, zip 9). This does the
+//! same signature check (including the version the signature was made for), the same
+//! extract call on the same zip crate, and then checks the installer that came out of the
+//! archive against the signature published for the bare installer, which only passes if the
+//! unpacked file is byte for byte the one we signed.
+//!
+//! It downloads about 15 MB per feed, so it only runs when asked:
 //! `hw-daw-cargo test -j 1 -p hardwave-daw --lib update_archive -- --ignored`.
-//! With `HW_UPDATE_FIXTURES` set to a folder holding `latest.json` and the
-//! files it names, it reads them from there instead.
+//! With `HW_UPDATE_FIXTURES` set to a folder holding the feeds and the files they name, it
+//! reads them from there instead.
 
 use std::io::Cursor;
 use std::path::PathBuf;
 
 use tauri::test::{mock_builder, MockRuntime};
 use tauri_plugin_updater::{Update, UpdaterExt};
+
+/// The feed every DAW up to v0.266.46 reads.
+const OLD_FEED: &str =
+    "https://github.com/Dishairano/hardwave-daw/releases/latest/download/latest.json";
+
+/// The key every DAW up to v0.266.46 trusts, and the one v0.266.47 is signed with.
+const OLD_PUBKEY: &str = include_str!("../updater-key-until-v0.266.47.pub");
+
+/// The last release signed with the old key, and the first to read `latest-v2.json`.
+const BRIDGE: (u64, u64, u64) = (0, 266, 47);
 
 fn app() -> tauri::App<MockRuntime> {
     mock_builder()
@@ -53,66 +71,126 @@ async fn fetch(url: &str) -> Vec<u8> {
         .to_vec()
 }
 
-/// The update `latest.json` announces for one platform entry, as the
-/// updater sees it. Restoring a manifest makes the updater require the
-/// signed version to match the announced one.
-fn update_for(app: &tauri::App<MockRuntime>, manifest: &serde_json::Value, target: &str) -> Update {
-    app.updater_builder()
+async fn feed(url: &str) -> serde_json::Value {
+    serde_json::from_slice(&fetch(url).await).unwrap_or_else(|e| panic!("{url} is JSON: {e}"))
+}
+
+/// The version a feed offers, as (major, minor, patch).
+fn offered(feed: &serde_json::Value) -> (u64, u64, u64) {
+    let version = feed["version"].as_str().expect("the feed names a version");
+    let mut parts = version.trim_start_matches('v').split(['.', '-']).map(|p| {
+        p.parse::<u64>()
+            .unwrap_or_else(|_| panic!("version {version}"))
+    });
+    let mut next = || parts.next().unwrap_or_else(|| panic!("version {version}"));
+    (next(), next(), next())
+}
+
+/// The update a feed announces for one platform entry, as an updater trusting `pubkey`
+/// (the key in tauri.conf.json when None) sees it. Restoring a manifest makes the updater
+/// require the signed version to match the announced one.
+fn update_for(
+    app: &tauri::App<MockRuntime>,
+    manifest: &serde_json::Value,
+    target: &str,
+    pubkey: Option<&str>,
+) -> Update {
+    let mut builder = app
+        .updater_builder()
         .target(target)
-        .version_comparator(|_, _| true)
+        .version_comparator(|_, _| true);
+    if let Some(pubkey) = pubkey {
+        builder = builder.pubkey(pubkey.trim());
+    }
+    builder
         .build()
         .expect("the updater builds from tauri.conf.json")
         .restore_update(manifest.clone())
-        .expect("latest.json reads")
-        .unwrap_or_else(|| panic!("latest.json has no {target} entry"))
+        .expect("the feed reads")
+        .unwrap_or_else(|| panic!("the feed has no {target} entry"))
+}
+
+/// The feed's Windows update is signed with `pubkey` and unpacks to the installer we signed.
+async fn check_update(
+    app: &tauri::App<MockRuntime>,
+    manifest: &serde_json::Value,
+    pubkey: Option<&str>,
+) {
+    let zipped = update_for(app, manifest, "windows-x86_64", pubkey);
+    assert!(
+        zipped.download_url.path().ends_with(".nsis.zip"),
+        "{}",
+        zipped.download_url
+    );
+    let archive = fetch(zipped.download_url.as_str()).await;
+    zipped
+        .verify(&archive)
+        .expect("the archive carries our signature, made for the version announced");
+
+    // One flipped bit anywhere and the updater refuses it.
+    let mut tampered = archive.clone();
+    let middle = tampered.len() / 2;
+    tampered[middle] ^= 1;
+    assert!(zipped.verify(&tampered).is_err());
+
+    // Unpacked exactly as the updater does on Windows.
+    let dir = tempfile::tempdir().unwrap();
+    zip::ZipArchive::new(Cursor::new(&archive))
+        .expect("the archive opens with zip 9")
+        .extract(dir.path())
+        .expect("the archive unpacks with zip 9");
+    let installers: Vec<PathBuf> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "exe"))
+        .collect();
+    assert_eq!(installers.len(), 1, "{installers:?}");
+    let installer = std::fs::read(&installers[0]).unwrap();
+    assert_eq!(
+        &installer[..2],
+        b"MZ",
+        "the unpacked file is a Windows program"
+    );
+
+    update_for(app, manifest, "windows-x86_64-nsis", pubkey)
+        .verify(&installer)
+        .expect("the unpacked installer is byte for byte the installer we signed");
 }
 
 #[test]
 #[ignore = "downloads the latest release (about 15 MB); run with --ignored"]
-fn the_latest_update_archive_is_ours_and_unpacks_to_the_installer_we_signed() {
+fn the_old_feed_offers_an_update_old_installs_accept() {
     tauri::async_runtime::block_on(async {
         let app = app();
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&fetch(&endpoint(&app)).await).expect("latest.json is JSON");
-
-        let zipped = update_for(&app, &manifest, "windows-x86_64");
+        let manifest = feed(OLD_FEED).await;
         assert!(
-            zipped.download_url.path().ends_with(".nsis.zip"),
-            "{}",
-            zipped.download_url
+            offered(&manifest) <= BRIDGE,
+            "latest.json offers {}: DAWs up to v0.266.46 cannot verify anything after v0.266.47",
+            manifest["version"]
         );
-        let archive = fetch(zipped.download_url.as_str()).await;
-        zipped
-            .verify(&archive)
-            .expect("the archive carries our signature, made for the version announced");
+        check_update(&app, &manifest, Some(OLD_PUBKEY)).await;
+    });
+}
 
-        // One flipped bit anywhere and the updater refuses it.
-        let mut tampered = archive.clone();
-        let middle = tampered.len() / 2;
-        tampered[middle] ^= 1;
-        assert!(zipped.verify(&tampered).is_err());
-
-        // Unpacked exactly as the updater does on Windows.
-        let dir = tempfile::tempdir().unwrap();
-        zip::ZipArchive::new(Cursor::new(&archive))
-            .expect("the archive opens with zip 9")
-            .extract(dir.path())
-            .expect("the archive unpacks with zip 9");
-        let installers: Vec<PathBuf> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|e| e == "exe"))
-            .collect();
-        assert_eq!(installers.len(), 1, "{installers:?}");
-        let installer = std::fs::read(&installers[0]).unwrap();
-        assert_eq!(
-            &installer[..2],
-            b"MZ",
-            "the unpacked file is a Windows program"
+#[test]
+#[ignore = "downloads the latest release (about 15 MB); run with --ignored"]
+fn the_new_feed_offers_an_update_signed_with_the_key_its_readers_trust() {
+    tauri::async_runtime::block_on(async {
+        let app = app();
+        assert!(
+            endpoint(&app).ends_with("/latest/download/latest-v2.json"),
+            "from v0.266.47 on the app reads latest-v2.json, not {}",
+            endpoint(&app)
         );
-
-        update_for(&app, &manifest, "windows-x86_64-nsis")
-            .verify(&installer)
-            .expect("the unpacked installer is byte for byte the installer we signed");
+        let newest = offered(&feed(OLD_FEED).await);
+        if newest < BRIDGE {
+            eprintln!(
+                "the newest release is {newest:?}, older than latest-v2.json: nothing to check yet"
+            );
+            return;
+        }
+        let manifest = feed(&endpoint(&app)).await;
+        let pubkey = (offered(&manifest) == BRIDGE).then_some(OLD_PUBKEY);
+        check_update(&app, &manifest, pubkey).await;
     });
 }

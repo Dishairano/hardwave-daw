@@ -32,6 +32,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The rules for the two update feeds (scripts/updater_feeds.py); the
+      # release runs them again before it builds.
+      - name: Updater feed script tests
+        run: python3 -m unittest discover -s scripts -p 'test_updater_feeds.py'
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
