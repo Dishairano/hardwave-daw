@@ -1838,6 +1838,37 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     hydrate_chains(state, None)
 }
 
+/// Load the song's plug-ins again after an audio restart: a start drops
+/// the plug-ins the engine hosted. They are made on the main thread, where
+/// plug-ins expect to be made, as a posted job, as when a song opens; the
+/// ones not tried yet are tried first, here, off it. The plug-ins the
+/// stopped stream handed back still have every knob turned since the last
+/// save, so the same job reads their settings into the song first: the new
+/// copies load with them whichever of this job and the engine's own read
+/// the main thread runs first. Call it off the main thread, holding no
+/// lock; it does not wait for the job.
+pub fn reload_after_restart(
+    app: &AppHandle,
+    handed_back: hardwave_engine::engine::HandedBackPlugins,
+) {
+    {
+        let state = app.state::<AppState>();
+        let descriptors = project_descriptors(&state);
+        probe_ahead(&state, &descriptors);
+    }
+    let for_main = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || {
+        handed_back.keep_settings();
+        let state = for_main.state::<AppState>();
+        match hydrate_chains_from_project(&state) {
+            Ok(()) => log::info!("plug-ins loaded again after the audio engine restarted"),
+            Err(e) => log::warn!("plug-ins after the restart: {e}"),
+        }
+    }) {
+        log::warn!("plug-ins after the restart: could not reach the main thread: {e}");
+    }
+}
+
 /// Load the plug-ins of one track into the engine (a cloned channel).
 pub fn hydrate_track_chain(state: &AppState, track_id: &str) -> Result<(), String> {
     hydrate_chains(state, Some(track_id))

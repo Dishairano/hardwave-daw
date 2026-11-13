@@ -97,6 +97,59 @@ impl<C: AudioCallback> AudioCallback for Raised<C> {
     }
 }
 
+/// The callback as a stream holds it: shared with the device manager, which
+/// takes it back when it stops the stream, so the callback (and everything
+/// it hosts) is let go on the thread that stops the stream, whatever the
+/// stream does with its closure. On macOS cpal 0.15 never lets go of a
+/// stream opened on a device picked by name (its disconnect listener holds
+/// the stream itself), so the callback was never let go, and the old
+/// stream went on calling it once the next stream started. The audio
+/// thread only tries the lock: only the stop takes it, and a block that
+/// finds it taken, or the callback gone, plays silence.
+struct TakenBackOnStop<C: AudioCallback>(Arc<PlMutex<Option<C>>>);
+
+/// Lets the callback go, on the calling thread.
+type TakeBack = Box<dyn FnOnce() + Send>;
+
+/// The stream's side of `callback`, and what takes it back.
+fn take_back_on_stop<C: AudioCallback>(callback: C) -> (TakenBackOnStop<C>, TakeBack) {
+    let held = Arc::new(PlMutex::new(Some(callback)));
+    let ours = Arc::clone(&held);
+    let take_back: TakeBack = Box::new(move || {
+        let callback = ours.lock().take();
+        drop(callback);
+    });
+    (TakenBackOnStop(held), take_back)
+}
+
+impl<C: AudioCallback> AudioCallback for TakenBackOnStop<C> {
+    fn process(&mut self, output: &mut [f32], num_frames: usize, num_channels: u16) {
+        match self.0.try_lock() {
+            Some(mut held) => match held.as_mut() {
+                Some(callback) => callback.process(output, num_frames, num_channels),
+                None => output.fill(0.0),
+            },
+            None => output.fill(0.0),
+        }
+    }
+
+    fn process_split(&mut self, main: &mut [f32], click: &mut [f32], num_frames: usize) {
+        match self.0.try_lock() {
+            Some(mut held) => match held.as_mut() {
+                Some(callback) => callback.process_split(main, click, num_frames),
+                None => {
+                    main[..num_frames * 2].fill(0.0);
+                    click[..num_frames * 2].fill(0.0);
+                }
+            },
+            None => {
+                main[..num_frames * 2].fill(0.0);
+                click[..num_frames * 2].fill(0.0);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Input peak tracker
 // ---------------------------------------------------------------------------
@@ -195,6 +248,9 @@ fn frames_to_nanos(frames: usize, sample_rate: u32) -> u64 {
 pub struct AudioDeviceManager {
     host: Host,
     output_stream: Option<cpal::Stream>,
+    /// Takes the running output stream's callback back on stop (see
+    /// `TakenBackOnStop`). `None` while no output stream is open.
+    take_back_output: Option<TakeBack>,
     #[cfg(target_os = "windows")]
     wasapi_stream: Option<wasapi_exclusive::WasapiExclusiveStream>,
     running: Arc<AtomicBool>,
@@ -313,6 +369,7 @@ impl AudioDeviceManager {
         Self {
             host,
             output_stream: None,
+            take_back_output: None,
             #[cfg(target_os = "windows")]
             wasapi_stream: None,
             running: Arc::new(AtomicBool::new(false)),
@@ -646,6 +703,11 @@ impl AudioDeviceManager {
     /// audio" answered at once without trying again, and the next settings
     /// change restarted a stream that was not there.
     pub fn start<C: AudioCallback>(&mut self, callback: C) -> Result<(), AudioIoError> {
+        // A stream still open is stopped first, so its callback is let go
+        // the same way as on any stop.
+        if self.take_back_output.is_some() {
+            self.stop();
+        }
         let started = self.open_output_stream(callback);
         if started.is_err() {
             self.running.store(false, Ordering::Relaxed);
@@ -670,7 +732,11 @@ impl AudioDeviceManager {
         // so the latency is what was chosen.
         let factor = self.output_factor();
         let device_buffer = self.buffer_size * factor;
-        let callback = Raised::new(callback, factor as usize, self.buffer_size as usize);
+        let (callback, take_back) = take_back_on_stop(Raised::new(
+            callback,
+            factor as usize,
+            self.buffer_size as usize,
+        ));
 
         let resolved_name = device.name().unwrap_or_default();
         let exclusive_requested =
@@ -704,6 +770,7 @@ impl AudioDeviceManager {
                     Arc::clone(&self.output_priority),
                 )?;
                 self.wasapi_stream = Some(stream);
+                self.take_back_output = Some(take_back);
                 self.active_exclusive = true;
                 // The exclusive stream reports no timestamps; one buffer is
                 // what an exclusive endpoint holds.
@@ -846,6 +913,7 @@ impl AudioDeviceManager {
             .play()
             .map_err(|e| AudioIoError::Stream(e.to_string()))?;
         self.output_stream = Some(stream);
+        self.take_back_output = Some(take_back);
 
         Ok(())
     }
@@ -868,12 +936,24 @@ impl AudioDeviceManager {
     /// Stop the audio stream.
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
+        // cpal 0.15 on macOS never lets go of a stream opened on a device
+        // picked by name (see `TakenBackOnStop`): paused, it stops calling.
+        if cfg!(target_os = "macos") {
+            if let Some(stream) = &self.output_stream {
+                let _ = stream.pause();
+            }
+        }
         self.output_stream = None;
         #[cfg(target_os = "windows")]
         {
             if let Some(stream) = self.wasapi_stream.take() {
                 stream.stop();
             }
+        }
+        // The callback goes here, on this thread, whether or not the stream
+        // let go of its closure.
+        if let Some(take_back) = self.take_back_output.take() {
+            take_back();
         }
         self.active_device_name = None;
         self.active_exclusive = false;
@@ -1351,6 +1431,51 @@ mod default_output_tests {
         );
         assert!(is_display_audio("Intel(R) Display Audio"));
         assert!(!is_display_audio("Focusrite USB ASIO"));
+    }
+}
+
+#[cfg(test)]
+mod take_back_tests {
+    use super::*;
+
+    /// Plays ones, and says which thread let it go.
+    struct Ones(Arc<PlMutex<Option<std::thread::ThreadId>>>);
+    impl AudioCallback for Ones {
+        fn process(&mut self, output: &mut [f32], _num_frames: usize, _num_channels: u16) {
+            output.fill(1.0);
+        }
+    }
+    impl Drop for Ones {
+        fn drop(&mut self) {
+            *self.0.lock() = Some(std::thread::current().id());
+        }
+    }
+
+    /// A stream that keeps its closure after the stop (cpal on macOS, a
+    /// device picked by name) never let the callback go, and went on calling
+    /// it. Taken back, the callback is let go by the stop, on the stopping
+    /// thread, and the stream's calls after that play silence.
+    #[test]
+    fn a_callback_is_let_go_on_stop_even_when_the_stream_keeps_its_closure() {
+        let let_go = Arc::new(PlMutex::new(None));
+        let (mut kept_by_stream, take_back) = take_back_on_stop(Ones(Arc::clone(&let_go)));
+        let mut out = [0.0f32; 4];
+        kept_by_stream.process(&mut out, 2, 2);
+        assert_eq!(out, [1.0; 4], "plays while running");
+
+        let stopping = std::thread::spawn(move || {
+            take_back();
+            std::thread::current().id()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(*let_go.lock(), Some(stopping), "let go by the stop");
+
+        kept_by_stream.process(&mut out, 2, 2);
+        assert_eq!(out, [0.0; 4], "silence after the stop");
+        let mut click = [1.0f32; 4];
+        kept_by_stream.process_split(&mut out, &mut click, 2);
+        assert_eq!(click, [0.0; 4]);
     }
 }
 

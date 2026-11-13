@@ -2353,7 +2353,7 @@ impl AudioNode for MidiTrackNode {
             } => {
                 self.chain.set_slot_smart_disable(&slot_id, allowed);
             }
-            InsertCommand::ClearAll => self.chain.bury_all(graveyard),
+            InsertCommand::ClearAll { .. } => self.chain.bury_all(graveyard),
         }
     }
 

@@ -19,16 +19,15 @@ pub struct ProjectInfo {
 pub fn new_project(state: State<AppState>) {
     use std::sync::atomic::Ordering;
     let engine = state.engine.lock();
-    let new_bpm = {
-        let mut project = engine.project.lock();
-        *project = Project::default();
-        project
-            .tempo_map
-            .entries
-            .first()
-            .map(|e| e.bpm)
-            .unwrap_or(140.0)
-    };
+    engine.replace_song(Project::default());
+    let new_bpm = engine
+        .project
+        .lock()
+        .tempo_map
+        .entries
+        .first()
+        .map(|e| e.bpm)
+        .unwrap_or(140.0);
     engine.transport.bpm.store(new_bpm, Ordering::Relaxed);
     engine.send_command(hardwave_engine::TransportCommand::SetBpm(new_bpm));
     apply_project_time_signature(&engine);
@@ -263,10 +262,7 @@ pub(crate) fn open_project_blocking(
     {
         let engine = state.engine.lock();
         engine.set_project_dir(project_dir);
-        {
-            let mut project = engine.project.lock();
-            *project = loaded;
-        }
+        engine.replace_song(loaded);
         // The old song's plug-ins go before the new song's are created
         // below: tracks with the same id in both songs (the mixer inserts,
         // the master) kept them, and an old sampler played on in the new

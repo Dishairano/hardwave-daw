@@ -986,6 +986,26 @@ pub fn run() {
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
 
+            // The plug-ins a stopped audio stream hands back have their
+            // settings read on the main thread: VST3 and CLAP allow it there
+            // only, and some plug-ins crash or hang when asked elsewhere.
+            // Posted from a thread of its own: Tauri runs a job at once when
+            // asked on the main thread, and the engine asks holding its lock
+            // (inside a command such as an audio settings change).
+            {
+                let app = app_handle.clone();
+                engine.lock().set_main_thread_runner(Arc::new(
+                    move |job: hardwave_engine::engine::MainThreadJob| {
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            if let Err(e) = app.run_on_main_thread(job) {
+                                log::warn!("audio restart: could not reach the main thread: {e}");
+                            }
+                        });
+                    },
+                ));
+            }
+
             // MIDI Learn dispatcher: drains incoming CC events and applies
             // mapped values to the live engine state. Also handles learn-mode
             // capture in the same loop so there's no race with the main
@@ -1219,14 +1239,13 @@ pub fn run() {
                             let restarted = seen_starts > 0;
                             seen_starts = starts;
                             if restarted {
-                                // Slow (every plug-in loads), so not here.
+                                // Slow (every plug-in loads), so not here:
+                                // on the main thread, after the plug-ins
+                                // the stopped stream handed back are read.
                                 let app = app_handle.clone();
+                                let handed_back = eng.handed_back_plugins();
                                 std::thread::spawn(move || {
-                                    let state = app.state::<AppState>();
-                                    match commands::plugins::hydrate_chains_from_project(&state) {
-                                        Ok(()) => log::info!("plug-ins loaded again after the audio engine restarted"),
-                                        Err(e) => log::warn!("plug-ins after the restart: {e}"),
-                                    }
+                                    commands::plugins::reload_after_restart(&app, handed_back);
                                 });
                             }
                         }

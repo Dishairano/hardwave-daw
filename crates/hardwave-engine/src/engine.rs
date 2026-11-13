@@ -926,37 +926,237 @@ pub type PluginStateSnapshotSlot = Arc<Mutex<Option<PluginStateSnapshotSender>>>
 /// Every loaded plug-in's settings, keyed by `(track_id, slot_id)`.
 pub type PluginStateMap = HashMap<(String, String), Vec<u8>>;
 
-/// The plug-ins' settings as the live audio callback had them when it was
-/// let go. When the sound card goes away (a remote-desktop disconnect, an
-/// interface unplugged, a driver reset) the stream stops calling the
-/// callback, so a settings request is never answered; but the plug-ins are
-/// still there until the callback is dropped, and on its way out it reads
-/// them and leaves them here. The engine reads them back after stopping the
-/// stream, so a restart keeps every knob turned since the last save.
-#[derive(Default)]
+/// A job for the app's main thread.
+pub type MainThreadJob = Box<dyn FnOnce() + Send>;
+
+/// Runs a job on the app's main thread: the thread the app loads its
+/// plug-ins on, and the only one VST3 and CLAP allow a plug-in's state to
+/// be read on. It queues the job and never waits for it, and never runs it
+/// on the calling thread, even when that is the main thread: the engine
+/// calls it holding its own lock.
+pub type MainThreadRunner = Arc<dyn Fn(MainThreadJob) + Send + Sync>;
+
+/// How a live stream's callback gives its plug-ins back when the stream
+/// lets it go: on every stop, a restart, and when the sound card goes away
+/// (a remote-desktop disconnect, an interface unplugged, a driver reset),
+/// where the stream stops calling the callback and a settings request is
+/// never answered. The plug-ins are still there until the callback is
+/// dropped. On its way out it hands them back here, holding every knob
+/// turned since the last save, and the engine has their settings read into
+/// the song on the main thread, and the plug-ins let go there, before the
+/// restart loads the plug-ins again.
+///
+/// The device manager takes the callback back from the stream as it stops
+/// it, so the callback is dropped on the thread that stops the stream: the
+/// main thread inside an audio settings change, with the engine locked,
+/// the meter thread when the device went away, or another. (It was the
+/// audio thread itself on WASAPI before the manager took it back.) VST3
+/// and CLAP allow a plug-in's state to be read on the main thread only,
+/// and some plug-ins crash or hang when asked anywhere else, so the
+/// callback only moves its plug-ins out: it reads no settings, allocates
+/// nothing and waits for nothing.
+///
+/// One per live stream, so a callback let go late cannot hand its plug-ins
+/// to the stream started after it.
 pub struct PluginStateFarewell {
-    /// Whether the callback should read its plug-ins when it is dropped. On
-    /// while a live stream runs; off for a deliberate stop, where nothing
-    /// needs the settings, or once they were read another way.
-    armed: std::sync::atomic::AtomicBool,
-    states: Mutex<Option<PluginStateMap>>,
+    /// `FAREWELL_ARMED` while the live stream runs, `FAREWELL_HANDING`
+    /// while its dropped callback moves the plug-ins out, `FAREWELL_IDLE`
+    /// once they are in `left`.
+    state: std::sync::atomic::AtomicU8,
+    left: Mutex<Option<HandedBack>>,
 }
 
+const FAREWELL_IDLE: u8 = 0;
+const FAREWELL_ARMED: u8 = 1;
+const FAREWELL_HANDING: u8 = 2;
+
 impl PluginStateFarewell {
-    fn arm(&self) {
-        *self.states.lock() = None;
-        self.armed.store(true, std::sync::atomic::Ordering::Release);
+    fn armed() -> Self {
+        Self {
+            state: std::sync::atomic::AtomicU8::new(FAREWELL_ARMED),
+            left: Mutex::new(None),
+        }
     }
 
-    /// Stop asking, and take what a dropped callback left, if anything.
-    fn disarm_and_take(&self) -> Option<PluginStateMap> {
-        self.armed
+    /// The callback's side: whether to hand its plug-ins back. Yes once,
+    /// and only while armed.
+    fn begin_hand_back(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.state
+            .compare_exchange(
+                FAREWELL_ARMED,
+                FAREWELL_HANDING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// The callback's side: leave the plug-ins here. The engine does not
+    /// touch `left` until the hand-back is over, so the lock is free; were
+    /// it not, the plug-ins would go with the callback rather than wait.
+    fn finish_hand_back(&self, plugins: HandedBack) {
+        if let Some(mut left) = self.left.try_lock() {
+            *left = Some(plugins);
+        }
+        self.state
+            .store(FAREWELL_IDLE, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether the callback has handed its plug-ins back: they are in
+    /// `left` then, until taken.
+    fn settled(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::Acquire) == FAREWELL_IDLE
+    }
+
+    /// The engine's side, once it has stopped the stream: the plug-ins, if
+    /// the callback handed them back. The stop lets the callback go, so it
+    /// has normally handed them back by now; a callback let go a moment
+    /// later, or right now, is waited for, a moment at most, since it only
+    /// moves its plug-ins out. `Err` when it has not been let go by then.
+    fn take_after_stop(&self) -> Result<Option<HandedBack>, ()> {
+        let deadline = std::time::Instant::now() + FAREWELL_WAIT;
+        while !self.settled() {
+            if std::time::Instant::now() >= deadline {
+                return Err(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(self.left.lock().take())
+    }
+}
+
+/// How long the engine waits, after stopping a stream, for its callback to
+/// be let go and hand the plug-ins back.
+const FAREWELL_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The plug-ins a live callback handed back as its stream let it go: its
+/// graph (every track's insert chain and the master's are in there), the
+/// map saying which node is which track, the frozen tracks' parked chains,
+/// and the commands parked for a track the next graph has not made yet
+/// (a plug-in added to it waits there). Those are only let go: they never
+/// played, and hold what the song already has.
+struct HandedBack {
+    /// The song they belong to (see `EngineCallback::plugins_song`).
+    song: u64,
+    graph: AudioGraph,
+    track_id_to_node: HashMap<String, crate::graph::NodeId>,
+    parked_chains: HashMap<String, crate::insert_chain::InsertChain>,
+    parked_commands: Vec<crate::insert_chain::InsertCommand>,
+}
+
+/// Plug-ins stopped streams handed back, waiting for the main thread to
+/// read their settings into the song. A clone works without the engine,
+/// so the main thread never needs the engine's lock for it.
+#[derive(Clone)]
+pub struct HandedBackPlugins {
+    waiting: Arc<Mutex<Vec<HandedBack>>>,
+    /// Farewells of stopped streams that had not let their callback go when
+    /// the engine stopped waiting. Kept, so that the plug-ins a callback
+    /// hands back late are let go on the main thread too, not freed with the
+    /// callback on the stream's thread.
+    late: Arc<Mutex<Vec<Arc<PluginStateFarewell>>>>,
+    project: Arc<Mutex<Project>>,
+    /// Which song is open, counted up each time another song replaces it
+    /// (see [`DawEngine::replace_song`]), under the song's own lock.
+    song: Arc<std::sync::atomic::AtomicU64>,
+    /// A read is posted to the main thread and has not started yet: one
+    /// read takes everything waiting, so no other is posted meanwhile.
+    read_posted: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl HandedBackPlugins {
+    /// Read the settings of every plug-in handed back into the song, the
+    /// oldest stream's first, and let the plug-ins go. Plug-ins of a song
+    /// that another has replaced since are only let go: their settings
+    /// belong to that song, not this one. Main thread only: it
+    /// asks each plug-in for its state, and a plug-in is let go on the
+    /// thread it was made on. Returns how many settings it kept.
+    ///
+    /// Plug-ins a stream handed back after the engine stopped waiting are
+    /// let go here as well, without reading them: the restart has loaded
+    /// the plug-ins from the song by then, and settings that old could
+    /// undo newer ones.
+    pub fn keep_settings(&self) -> usize {
+        // Before taking anything: whatever is handed back after this is
+        // read by a read posted after it.
+        self.read_posted
             .store(false, std::sync::atomic::Ordering::Release);
-        self.states.lock().take()
+        let mut too_late = Vec::new();
+        self.late.lock().retain(|farewell| {
+            if !farewell.settled() {
+                return true;
+            }
+            too_late.extend(farewell.left.lock().take());
+            false
+        });
+        drop(too_late);
+        let handed_back = std::mem::take(&mut *self.waiting.lock());
+        let mut kept = 0;
+        let open_song = || self.song.load(std::sync::atomic::Ordering::Acquire);
+        for plugins in handed_back {
+            let HandedBack {
+                song,
+                mut graph,
+                track_id_to_node,
+                parked_chains,
+                parked_commands,
+            } = plugins;
+            // Never played: nothing to read, only to let go, here.
+            drop(parked_commands);
+            if song != open_song() {
+                continue;
+            }
+            let states = plugin_states_in(&mut graph, &track_id_to_node, &parked_chains);
+            // Under the song's lock, which another song replaces it under.
+            let mut project = self.project.lock();
+            if song == open_song() {
+                kept += states.len();
+                keep_live_states_in(&mut project, states);
+            }
+        }
+        if kept > 0 {
+            log::info!(
+                "audio restart: {kept} plug-in setting(s) handed back by the stopped stream kept"
+            );
+        }
+        kept
     }
+}
 
-    fn is_armed(&self) -> bool {
-        self.armed.load(std::sync::atomic::Ordering::Acquire)
+/// Every plug-in's settings in `graph` and in the frozen tracks' parked
+/// chains, keyed by `(track_id, slot_id)`.
+fn plugin_states_in(
+    graph: &mut AudioGraph,
+    track_id_to_node: &HashMap<String, crate::graph::NodeId>,
+    parked_chains: &HashMap<String, crate::insert_chain::InsertChain>,
+) -> PluginStateMap {
+    let mut map = PluginStateMap::new();
+    for (track_id, &node_id) in track_id_to_node {
+        if let Some(node) = graph.node_mut(node_id) {
+            for (slot_id, bytes) in node.snapshot_plugin_states() {
+                map.insert((track_id.clone(), slot_id), bytes);
+            }
+        }
+    }
+    // A frozen track's plug-ins are parked, not in the graph; a save
+    // keeps their settings too.
+    for (track_id, chain) in parked_chains {
+        for slot in &chain.slots {
+            map.insert(
+                (track_id.clone(), slot.slot_id.clone()),
+                slot.plugin.get_state(),
+            );
+        }
+    }
+    map
+}
+
+/// Put the plug-ins' settings as they are now into the song, so the
+/// plug-ins loaded again after an audio restart come back with them.
+fn keep_live_states_in(project: &mut Project, states: PluginStateMap) {
+    for ((_, slot_id), bytes) in states {
+        project.take_live_plugin_state(slot_id, bytes);
     }
 }
 
@@ -1176,9 +1376,22 @@ pub struct DawEngine {
     /// Used to capture plug-in state into `Project.plugin_states` so
     /// save/load round-trips preserve the user's knob tweaks.
     pub pending_state_snapshot: PluginStateSnapshotSlot,
-    /// Where the live callback leaves its plug-ins' settings when its
-    /// stream lets it go; see [`PluginStateFarewell`].
-    plugin_farewell: Arc<PluginStateFarewell>,
+    /// How the live stream's callback hands its plug-ins back when the
+    /// stream lets it go; see [`PluginStateFarewell`]. `None` while no
+    /// stream runs.
+    plugin_farewell: Option<Arc<PluginStateFarewell>>,
+    /// Plug-ins stopped streams handed back, until the main thread has
+    /// read their settings into the song.
+    handed_back: HandedBackPlugins,
+    /// Runs jobs on the app's main thread; see [`MainThreadRunner`]. `None`
+    /// with no app around the engine (tests, command-line tools): the
+    /// plug-ins handed back are read on the thread that stopped the stream
+    /// then, which is never the audio thread.
+    main_thread: Option<MainThreadRunner>,
+    /// Tests: take the engine for running, as with a stream playing on a
+    /// sound card, which no test machine has.
+    #[cfg(test)]
+    stream_in_test: bool,
     /// Rolling 3-minute capture of every live MIDI event seen by the
     /// engine. Audio thread pushes per-block; UI thread can dump the
     /// last N seconds into a clip without arming a track. The ring is
@@ -1209,11 +1422,19 @@ impl DawEngine {
     pub fn new() -> Self {
         let (tx, rx) = bounded(256);
         let captures = crate::input_node::capture_set();
+        let project = Arc::new(Mutex::new(Project::default()));
 
         Self {
             last_audio_restart: None,
             transport: TransportState::default(),
-            project: Arc::new(Mutex::new(Project::default())),
+            handed_back: HandedBackPlugins {
+                waiting: Arc::new(Mutex::new(Vec::new())),
+                late: Arc::new(Mutex::new(Vec::new())),
+                project: Arc::clone(&project),
+                song: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                read_posted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+            project,
             plugin_scanner: Arc::new(Mutex::new(PluginScanner::new())),
             midi_input: Arc::new(Mutex::new(MidiInputManager::new())),
             audio_pool: AudioPool::new(),
@@ -1257,7 +1478,10 @@ impl DawEngine {
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
-            plugin_farewell: Arc::new(PluginStateFarewell::default()),
+            plugin_farewell: None,
+            main_thread: None,
+            #[cfg(test)]
+            stream_in_test: false,
             midi_capture_ring: Arc::new(Mutex::new(MidiCaptureRing::new(8192))),
             starts: 0,
             start_failed: false,
@@ -1337,7 +1561,12 @@ impl DawEngine {
     /// Waits a moment for room in the queue rather than lose it, since the
     /// old song's plug-ins would otherwise go on playing in the new one.
     pub fn clear_live_plugins(&self) {
-        let mut cmd = crate::insert_chain::InsertCommand::ClearAll;
+        let mut cmd = crate::insert_chain::InsertCommand::ClearAll {
+            song: self
+                .handed_back
+                .song
+                .load(std::sync::atomic::Ordering::Acquire),
+        };
         for _ in 0..50 {
             if self.insert_command_sender.lock().is_none() {
                 // No audio thread yet, so no live plug-ins either.
@@ -1803,6 +2032,14 @@ impl DawEngine {
     }
 
     fn start_stream(&mut self) -> Result<(), String> {
+        // A stream stopped without the engine (switching the driver stops it
+        // in the device manager) handed its plug-ins back all the same: their
+        // settings go into the song before this start's plug-ins are loaded
+        // from it.
+        if let Some(farewell) = self.plugin_farewell.take() {
+            self.take_hand_back(farewell);
+        }
+        self.let_go_late_plugins_that_came();
         let transport = self.transport.clone();
         let project = Arc::clone(&self.project);
         let command_rx = self.command_rx.clone();
@@ -1893,82 +2130,136 @@ impl DawEngine {
         // an export's callback keeps the ones nobody can start.
         callback.test_tone = crate::test_tone::TestTone::new(self.test_tone.clone());
         callback.check_voice = crate::check_voice::CheckVoice::new(self.check_voice.clone());
-        // Only the live callback leaves its plug-ins' settings behind when
-        // it is let go: the stream can lose its device at any moment.
-        self.plugin_farewell.arm();
-        callback.plugin_farewell = Some(Arc::clone(&self.plugin_farewell));
+        // Only the live callback hands its plug-ins back when it is let go:
+        // the stream can lose its device at any moment.
+        let farewell = Arc::new(PluginStateFarewell::armed());
+        callback.plugin_farewell = Some(Arc::clone(&farewell));
+        // Its plug-ins, loaded after this start, are the open song's.
+        callback.plugins_song = self
+            .handed_back
+            .song
+            .load(std::sync::atomic::Ordering::Acquire);
+        self.plugin_farewell = Some(farewell);
         // From here on graphs are built on a thread of their own and only
         // swapped in on the audio thread.
         callback.attach_builder_thread();
 
-        self.audio_device
-            .start(callback)
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = self.audio_device.start(callback) {
+            // The callback was let go with no plug-ins in it yet.
+            self.plugin_farewell = None;
+            return Err(e.to_string());
+        }
         self.starts += 1;
         Ok(())
     }
 
+    /// Make `song` the open song: a new one, one opened, or a room's. The
+    /// song is counted as another under its own lock, so plug-ins a stopped
+    /// stream handed back for the old song are never read into this one
+    /// (see [`HandedBackPlugins::keep_settings`]).
+    pub fn replace_song(&self, song: Project) {
+        let mut project = self.project.lock();
+        *project = song;
+        self.handed_back
+            .song
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Have jobs that must run on the app's main thread run there; see
+    /// [`MainThreadRunner`].
+    pub fn set_main_thread_runner(&mut self, run: MainThreadRunner) {
+        self.main_thread = Some(run);
+    }
+
+    /// The plug-ins stopped streams handed back, for the main thread to
+    /// read into the song before the song's plug-ins are loaded again after
+    /// an audio restart (see [`HandedBackPlugins::keep_settings`]).
+    pub fn handed_back_plugins(&self) -> HandedBackPlugins {
+        self.handed_back.clone()
+    }
+
     /// Stop the audio engine.
+    ///
+    /// The stream's callback hands its plug-ins back as the stream lets it
+    /// go (see [`PluginStateFarewell`]), and the main thread reads their
+    /// settings into the song and lets them go: a start loads the plug-ins
+    /// again from the song, with every knob turned since the last save.
+    /// Nothing asks the audio thread for the settings. That read every
+    /// plug-in's state on the audio thread, which VST3 and CLAP do not
+    /// allow (a plug-in that needs the main thread to save hung the app),
+    /// and the plug-ins were then let go on the stream's thread.
     pub fn stop(&mut self) {
-        // Nothing reloads the plug-ins after a plain stop: the callback need
-        // not read them on its way out.
-        self.plugin_farewell.disarm_and_take();
+        let farewell = self.plugin_farewell.take();
         self.audio_device.stop();
+        // The stream lets the callback go by now (when the device went away
+        // it may have done so before this stop, or do so a moment after):
+        // what it hands back holds the plug-ins as they were at the end.
+        if let Some(farewell) = farewell {
+            self.take_hand_back(farewell);
+        }
     }
 
     /// Stop on the way to starting again (another device, rate, buffer,
-    /// driver or output). A start builds the engine's processing anew,
-    /// without the plug-ins, which the app then loads again from the song;
-    /// so their settings as they are now go into the song first, or every
-    /// knob turned since the last save would be lost.
+    /// driver or output, or the device went away). A start builds the
+    /// engine's processing anew, without the plug-ins, which the app then
+    /// loads again from the song; so their settings as they are now go into
+    /// the song first, as [`Self::stop`] has them.
     pub fn stop_for_restart(&mut self) {
-        self.stop_for_restart_reading(true);
+        self.stop();
     }
 
-    /// The same, saying whether the audio callback can still be asked for
-    /// the plug-ins' settings. After the stream failed it cannot: the ask
-    /// waited half a second with the engine locked for an answer that
-    /// never came. The plug-ins are still alive though, only the device
-    /// went away: the callback reads them as the stream lets it go (see
-    /// [`PluginStateFarewell`]). Every knob turned since the last save used
-    /// to go back to its saved value here.
-    fn stop_for_restart_reading(&mut self, stream_alive: bool) {
-        // A stream that never started (or was stopped already) hosts no
-        // plug-ins: there is nothing to read then.
-        let was_running = self.is_running();
-        let mut read = false;
-        if stream_alive {
-            if let Some(states) = self.snapshot_plugin_states(std::time::Duration::from_millis(500))
-            {
-                self.keep_live_plugin_states(states);
-                read = true;
-                // Read already: the callback need not read them again.
-                self.plugin_farewell.disarm_and_take();
+    /// Take what a stopped stream's callback hands back, and have the main
+    /// thread read the plug-ins' settings into the song and let them go.
+    fn take_hand_back(&self, farewell: Arc<PluginStateFarewell>) {
+        match farewell.take_after_stop() {
+            Ok(Some(plugins)) => self.keep_handed_back(plugins),
+            Ok(None) => {}
+            Err(()) => {
+                log::warn!(
+                    "audio restart: the stopped stream has not let its plug-ins go yet; \
+                     settings changed since the last save are not kept"
+                );
+                self.handed_back.late.lock().push(farewell);
             }
         }
-        self.audio_device.stop();
-        // The stream has let the callback go by now (when the device went
-        // away it may have done so before this stop): what it left behind
-        // is the plug-ins' settings at the end.
-        let left = self.plugin_farewell.disarm_and_take();
-        if read {
+    }
+
+    /// Queue plug-ins a stopped stream handed back and have the main thread
+    /// read their settings into the song and let them go.
+    fn keep_handed_back(&self, plugins: HandedBack) {
+        self.handed_back.waiting.lock().push(plugins);
+        self.read_handed_back_on_main_thread();
+    }
+
+    /// Have the main thread read what stopped streams handed back (see
+    /// [`HandedBackPlugins::keep_settings`]).
+    fn read_handed_back_on_main_thread(&self) {
+        if self
+            .handed_back
+            .read_posted
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
             return;
         }
-        match left {
-            Some(states) => self.keep_live_plugin_states(states),
-            None if was_running => log::warn!(
-                "audio restart: plug-in settings changed since the last save could not be read"
-            ),
-            None => {}
+        let handed_back = self.handed_back.clone();
+        match &self.main_thread {
+            Some(run) => run(Box::new(move || {
+                handed_back.keep_settings();
+            })),
+            None => {
+                handed_back.keep_settings();
+            }
         }
     }
 
-    /// Put the plug-ins' settings as they are now into the song, so the
-    /// plug-ins loaded again after an audio restart come back with them.
-    fn keep_live_plugin_states(&self, states: PluginStateMap) {
-        let mut project = self.project.lock();
-        for ((_, slot_id), bytes) in states {
-            project.take_live_plugin_state(slot_id, bytes);
+    /// Plug-ins a stopped stream handed back after the engine stopped
+    /// waiting for them (see [`HandedBackPlugins::keep_settings`]): once
+    /// they have come, have the main thread let them go. Cheap when there
+    /// are none; runs with every health check and start.
+    fn let_go_late_plugins_that_came(&self) {
+        let came = self.handed_back.late.lock().iter().any(|f| f.settled());
+        if came {
+            self.read_handed_back_on_main_thread();
         }
     }
 
@@ -2864,6 +3155,10 @@ impl DawEngine {
     }
 
     pub fn is_running(&self) -> bool {
+        #[cfg(test)]
+        if self.stream_in_test {
+            return true;
+        }
         self.audio_device.is_running()
     }
 
@@ -2884,13 +3179,17 @@ impl DawEngine {
     /// gone, starting it falls back to the default by itself); the default
     /// is forced only when it will not start, or when it fails again within
     /// five seconds of the last restart.
+    ///
+    /// It also has the main thread let go of plug-ins a stopped stream
+    /// handed back late, once they have come.
     pub fn poll_audio_health(&mut self) -> Result<Option<String>, String> {
         self.audio_device.log_thread_priority();
+        self.let_go_late_plugins_that_came();
         if !self.audio_device.take_stream_error() {
             return Ok(None);
         }
         let before = self.audio_device.active_device_name().map(str::to_string);
-        self.stop_for_restart_reading(false);
+        self.stop_for_restart();
         let failed_again = self
             .last_audio_restart
             .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
@@ -4297,9 +4596,14 @@ struct EngineCallback {
     test_tone: crate::test_tone::TestTone,
     /// The first run's check voice, the same way.
     check_voice: crate::check_voice::CheckVoice,
-    /// Where this callback leaves its plug-ins' settings when it is dropped.
-    /// Only the live callback has one; see [`PluginStateFarewell`].
+    /// Where this callback hands its plug-ins back when it is dropped. Only
+    /// the live callback has one; see [`PluginStateFarewell`].
     plugin_farewell: Option<Arc<PluginStateFarewell>>,
+    /// The song this callback's plug-ins belong to, as the engine counts
+    /// songs (`DawEngine::replace_song`): the one open when it started, then
+    /// the one each `ClearAll` it applies names. A song swapped in still
+    /// has the old song's plug-ins playing until its `ClearAll` lands.
+    plugins_song: u64,
     /// The Audio settings panel's behaviour switches, shared with the engine
     /// so a change applies to the next block.
     audio_prefs: crate::audio_prefs::AudioPrefs,
@@ -4577,6 +4881,7 @@ impl EngineCallback {
             test_tone: crate::test_tone::TestTone::unwired(),
             check_voice: crate::check_voice::CheckVoice::unwired(),
             plugin_farewell: None,
+            plugins_song: 0,
             audio_prefs,
             record_pass,
             record_last_pos,
@@ -4684,34 +4989,31 @@ impl EngineCallback {
         // The state read back has every value set so far, not only the
         // ones a block has run with.
         self.flush_plugin_parameters();
+        plugin_states_in(&mut self.graph, &self.track_id_to_node, &self.parked_chains)
+    }
 
-        let mut map: std::collections::HashMap<(String, String), Vec<u8>> =
-            std::collections::HashMap::new();
-        // Clone the (track_id, node_id) pairs first so the iteration
-        // borrow doesn't conflict with the mutable graph access below.
-        let pairs: Vec<(String, crate::graph::NodeId)> = self
-            .track_id_to_node
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
-        for (track_id, node_id) in pairs {
-            if let Some(node) = self.graph.node_mut(node_id) {
-                for (slot_id, bytes) in node.snapshot_plugin_states() {
-                    map.insert((track_id.clone(), slot_id), bytes);
-                }
-            }
+    /// Hand this callback's plug-ins back through `farewell`, for the main
+    /// thread to read their settings from and let them go. Runs on the
+    /// thread the stream lets the callback go on, which on WASAPI is the
+    /// audio thread itself: it moves the plug-ins out and asks them for
+    /// nothing, allocates nothing, frees nothing and waits for nothing.
+    fn hand_back_plugins(&mut self, farewell: &PluginStateFarewell) {
+        if !farewell.begin_hand_back() {
+            return;
         }
-        // A frozen track's plug-ins are parked, not in the graph; a save
-        // keeps their settings too.
-        for (track_id, chain) in &self.parked_chains {
-            for slot in &chain.slots {
-                map.insert(
-                    (track_id.clone(), slot.slot_id.clone()),
-                    slot.plugin.get_state(),
-                );
-            }
-        }
-        map
+        // Knob turns sent after the last block ran (the device can go
+        // between two of them) are still waiting in the queue: hand them to
+        // the plug-ins first, as a block would, so the settings read later
+        // include them.
+        self.dispatch_insert_commands();
+        self.flush_plugin_parameters();
+        farewell.finish_hand_back(HandedBack {
+            song: self.plugins_song,
+            graph: std::mem::replace(&mut self.graph, AudioGraph::new(0)),
+            track_id_to_node: std::mem::take(&mut self.track_id_to_node),
+            parked_chains: std::mem::take(&mut self.parked_chains),
+            parked_commands: std::mem::take(&mut self.deferred_insert_commands),
+        });
     }
 
     /// Drain pending insert-chain commands and dispatch each to the
@@ -4753,6 +5055,9 @@ impl EngineCallback {
         // A new song: every node's plug-ins go, and so does whatever was
         // parked for the old song's tracks.
         let Some(target) = cmd.target_track_id() else {
+            if let crate::insert_chain::InsertCommand::ClearAll { song } = cmd {
+                self.plugins_song = song;
+            }
             for parked in self.deferred_insert_commands.drain(..) {
                 if let crate::insert_chain::InsertCommand::Add { mut slot, .. } = parked {
                     slot.plugin.deactivate();
@@ -4763,7 +5068,9 @@ impl EngineCallback {
             }
             for node in self.graph.iter_nodes_mut() {
                 node.apply_insert_command(
-                    crate::insert_chain::InsertCommand::ClearAll,
+                    crate::insert_chain::InsertCommand::ClearAll {
+                        song: self.plugins_song,
+                    },
                     &mut self.insert_graveyard_tx,
                     sample_rate,
                     buffer_size,
@@ -4838,7 +5145,7 @@ impl EngineCallback {
             crate::insert_chain::InsertCommand::Add { .. }
                 | crate::insert_chain::InsertCommand::Remove { .. }
                 | crate::insert_chain::InsertCommand::SetEnabled { .. }
-                | crate::insert_chain::InsertCommand::ClearAll
+                | crate::insert_chain::InsertCommand::ClearAll { .. }
         );
         if let Some(node) = self.graph.node_mut(node_id) {
             node.apply_insert_command(cmd, &mut self.insert_graveyard_tx, sample_rate, buffer_size);
@@ -5372,22 +5679,13 @@ const LIVE_MIDI_HOLD_SECONDS: u64 = 10;
 
 /// The live callback is dropped when its stream ends: on a stop, or by the
 /// stream itself when the device went away. The plug-ins are still loaded
-/// at this point and nothing is playing, so their settings are read here
-/// for the restart to load them with (see [`PluginStateFarewell`]).
+/// at this point and nothing is playing, so they are handed back for the
+/// restart to read their settings from (see [`PluginStateFarewell`]).
 impl Drop for EngineCallback {
     fn drop(&mut self) {
-        let Some(farewell) = self.plugin_farewell.take() else {
-            return;
-        };
-        if !farewell.is_armed() {
-            return;
+        if let Some(farewell) = self.plugin_farewell.take() {
+            self.hand_back_plugins(&farewell);
         }
-        // Knob turns sent after the last block ran (the device can go
-        // between two of them) are still waiting in the queue: hand them
-        // to the plug-ins first so the settings read include them.
-        self.dispatch_insert_commands();
-        let states = self.collect_plugin_states();
-        *farewell.states.lock() = Some(states);
     }
 }
 
@@ -7779,12 +8077,23 @@ mod rt_safety_tests {
         );
     }
 
+    /// Which thread a plug-in was asked for its state on, and let go on.
+    type Seen = Arc<Mutex<Vec<(&'static str, std::thread::ThreadId)>>>;
+
     /// Like a VST3 or CLAP plug-in: a value set is only taken in at the
     /// start of a block (or a flush), and the state reports what was taken.
     struct BlockFed {
         desc: hardwave_plugin_host::types::PluginDescriptor,
         waiting: Option<f64>,
         taken: Arc<std::sync::atomic::AtomicU64>,
+        seen: Seen,
+    }
+    impl Drop for BlockFed {
+        fn drop(&mut self) {
+            self.seen
+                .lock()
+                .push(("let go", std::thread::current().id()));
+        }
     }
     impl BlockFed {
         fn take(&mut self) {
@@ -7835,6 +8144,9 @@ mod rt_safety_tests {
             self.waiting = Some(v);
         }
         fn get_state(&self) -> Vec<u8> {
+            self.seen
+                .lock()
+                .push(("state read", std::thread::current().id()));
             self.get_parameter_value(0).to_le_bytes().to_vec()
         }
         fn set_state(&mut self, _b: &[u8]) -> Result<(), String> {
@@ -7882,6 +8194,7 @@ mod rt_safety_tests {
             },
             waiting: None,
             taken: Arc::clone(&taken),
+            seen: Seen::default(),
         });
         let slot = LiveSlot {
             sleep: Default::default(),
@@ -7930,8 +8243,23 @@ mod rt_safety_tests {
     }
 
     /// A plug-in on the master whose single value reads back as its state,
-    /// as a VST3, CLAP or native plug-in's settings do.
-    fn add_block_fed_to_master(cmd_tx: &mut crate::insert_chain::InsertCommandSender, start: f64) {
+    /// as a VST3, CLAP or native plug-in's settings do. Says which thread
+    /// it was asked for its state on, and let go on.
+    fn add_block_fed_to_master(
+        cmd_tx: &mut crate::insert_chain::InsertCommandSender,
+        start: f64,
+    ) -> Seen {
+        add_block_fed(cmd_tx, "master", "shape", start)
+    }
+
+    /// The same plug-in, on any track and slot.
+    fn add_block_fed(
+        cmd_tx: &mut crate::insert_chain::InsertCommandSender,
+        track_id: &str,
+        slot_id: &str,
+        start: f64,
+    ) -> Seen {
+        let seen = Seen::default();
         use crate::insert_chain::{InsertCommand, LiveSlot};
         use hardwave_plugin_host::types::{
             HostedPlugin, PluginCategory, PluginDescriptor, PluginFormat,
@@ -7952,12 +8280,13 @@ mod rt_safety_tests {
             },
             waiting: None,
             taken: Arc::new(std::sync::atomic::AtomicU64::new(start.to_bits())),
+            seen: Arc::clone(&seen),
         });
         let slot = LiveSlot {
             sleep: Default::default(),
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             levels: Default::default(),
-            slot_id: "shape".into(),
+            slot_id: slot_id.into(),
             plugin,
             enabled: true,
             wet: 1.0,
@@ -7966,11 +8295,12 @@ mod rt_safety_tests {
         };
         cmd_tx
             .try_send(InsertCommand::Add {
-                track_id: "master".into(),
+                track_id: track_id.into(),
                 slot,
             })
             .ok()
             .unwrap();
+        seen
     }
 
     fn set_master_shape(value: f64) -> crate::insert_chain::InsertCommand {
@@ -7988,6 +8318,19 @@ mod rt_safety_tests {
         f64::from_le_bytes(entry.chunk[..8].try_into().unwrap())
     }
 
+    /// As `start` does for the live callback: a farewell of its own, which
+    /// the engine keeps too.
+    fn live_farewell(engine: &mut DawEngine, cb: &mut EngineCallback) -> Arc<PluginStateFarewell> {
+        let farewell = Arc::new(PluginStateFarewell::armed());
+        cb.plugin_farewell = Some(Arc::clone(&farewell));
+        cb.plugins_song = engine
+            .handed_back
+            .song
+            .load(std::sync::atomic::Ordering::Acquire);
+        engine.plugin_farewell = Some(Arc::clone(&farewell));
+        farewell
+    }
+
     /// The sound card went away (a remote-desktop disconnect, an interface
     /// unplugged, a driver reset). The stream lets the callback go on its
     /// own thread, the engine cannot ask the audio thread for anything, and
@@ -8001,9 +8344,7 @@ mod rt_safety_tests {
             .lock()
             .set_plugin_state("shape", "vst3", 0.333f64.to_le_bytes().to_vec());
         let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
-        // As `start` does for the live callback.
-        engine.plugin_farewell.arm();
-        cb.plugin_farewell = Some(Arc::clone(&engine.plugin_farewell));
+        live_farewell(&mut engine, &mut cb);
         add_block_fed_to_master(&mut cmd_tx, 0.333);
         let mut out = vec![0.0f32; 512];
         cb.process(&mut out, 256, 2);
@@ -8015,7 +8356,7 @@ mod rt_safety_tests {
         cb.process(&mut out, 0, 2);
 
         std::thread::spawn(move || drop(cb)).join().unwrap();
-        engine.stop_for_restart_reading(false);
+        engine.stop_for_restart();
 
         assert_eq!(
             saved_shape(&engine),
@@ -8023,21 +8364,135 @@ mod rt_safety_tests {
             "the restart loads the knob as it was"
         );
         assert!(
-            engine.plugin_farewell.disarm_and_take().is_none(),
+            engine.plugin_farewell.is_none() && engine.handed_back.waiting.lock().is_empty(),
             "nothing is left over for a later restart"
         );
     }
 
+    /// VST3 and CLAP allow a plug-in's state to be read on the main thread
+    /// only, and some plug-ins crash or hang when asked anywhere else. The
+    /// callback was let go on the audio thread (WASAPI) or on the thread
+    /// stopping the stream (ASIO, CoreAudio), and asked every plug-in for
+    /// its state right there. Now it only hands the plug-ins back, and they
+    /// are read, and let go, on the main thread. This is the path the
+    /// device going away and `dev_force_device_error` take: the engine's
+    /// health check restarts audio (here it cannot start a stream: no
+    /// device has its mix on outputs 1000 and up).
+    #[test]
+    fn the_plug_ins_a_lost_device_hands_back_are_read_on_the_main_thread_only() {
+        let mut engine = DawEngine::new();
+        engine.set_channel_offsets(0, 1000);
+        let jobs: Arc<Mutex<Vec<MainThreadJob>>> = Arc::default();
+        {
+            let jobs = Arc::clone(&jobs);
+            engine
+                .set_main_thread_runner(Arc::new(move |job: MainThreadJob| jobs.lock().push(job)));
+        }
+        engine
+            .project
+            .lock()
+            .set_plugin_state("shape", "vst3", 0.333f64.to_le_bytes().to_vec());
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(&mut engine, &mut cb);
+        let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
+
+        // The stream lets the callback go on its own thread.
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        // The health check, on a thread of its own in the app.
+        engine.audio_device_manager().inject_stream_error();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let _ = engine.poll_audio_health();
+            });
+        });
+        assert!(
+            seen.lock().is_empty(),
+            "the plug-in was not asked for its state, nor let go, off the main thread"
+        );
+        assert_eq!(saved_shape(&engine), 0.333, "not read yet");
+
+        // The main thread's turn.
+        let main = std::thread::current().id();
+        for job in std::mem::take(&mut *jobs.lock()) {
+            job();
+        }
+        assert_eq!(
+            saved_shape(&engine),
+            0.8,
+            "the restart loads the knob as it was"
+        );
+        assert_eq!(
+            *seen.lock(),
+            vec![("state read", main), ("let go", main)],
+            "read and let go on the main thread"
+        );
+        assert_eq!(
+            engine.handed_back_plugins().keep_settings(),
+            0,
+            "read once: the app reading again before it loads the plug-ins finds nothing"
+        );
+    }
+
+    /// The hand-back runs on the audio thread on WASAPI: it moves the
+    /// plug-ins out without allocating anything, and asks no plug-in for
+    /// anything. Here with commands still queued, as when the device goes
+    /// between two blocks: a knob turn, handed to the plug-in as a block
+    /// would, and a plug-in for a track with no node yet, which is parked.
+    #[test]
+    fn handing_the_plug_ins_back_allocates_nothing() {
+        let mut engine = DawEngine::new();
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        let farewell = live_farewell(&mut engine, &mut cb);
+        let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
+        let parked = add_block_fed(&mut cmd_tx, "no-node-yet", "waiting", 0.5);
+
+        let (allocs, frees) = super::graph_swap_tests::counted(|| cb.hand_back_plugins(&farewell));
+        assert_eq!(allocs, 0, "allocations");
+        // The knob command's own two names (its track and slot) are freed
+        // once it is applied, as by every block that applies one; the
+        // hand-back itself frees nothing.
+        assert_eq!(frees, 2, "frees");
+        assert!(seen.lock().is_empty(), "nothing asked of the plug-in");
+        assert!(parked.lock().is_empty(), "nor of the parked one");
+
+        drop(cb);
+        engine.stop_for_restart();
+        assert_eq!(saved_shape(&engine), 0.8);
+    }
+
+    /// A plug-in added to a track whose node the next graph has not made
+    /// yet waits, parked, for that graph. When the stream let the callback
+    /// go in that moment, the parked plug-in went with it, on the stream's
+    /// thread. It is handed back with the rest, and let go on the main
+    /// thread.
+    #[test]
+    fn a_plug_in_parked_for_its_track_is_handed_back_too() {
+        let mut engine = DawEngine::new();
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(&mut engine, &mut cb);
+        let parked = add_block_fed(&mut cmd_tx, "no-node-yet", "waiting", 0.5);
+        // The device goes before a block runs: the hand-back parks it.
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+        let here = std::thread::current().id();
+        assert_eq!(*parked.lock(), vec![("let go", here)]);
+    }
+
     /// The same when the stream reports its error but has not let the
     /// callback go yet (the engine's own check, a host that keeps the
-    /// stream object): stopping it drops the callback, which reads its
-    /// plug-ins then.
+    /// stream object): stopping it drops the callback, which hands its
+    /// plug-ins back then.
     #[test]
     fn a_failed_stream_still_running_keeps_the_plug_in_settings() {
         let mut engine = DawEngine::new();
         let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
-        engine.plugin_farewell.arm();
-        cb.plugin_farewell = Some(Arc::clone(&engine.plugin_farewell));
+        live_farewell(&mut engine, &mut cb);
         add_block_fed_to_master(&mut cmd_tx, 0.333);
         cmd_tx.try_send(set_master_shape(0.61)).ok().unwrap();
         let mut out = vec![0.0f32; 512];
@@ -8049,32 +8504,389 @@ mod rt_safety_tests {
             drop(cb);
         });
         stream.join().unwrap();
-        engine.stop_for_restart_reading(false);
+        engine.stop_for_restart();
         assert_eq!(saved_shape(&engine), 0.61);
     }
 
-    /// A plain stop reloads nothing, so the callback does not read its
-    /// plug-ins on the way out; nor does a callback the engine never
-    /// handed the farewell (an export's).
-    #[test]
-    fn a_plain_stop_or_an_export_callback_reads_nothing() {
-        let mut engine = DawEngine::new();
+    /// A knob turned to 0.8 since the song was saved at 0.333, on the master's
+    /// plug-in of a live callback; and which threads that plug-in was asked
+    /// for its state on and let go on.
+    fn live_callback_with_a_turned_knob(engine: &mut DawEngine) -> (EngineCallback, Seen) {
+        engine
+            .project
+            .lock()
+            .set_plugin_state("shape", "vst3", 0.333f64.to_le_bytes().to_vec());
         let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
-        engine.plugin_farewell.arm();
-        cb.plugin_farewell = Some(Arc::clone(&engine.plugin_farewell));
-        add_block_fed_to_master(&mut cmd_tx, 0.333);
+        live_farewell(engine, &mut cb);
+        // As `start` wires it: the engine's settings requests reach it.
+        cb.pending_state_snapshot = Arc::clone(&engine.pending_state_snapshot);
+        let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
+        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
         let mut out = vec![0.0f32; 512];
         cb.process(&mut out, 256, 2);
-        engine.stop();
-        drop(cb);
-        assert!(engine.plugin_farewell.states.lock().is_none());
+        (cb, seen)
+    }
 
-        let (mut export, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
-        engine.plugin_farewell.arm();
+    /// On WASAPI a device that goes away ends the stream's thread on its own,
+    /// and the callback is let go a moment later. A stop in that moment
+    /// cannot reach the thread and returns at once. The engine took that for
+    /// "nothing came back" and turned the hand-back down, so the plug-ins
+    /// went on the stream's thread with every knob turned since the save.
+    #[test]
+    fn a_callback_let_go_just_after_the_stop_is_waited_for() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let stream = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        stream.join().unwrap();
+
+        assert_eq!(saved_shape(&engine), 0.8, "the knob as it was");
+        let here = std::thread::current().id();
+        assert_eq!(
+            *seen.lock(),
+            vec![("state read", here), ("let go", here)],
+            "read and let go off the stream's thread"
+        );
+    }
+
+    /// A callback let go later than the engine waits for still hands its
+    /// plug-ins back, and they are let go on the main thread at its next
+    /// read, never on the stream's thread. Too late for the song: the
+    /// restart has loaded the plug-ins from it by then.
+    #[test]
+    fn a_callback_let_go_after_the_wait_is_let_go_on_the_main_thread_later() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        // The stream lets the callback go only once the engine has given up.
+        let (gave_up, given_up) = std::sync::mpsc::channel::<()>();
+        let stream = std::thread::spawn(move || {
+            given_up.recv().unwrap();
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        gave_up.send(()).unwrap();
+        stream.join().unwrap();
+        assert!(seen.lock().is_empty(), "not let go on the stream's thread");
+
+        let main = std::thread::current().id();
+        engine.handed_back_plugins().keep_settings();
+        assert_eq!(*seen.lock(), vec![("let go", main)]);
+        assert_eq!(saved_shape(&engine), 0.333, "too late for the song");
+        engine.handed_back_plugins().keep_settings();
+        assert_eq!(seen.lock().len(), 1, "once");
+    }
+
+    /// Those late plug-ins waited for the next stop, start or song change
+    /// to be let go. The engine's health check, which the app runs on its
+    /// meter tick, now has the main thread let them go once they have come,
+    /// with one read posted however many ticks pass before it runs.
+    #[test]
+    fn late_plug_ins_are_let_go_on_the_main_thread_after_the_next_health_check() {
+        let mut engine = DawEngine::new();
+        let jobs: Arc<Mutex<Vec<MainThreadJob>>> = Arc::default();
+        {
+            let jobs = Arc::clone(&jobs);
+            engine
+                .set_main_thread_runner(Arc::new(move |job: MainThreadJob| jobs.lock().push(job)));
+        }
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let (gave_up, given_up) = std::sync::mpsc::channel::<()>();
+        let stream = std::thread::spawn(move || {
+            given_up.recv().unwrap();
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        gave_up.send(()).unwrap();
+        stream.join().unwrap();
+
+        let _ = engine.poll_audio_health();
+        let _ = engine.poll_audio_health();
+        let on_main = std::mem::take(&mut *jobs.lock());
+        assert_eq!(on_main.len(), 1, "one read posted");
+        for job in on_main {
+            job();
+        }
+        let main = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("let go", main)]);
+    }
+
+    /// When the device goes away the stream lets the callback go on its own
+    /// thread, which can be just as the engine stops it. The engine waits
+    /// for the plug-ins being handed back rather than lose them, and a
+    /// callback hands them back once at most.
+    #[test]
+    fn a_hand_back_under_way_as_the_engine_stops_is_waited_for() {
+        let farewell = Arc::new(PluginStateFarewell::armed());
+        assert!(farewell.begin_hand_back());
+        assert!(!farewell.begin_hand_back(), "once");
+        let device = {
+            let farewell = Arc::clone(&farewell);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                farewell.finish_hand_back(HandedBack {
+                    song: 0,
+                    graph: AudioGraph::new(0),
+                    track_id_to_node: HashMap::new(),
+                    parked_chains: HashMap::new(),
+                    parked_commands: Vec::new(),
+                });
+            })
+        };
+        assert!(
+            matches!(farewell.take_after_stop(), Ok(Some(_))),
+            "the plug-ins came"
+        );
+        device.join().unwrap();
+        assert!(!farewell.begin_hand_back(), "nothing more after the stop");
+        assert!(matches!(farewell.take_after_stop(), Ok(None)));
+    }
+
+    /// Switching the driver (WASAPI to ASIO, say) stops the stream in the
+    /// device manager, not through the engine's restart, and starts again.
+    /// The callback handed its plug-ins back, but nothing took them: every
+    /// knob turned since the last save went back to its saved value.
+    #[test]
+    fn a_driver_switch_keeps_the_plug_in_settings_turned_since_the_last_save() {
+        let mut engine = DawEngine::new();
+        // No stream starts here: no device has its mix on outputs 1000 up.
+        engine.set_channel_offsets(0, 1000);
+        engine
+            .project
+            .lock()
+            .set_plugin_state("shape", "vst3", 0.333f64.to_le_bytes().to_vec());
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(&mut engine, &mut cb);
         add_block_fed_to_master(&mut cmd_tx, 0.333);
+        cmd_tx.try_send(set_master_shape(0.55)).ok().unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+
+        // What the device manager's driver switch does to the live stream.
+        let host = engine.audio_host_name();
+        engine.set_audio_host(&host).unwrap();
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        // And what `set_audio_host` does next, with audio on.
+        let _ = engine.start();
+
+        assert_eq!(
+            saved_shape(&engine),
+            0.55,
+            "the plug-ins load again with the knob as it was"
+        );
+    }
+
+    /// A song opened (on a worker thread, in the app) while the plug-ins a
+    /// stopped stream handed back still waited for the main thread: their
+    /// settings went into the song just opened, over its own. Here its
+    /// master's plug-in has the same slot as the old song's. The old
+    /// plug-ins are only let go now.
+    #[test]
+    fn a_song_opened_before_the_old_plug_ins_are_read_keeps_its_own_settings() {
+        let mut engine = DawEngine::new();
+        let jobs: Arc<Mutex<Vec<MainThreadJob>>> = Arc::default();
+        {
+            let jobs = Arc::clone(&jobs);
+            engine
+                .set_main_thread_runner(Arc::new(move |job: MainThreadJob| jobs.lock().push(job)));
+        }
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+
+        let mut next = Project::default();
+        next.set_plugin_state("shape", "vst3", 0.1f64.to_le_bytes().to_vec());
+        engine.replace_song(next);
+        // The main thread's turn.
+        for job in std::mem::take(&mut *jobs.lock()) {
+            job();
+        }
+
+        assert_eq!(saved_shape(&engine), 0.1, "the new song keeps its own");
+        let here = std::thread::current().id();
+        assert_eq!(
+            *seen.lock(),
+            vec![("let go", here)],
+            "not read, let go on the main thread"
+        );
+    }
+
+    /// A song swapped in while the old song's plug-ins still play: the new
+    /// song's `ClearAll` has not reached the audio thread yet when the stream
+    /// lets the callback go. The plug-ins it hands back are the old song's,
+    /// but were counted as the new song's, so their settings went into it.
+    #[test]
+    fn plug_ins_handed_back_before_the_new_songs_clear_belong_to_the_old_song() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let mut next = Project::default();
+        next.set_plugin_state("shape", "vst3", 0.1f64.to_le_bytes().to_vec());
+        engine.replace_song(next);
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+
+        assert_eq!(saved_shape(&engine), 0.1, "the new song keeps its own");
+        let here = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("let go", here)], "only let go");
+    }
+
+    /// Once the new song's `ClearAll` has landed, the plug-ins after it are
+    /// the new song's, and their settings go into it.
+    #[test]
+    fn plug_ins_added_after_the_new_songs_clear_belong_to_the_new_song() {
+        let mut engine = DawEngine::new();
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(&mut engine, &mut cb);
+        engine.replace_song(Project::default());
+        let song = engine
+            .handed_back
+            .song
+            .load(std::sync::atomic::Ordering::Acquire);
+        cmd_tx
+            .try_send(crate::insert_chain::InsertCommand::ClearAll { song })
+            .ok()
+            .unwrap();
+        let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
+        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+
+        assert_eq!(saved_shape(&engine), 0.8);
+        let here = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("state read", here), ("let go", here)]);
+    }
+
+    /// The app's side of a restart, without the app. The engine has its own
+    /// main-thread job read what the stopped stream handed back; the app,
+    /// once it sees the start, posts the reload of the song's plug-ins,
+    /// which reads the handed-back plug-ins first in the same job. Whichever
+    /// job the main thread runs first, the reload finds the knobs as they
+    /// were, and each plug-in is read once.
+    #[test]
+    fn the_reload_after_a_restart_has_the_knobs_whichever_main_thread_job_runs_first() {
+        for reload_first in [false, true] {
+            let mut engine = DawEngine::new();
+            let jobs: Arc<Mutex<Vec<MainThreadJob>>> = Arc::default();
+            {
+                let jobs = Arc::clone(&jobs);
+                engine.set_main_thread_runner(Arc::new(move |job: MainThreadJob| {
+                    jobs.lock().push(job)
+                }));
+            }
+            let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+            // The health check restarts audio on the meter thread while the
+            // stream's thread lets the callback go.
+            std::thread::scope(|s| {
+                s.spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    drop(cb);
+                });
+                s.spawn(|| engine.stop_for_restart());
+            });
+            let mut on_main = std::mem::take(&mut *jobs.lock());
+            assert_eq!(on_main.len(), 1, "the engine's own read is posted");
+
+            // What the app posts: the handed-back plug-ins, then the reload,
+            // which loads each plug-in with the song's settings.
+            let handed_back = engine.handed_back_plugins();
+            let song = Arc::clone(&engine.project);
+            let loaded = Arc::new(Mutex::new(None));
+            let reload: MainThreadJob = {
+                let loaded = Arc::clone(&loaded);
+                Box::new(move || {
+                    handed_back.keep_settings();
+                    *loaded.lock() = song
+                        .lock()
+                        .plugin_state("shape")
+                        .map(|entry| f64::from_le_bytes(entry.chunk[..8].try_into().unwrap()));
+                })
+            };
+            if reload_first {
+                on_main.insert(0, reload);
+            } else {
+                on_main.push(reload);
+            }
+            for job in on_main {
+                job();
+            }
+
+            assert_eq!(*loaded.lock(), Some(0.8), "reload first: {reload_first}");
+            let reads = seen
+                .lock()
+                .iter()
+                .filter(|(what, _)| *what == "state read")
+                .count();
+            assert_eq!(reads, 1, "reload first: {reload_first}");
+        }
+    }
+
+    /// A buffer, rate, device or output change with the stream playing asked
+    /// the audio thread for every plug-in's settings, which it read right
+    /// there, and the plug-ins were then let go with the callback on the
+    /// stream's thread. A plug-in that needs the main thread to save its
+    /// state hung the app: the main thread waited on the audio thread, which
+    /// waited on the main thread. Now the stream is stopped and hands its
+    /// plug-ins back, as when the device goes away.
+    #[test]
+    fn a_restart_with_the_stream_playing_reads_the_plug_ins_off_the_audio_thread() {
+        let mut engine = DawEngine::new();
+        let (mut cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        engine.stream_in_test = true;
+        // The stream's thread: blocks until the stop lets the callback go.
+        let stream = std::thread::spawn(move || {
+            let mut out = vec![0.0f32; 512];
+            for _ in 0..30 {
+                cb.process(&mut out, 256, 2);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        stream.join().unwrap();
+
+        assert_eq!(saved_shape(&engine), 0.8, "the knob as it was");
+        let here = std::thread::current().id();
+        assert_eq!(
+            *seen.lock(),
+            vec![("state read", here), ("let go", here)],
+            "read and let go off the stream's thread"
+        );
+    }
+
+    /// A plain stop let the plug-ins go with the callback on the stream's
+    /// thread. They are handed back as on a restart: let go on the main
+    /// thread, their settings kept in the song for the next start.
+    #[test]
+    fn a_plain_stop_lets_the_plug_ins_go_off_the_audio_thread() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let stream = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(cb);
+        });
+        engine.stop();
+        stream.join().unwrap();
+
+        assert_eq!(saved_shape(&engine), 0.8, "the knob as it was");
+        let here = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("state read", here), ("let go", here)]);
+    }
+
+    /// A callback the engine never gave a farewell (an export's) hands
+    /// nothing back.
+    #[test]
+    fn an_export_callback_hands_nothing_back() {
+        let engine = DawEngine::new();
+        let (mut export, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        add_block_fed_to_master(&mut cmd_tx, 0.333);
+        let mut out = vec![0.0f32; 512];
         export.process(&mut out, 256, 2);
         drop(export);
-        assert!(engine.plugin_farewell.states.lock().is_none());
+        assert!(engine.handed_back.waiting.lock().is_empty());
     }
 
     #[test]
@@ -8131,7 +8943,10 @@ mod rt_safety_tests {
 
         // Opening the new song: clear, swap the song, rebuild, then the new
         // song's own plug-in for the same track id.
-        cmd_tx.try_send(InsertCommand::ClearAll).ok().unwrap();
+        cmd_tx
+            .try_send(InsertCommand::ClearAll { song: 1 })
+            .ok()
+            .unwrap();
         *project_arc.lock() = with_plugin("new-synth");
         cb.needs_rebuild = true;
         let (new, _) = make_gain_slot("new-synth", 1.0, true);
