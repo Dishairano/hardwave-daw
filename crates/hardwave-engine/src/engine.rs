@@ -959,6 +959,9 @@ pub struct PluginStateFarewell {
     /// once they are in `left`.
     state: std::sync::atomic::AtomicU8,
     left: Mutex<Option<HandedBack>>,
+    /// Which song is open (see [`DawEngine::replace_song`]), for the
+    /// plug-ins to say which song they came from.
+    song: Arc<std::sync::atomic::AtomicU64>,
 }
 
 const FAREWELL_IDLE: u8 = 0;
@@ -966,10 +969,11 @@ const FAREWELL_ARMED: u8 = 1;
 const FAREWELL_HANDING: u8 = 2;
 
 impl PluginStateFarewell {
-    fn armed() -> Self {
+    fn armed(song: Arc<std::sync::atomic::AtomicU64>) -> Self {
         Self {
             state: std::sync::atomic::AtomicU8::new(FAREWELL_ARMED),
             left: Mutex::new(None),
+            song,
         }
     }
 
@@ -1033,6 +1037,9 @@ const FAREWELL_WAIT: std::time::Duration = std::time::Duration::from_millis(250)
 /// (a plug-in added to it waits there). Those are only let go: they never
 /// played, and hold what the song already has.
 struct HandedBack {
+    /// The song open when they were handed back, which they belong to: a
+    /// new song takes the old one's plug-ins off before it brings its own.
+    song: u64,
     graph: AudioGraph,
     track_id_to_node: HashMap<String, crate::graph::NodeId>,
     parked_chains: HashMap<String, crate::insert_chain::InsertChain>,
@@ -1051,11 +1058,16 @@ pub struct HandedBackPlugins {
     /// callback on the stream's thread.
     late: Arc<Mutex<Vec<Arc<PluginStateFarewell>>>>,
     project: Arc<Mutex<Project>>,
+    /// Which song is open, counted up each time another song replaces it
+    /// (see [`DawEngine::replace_song`]), under the song's own lock.
+    song: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl HandedBackPlugins {
     /// Read the settings of every plug-in handed back into the song, the
-    /// oldest stream's first, and let the plug-ins go. Main thread only: it
+    /// oldest stream's first, and let the plug-ins go. Plug-ins of a song
+    /// that another has replaced since are only let go: their settings
+    /// belong to that song, not this one. Main thread only: it
     /// asks each plug-in for its state, and a plug-in is let go on the
     /// thread it was made on. Returns how many settings it kept.
     ///
@@ -1075,8 +1087,10 @@ impl HandedBackPlugins {
         drop(too_late);
         let handed_back = std::mem::take(&mut *self.waiting.lock());
         let mut kept = 0;
+        let open_song = || self.song.load(std::sync::atomic::Ordering::Acquire);
         for plugins in handed_back {
             let HandedBack {
+                song,
                 mut graph,
                 track_id_to_node,
                 parked_chains,
@@ -1084,9 +1098,16 @@ impl HandedBackPlugins {
             } = plugins;
             // Never played: nothing to read, only to let go, here.
             drop(parked_commands);
+            if song != open_song() {
+                continue;
+            }
             let states = plugin_states_in(&mut graph, &track_id_to_node, &parked_chains);
-            kept += states.len();
-            keep_live_states_in(&mut self.project.lock(), states);
+            // Under the song's lock, which another song replaces it under.
+            let mut project = self.project.lock();
+            if song == open_song() {
+                kept += states.len();
+                keep_live_states_in(&mut project, states);
+            }
         }
         if kept > 0 {
             log::info!(
@@ -1404,6 +1425,7 @@ impl DawEngine {
                 waiting: Arc::new(Mutex::new(Vec::new())),
                 late: Arc::new(Mutex::new(Vec::new())),
                 project: Arc::clone(&project),
+                song: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             },
             project,
             plugin_scanner: Arc::new(Mutex::new(PluginScanner::new())),
@@ -2102,7 +2124,9 @@ impl DawEngine {
         callback.check_voice = crate::check_voice::CheckVoice::new(self.check_voice.clone());
         // Only the live callback hands its plug-ins back when it is let go:
         // the stream can lose its device at any moment.
-        let farewell = Arc::new(PluginStateFarewell::armed());
+        let farewell = Arc::new(PluginStateFarewell::armed(Arc::clone(
+            &self.handed_back.song,
+        )));
         callback.plugin_farewell = Some(Arc::clone(&farewell));
         self.plugin_farewell = Some(farewell);
         // From here on graphs are built on a thread of their own and only
@@ -2116,6 +2140,18 @@ impl DawEngine {
         }
         self.starts += 1;
         Ok(())
+    }
+
+    /// Make `song` the open song: a new one, one opened, or a room's. The
+    /// song is counted as another under its own lock, so plug-ins a stopped
+    /// stream handed back for the old song are never read into this one
+    /// (see [`HandedBackPlugins::keep_settings`]).
+    pub fn replace_song(&self, song: Project) {
+        let mut project = self.project.lock();
+        *project = song;
+        self.handed_back
+            .song
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
     /// Have jobs that must run on the app's main thread run there; see
@@ -4933,6 +4969,7 @@ impl EngineCallback {
         self.dispatch_insert_commands();
         self.flush_plugin_parameters();
         farewell.finish_hand_back(HandedBack {
+            song: farewell.song.load(std::sync::atomic::Ordering::Acquire),
             graph: std::mem::replace(&mut self.graph, AudioGraph::new(0)),
             track_id_to_node: std::mem::take(&mut self.track_id_to_node),
             parked_chains: std::mem::take(&mut self.parked_chains),
@@ -8240,7 +8277,9 @@ mod rt_safety_tests {
     /// As `start` does for the live callback: a farewell of its own, which
     /// the engine keeps too.
     fn live_farewell(engine: &mut DawEngine, cb: &mut EngineCallback) -> Arc<PluginStateFarewell> {
-        let farewell = Arc::new(PluginStateFarewell::armed());
+        let farewell = Arc::new(PluginStateFarewell::armed(Arc::clone(
+            &engine.handed_back.song,
+        )));
         cb.plugin_farewell = Some(Arc::clone(&farewell));
         engine.plugin_farewell = Some(Arc::clone(&farewell));
         farewell
@@ -8497,7 +8536,7 @@ mod rt_safety_tests {
     /// callback hands them back once at most.
     #[test]
     fn a_hand_back_under_way_as_the_engine_stops_is_waited_for() {
-        let farewell = Arc::new(PluginStateFarewell::armed());
+        let farewell = Arc::new(PluginStateFarewell::armed(Arc::default()));
         assert!(farewell.begin_hand_back());
         assert!(!farewell.begin_hand_back(), "once");
         let device = {
@@ -8505,6 +8544,7 @@ mod rt_safety_tests {
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 farewell.finish_hand_back(HandedBack {
+                    song: 0,
                     graph: AudioGraph::new(0),
                     track_id_to_node: HashMap::new(),
                     parked_chains: HashMap::new(),
@@ -8552,6 +8592,41 @@ mod rt_safety_tests {
             saved_shape(&engine),
             0.55,
             "the plug-ins load again with the knob as it was"
+        );
+    }
+
+    /// A song opened (on a worker thread, in the app) while the plug-ins a
+    /// stopped stream handed back still waited for the main thread: their
+    /// settings went into the song just opened, over its own. Here its
+    /// master's plug-in has the same slot as the old song's. The old
+    /// plug-ins are only let go now.
+    #[test]
+    fn a_song_opened_before_the_old_plug_ins_are_read_keeps_its_own_settings() {
+        let mut engine = DawEngine::new();
+        let jobs: Arc<Mutex<Vec<MainThreadJob>>> = Arc::default();
+        {
+            let jobs = Arc::clone(&jobs);
+            engine
+                .set_main_thread_runner(Arc::new(move |job: MainThreadJob| jobs.lock().push(job)));
+        }
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+
+        let mut next = Project::default();
+        next.set_plugin_state("shape", "vst3", 0.1f64.to_le_bytes().to_vec());
+        engine.replace_song(next);
+        // The main thread's turn.
+        for job in std::mem::take(&mut *jobs.lock()) {
+            job();
+        }
+
+        assert_eq!(saved_shape(&engine), 0.1, "the new song keeps its own");
+        let here = std::thread::current().id();
+        assert_eq!(
+            *seen.lock(),
+            vec![("let go", here)],
+            "not read, let go on the main thread"
         );
     }
 
