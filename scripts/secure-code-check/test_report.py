@@ -26,7 +26,7 @@ import page  # noqa: E402
 import report  # noqa: E402
 
 GREEN = {"result": "success", "outputs": {}}
-PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBmE0/eGoq8vVqvuL1UL3OYJ4CYjRNj2Bl38+8ClQpi+"
+PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIT+m3BVUiJBA9lAoQXXvrL2j8+jRmwIJqQPM+PHieeQ"
 
 CONFIG = """
 [product]

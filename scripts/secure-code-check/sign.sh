@@ -4,7 +4,8 @@
 #   sign.sh check          the key is there and is the one whose public
 #                          half is in the product's security/secure-code-check/
 #   sign.sh sign FILE...   writes FILE.sig for each, then verifies it
-#                          against allowed_signers, as a buyer would
+#                          against allowed_signers (and revoked_signers,
+#                          when there is one), as a buyer would
 #
 # The private key comes from the SECURE_CODE_CHECK_SIGNING_KEY secret (an
 # OpenSSH Ed25519 private key, no passphrase). It is written to a 0600
@@ -40,6 +41,19 @@ if [ "$(echo "$derived" | awk '{print $1" "$2}')" != "$expected" ]; then
   exit 1
 fi
 
+# Keys we no longer sign with (one public key per line, as ssh-keygen -r
+# reads it). The build refuses to sign with one of them, and checks its own
+# signature against the list, as a buyer who has it would.
+revoked="$keys/revoked_signers"
+revoke_args=()
+if [ -f "$revoked" ]; then
+  if awk -v k="$expected" '!/^[[:space:]]*#/ && ($1 " " $2) == k { hit = 1 } END { exit !hit }' "$revoked"; then
+    echo "::error::The signing key is listed in security/secure-code-check/revoked_signers. Sign with the current key."
+    exit 1
+  fi
+  revoke_args=(-r "$revoked")
+fi
+
 case "${1:-}" in
   check)
     echo "Signing key present and matches $(ssh-keygen -lf "$keys/signing_key.pub" | awk '{print $2}')"
@@ -51,7 +65,7 @@ case "${1:-}" in
       rm -f "$file.sig"
       ssh-keygen -q -Y sign -f "$key_file" -n "$namespace" "$file"
       ssh-keygen -Y verify -f "$keys/allowed_signers" -I "$identity" -n "$namespace" \
-        -s "$file.sig" < "$file"
+        ${revoke_args[@]+"${revoke_args[@]}"} -s "$file.sig" < "$file"
     done
     ;;
   *)
