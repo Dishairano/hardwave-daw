@@ -1,0 +1,5 @@
+# Shell and Python scripts run on Linux, macOS and the Windows release
+# runners (Git Bash). Always LF, whatever core.autocrlf says: a CRLF
+# checkout breaks bash on the Windows runner.
+*.sh text eol=lf
+*.py text eol=lf
