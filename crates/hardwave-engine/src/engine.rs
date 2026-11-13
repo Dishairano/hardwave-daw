@@ -1011,31 +1011,33 @@ impl PluginStateFarewell {
         );
     }
 
-    /// The engine's side, once the stream is stopped: no hand-back from
-    /// here on, and the plug-ins if the callback handed them back. When the
-    /// device went away the stream may be letting the callback go on its own
-    /// thread at this very moment: that only moves the plug-ins, so it is
-    /// waited for, a moment at most.
-    fn settle_and_take(&self) -> Option<HandedBack> {
-        use std::sync::atomic::Ordering;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
-        while let Err(FAREWELL_HANDING) = self.state.compare_exchange(
-            FAREWELL_ARMED,
-            FAREWELL_IDLE,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
+    /// Whether the hand-back is over, or was turned down.
+    fn settled(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::Acquire) == FAREWELL_IDLE
+    }
+
+    /// The engine's side, once it has stopped the stream: the plug-ins, if
+    /// the callback handed them back. The stream can let the callback go a
+    /// moment after the stop returns (on WASAPI, when the device went away
+    /// and the stream's thread was already ending, the stop cannot reach
+    /// it), or be letting it go right now: either is waited for, a moment
+    /// at most, since the callback only moves its plug-ins out. `Err` when
+    /// it has not let the callback go by then.
+    fn take_after_stop(&self) -> Result<Option<HandedBack>, ()> {
+        let deadline = std::time::Instant::now() + FAREWELL_WAIT;
+        while !self.settled() {
             if std::time::Instant::now() >= deadline {
-                log::warn!(
-                    "audio restart: the stopped stream did not hand its plug-ins back in time"
-                );
-                return None;
+                return Err(());
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        self.left.lock().take()
+        Ok(self.left.lock().take())
     }
 }
+
+/// How long the engine waits, after stopping a stream, for its callback to
+/// be let go and hand the plug-ins back.
+const FAREWELL_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// The plug-ins a live callback handed back as its stream let it go: its
 /// graph (every track's insert chain and the master's are in there), the
@@ -1053,6 +1055,11 @@ struct HandedBack {
 #[derive(Clone)]
 pub struct HandedBackPlugins {
     waiting: Arc<Mutex<Vec<HandedBack>>>,
+    /// Farewells of stopped streams that had not let their callback go when
+    /// the engine stopped waiting. Kept, so that the plug-ins a callback
+    /// hands back late are let go on the main thread too, not freed with the
+    /// callback on the stream's thread.
+    late: Arc<Mutex<Vec<Arc<PluginStateFarewell>>>>,
     project: Arc<Mutex<Project>>,
 }
 
@@ -1061,7 +1068,21 @@ impl HandedBackPlugins {
     /// oldest stream's first, and let the plug-ins go. Main thread only: it
     /// asks each plug-in for its state, and a plug-in is let go on the
     /// thread it was made on. Returns how many settings it kept.
+    ///
+    /// Plug-ins a stream handed back after the engine stopped waiting are
+    /// let go here as well, without reading them: the restart has loaded
+    /// the plug-ins from the song by then, and settings that old could
+    /// undo newer ones.
     pub fn keep_settings(&self) -> usize {
+        let mut too_late = Vec::new();
+        self.late.lock().retain(|farewell| {
+            if !farewell.settled() {
+                return true;
+            }
+            too_late.extend(farewell.left.lock().take());
+            false
+        });
+        drop(too_late);
         let handed_back = std::mem::take(&mut *self.waiting.lock());
         let mut kept = 0;
         for mut plugins in handed_back {
@@ -1383,6 +1404,7 @@ impl DawEngine {
             transport: TransportState::default(),
             handed_back: HandedBackPlugins {
                 waiting: Arc::new(Mutex::new(Vec::new())),
+                late: Arc::new(Mutex::new(Vec::new())),
                 project: Arc::clone(&project),
             },
             project,
@@ -1981,9 +2003,12 @@ impl DawEngine {
         // settings go into the song before this start's plug-ins are loaded
         // from it.
         if let Some(farewell) = self.plugin_farewell.take() {
-            if let Some(plugins) = farewell.settle_and_take() {
-                self.keep_handed_back(plugins);
-            }
+            self.take_hand_back(farewell);
+        }
+        // Plug-ins a stopped stream handed back late are let go on the main
+        // thread now rather than whenever it next reads settings.
+        if !self.handed_back.late.lock().is_empty() {
+            self.read_handed_back_on_main_thread();
         }
         let transport = self.transport.clone();
         let project = Arc::clone(&self.project);
@@ -2151,11 +2176,11 @@ impl DawEngine {
             }
         }
         self.audio_device.stop();
-        // The stream has let the callback go by now (when the device went
-        // away it may have done so before this stop): what it handed back
-        // holds the plug-ins as they were at the end.
-        match farewell.and_then(|farewell| farewell.settle_and_take()) {
-            Some(plugins) => self.keep_handed_back(plugins),
+        // The stream lets the callback go by now (when the device went away
+        // it may have done so before this stop, or do so a moment after):
+        // what it hands back holds the plug-ins as they were at the end.
+        match farewell {
+            Some(farewell) => self.take_hand_back(farewell),
             None if was_running && !read => log::warn!(
                 "audio restart: plug-in settings changed since the last save could not be read"
             ),
@@ -2163,10 +2188,32 @@ impl DawEngine {
         }
     }
 
+    /// Take what a stopped stream's callback hands back, and have the main
+    /// thread read the plug-ins' settings into the song and let them go.
+    fn take_hand_back(&self, farewell: Arc<PluginStateFarewell>) {
+        match farewell.take_after_stop() {
+            Ok(Some(plugins)) => self.keep_handed_back(plugins),
+            Ok(None) => {}
+            Err(()) => {
+                log::warn!(
+                    "audio restart: the stopped stream has not let its plug-ins go yet; \
+                     settings changed since the last save are not kept"
+                );
+                self.handed_back.late.lock().push(farewell);
+            }
+        }
+    }
+
     /// Queue plug-ins a stopped stream handed back and have the main thread
     /// read their settings into the song and let them go.
     fn keep_handed_back(&self, plugins: HandedBack) {
         self.handed_back.waiting.lock().push(plugins);
+        self.read_handed_back_on_main_thread();
+    }
+
+    /// Have the main thread read what stopped streams handed back (see
+    /// [`HandedBackPlugins::keep_settings`]).
+    fn read_handed_back_on_main_thread(&self) {
         let handed_back = self.handed_back.clone();
         match &self.main_thread {
             Some(run) => run(Box::new(move || {
@@ -8363,6 +8410,72 @@ mod rt_safety_tests {
         assert_eq!(saved_shape(&engine), 0.61);
     }
 
+    /// A knob turned to 0.8 since the song was saved at 0.333, on the master's
+    /// plug-in of a live callback; and which threads that plug-in was asked
+    /// for its state on and let go on.
+    fn live_callback_with_a_turned_knob(engine: &mut DawEngine) -> (EngineCallback, Seen) {
+        engine
+            .project
+            .lock()
+            .set_plugin_state("shape", "vst3", 0.333f64.to_le_bytes().to_vec());
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(engine, &mut cb);
+        let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
+        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        (cb, seen)
+    }
+
+    /// On WASAPI a device that goes away ends the stream's thread on its own,
+    /// and the callback is let go a moment later. A stop in that moment
+    /// cannot reach the thread and returns at once. The engine took that for
+    /// "nothing came back" and turned the hand-back down, so the plug-ins
+    /// went on the stream's thread with every knob turned since the save.
+    #[test]
+    fn a_callback_let_go_just_after_the_stop_is_waited_for() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let stream = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        stream.join().unwrap();
+
+        assert_eq!(saved_shape(&engine), 0.8, "the knob as it was");
+        let here = std::thread::current().id();
+        assert_eq!(
+            *seen.lock(),
+            vec![("state read", here), ("let go", here)],
+            "read and let go off the stream's thread"
+        );
+    }
+
+    /// A callback let go later than the engine waits for still hands its
+    /// plug-ins back, and they are let go on the main thread at its next
+    /// read, never on the stream's thread. Too late for the song: the
+    /// restart has loaded the plug-ins from it by then.
+    #[test]
+    fn a_callback_let_go_after_the_wait_is_let_go_on_the_main_thread_later() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let stream = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        stream.join().unwrap();
+        assert!(seen.lock().is_empty(), "not let go on the stream's thread");
+
+        let main = std::thread::current().id();
+        engine.handed_back_plugins().keep_settings();
+        assert_eq!(*seen.lock(), vec![("let go", main)]);
+        assert_eq!(saved_shape(&engine), 0.333, "too late for the song");
+        engine.handed_back_plugins().keep_settings();
+        assert_eq!(seen.lock().len(), 1, "once");
+    }
+
     /// When the device goes away the stream lets the callback go on its own
     /// thread, which can be just as the engine stops it. The engine waits
     /// for the plug-ins being handed back rather than lose them, and a
@@ -8383,10 +8496,13 @@ mod rt_safety_tests {
                 });
             })
         };
-        assert!(farewell.settle_and_take().is_some(), "the plug-ins came");
+        assert!(
+            matches!(farewell.take_after_stop(), Ok(Some(_))),
+            "the plug-ins came"
+        );
         device.join().unwrap();
         assert!(!farewell.begin_hand_back(), "nothing more after the stop");
-        assert!(farewell.settle_and_take().is_none());
+        assert!(matches!(farewell.take_after_stop(), Ok(None)));
     }
 
     /// Switching the driver (WASAPI to ASIO, say) stops the stream in the
