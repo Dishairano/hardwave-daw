@@ -6,7 +6,9 @@
 //!      (with an optional Hardwave updater endpoint as primary source).
 //!   2. Lets the user pick an install location and shortcut preferences.
 //!   3. Downloads the platform-specific installer (.exe / .dmg /
-//!      .AppImage) from the GitHub release assets.
+//!      .AppImage): on Windows the one the DAW's own update feed
+//!      (latest-v2.json) names, elsewhere from the GitHub release assets,
+//!      and checks its signature before it runs.
 //!   4. Runs that installer silently while showing branded progress.
 //!   5. Launches the DAW.
 //!

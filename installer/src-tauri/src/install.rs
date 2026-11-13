@@ -58,15 +58,28 @@ fn emit(app: &AppHandle, phase: &str, percent: u32, message: &str) {
     );
 }
 
-/// The public half of the key the latest Hardwave DAW release is signed
-/// with. The launcher runs what it downloads, so it runs nothing that this
-/// key did not sign.
-///
-/// In v0.266.47 this is the OLD key, on purpose: the DAW it installs
-/// already trusts the new key (src-tauri/tauri.conf.json), but v0.266.47
-/// itself is still signed with the old one. From v0.266.48 on the launcher
-/// trusts the DAW's key again (a test states the rule).
-const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxQkQ4NkQyQTVCOUE0OApSV1JJbWxzcWJkZ2JEMGZPOHU0ZTVMeEtQMERwQTlxTEJYaDkxTGpNZVQzYkRSSlJHNUhsVnhJMgo=";
+/// The public half of the key every Hardwave DAW release from v0.266.48 on
+/// is signed with, the same one the DAW's own updater trusts
+/// (src-tauri/tauri.conf.json; a test keeps the two equal). The launcher
+/// runs what it downloads, so it runs nothing that this key did not sign.
+/// Launchers up to v0.266.47 hold the old key and refuse these releases.
+const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFBQzc5ODA1MzM1Q0UzNjYKUldSbTQxd3pCWmpIcXVPeFE1NjcxUkcrUTBSTVRZK1U2dS8vOXdJRkRMcW52UXl3eHU5R0pHQ2EK";
+
+/// The update feed the DAW itself reads (src-tauri/tauri.conf.json; a test
+/// keeps the two equal). It names the installer of the newest release and
+/// carries that installer's signature, and from v0.266.48 on it is the one
+/// feed signed with UPDATER_PUBKEY: the older latest.json stays on
+/// v0.266.47 for DAWs that only trust the old key.
+const FEED_URL: &str =
+    "https://github.com/Dishairano/hardwave-daw/releases/latest/download/latest-v2.json";
+
+/// The feed entry the launcher installs from: the NSIS installer on
+/// Windows. The feed has nothing the launcher can run on macOS or Linux
+/// (the updater archives there are not the .dmg or the AppImage), so those
+/// look the installer up on the latest GitHub release instead.
+fn feed_entry() -> Option<&'static str> {
+    cfg!(windows).then_some("windows-x86_64-nsis")
+}
 
 /// Whether `data` carries Hardwave's signature, given the `.sig` file
 /// published beside it.
@@ -113,7 +126,7 @@ pub async fn run(
     // 1. Resolve the latest release's platform-specific installer URL,
     //    and its signature.
     emit(&app, "downloading", 0, "Finding latest Hardwave DAW…");
-    let (download_url, signature_url) = resolve_download_url().await?;
+    let (download_url, signature) = resolve_download().await?;
 
     // 2. Prepare install dir (NSIS will create its own subtree on
     // Windows — directory just needs to exist).
@@ -137,7 +150,6 @@ pub async fn run(
     }
 
     emit(&app, "downloading", 68, "Checking the download…");
-    let signature = fetch_text(&signature_url).await?;
     let bytes = tokio::fs::read(&installer_path)
         .await
         .map_err(|e| format!("Cannot read the download: {e}"))?;
@@ -345,16 +357,43 @@ async fn run_platform_installer(
     }
 }
 
-/// Resolve the platform-specific installer asset URL on the latest
-/// Hardwave DAW GitHub release. The asset filter lives in
+/// The installer URL and signature a feed names for `entry`.
+fn installer_in_feed(feed: &serde_json::Value, entry: &str) -> Result<(String, String), String> {
+    let platform = &feed["platforms"][entry];
+    match (platform["url"].as_str(), platform["signature"].as_str()) {
+        (Some(url), Some(signature)) => Ok((url.to_string(), signature.to_string())),
+        _ => Err(format!(
+            "The Hardwave DAW update feed names no {entry} installer. \
+             Please re-run the installer, or download from https://hardwavestudios.com/daw"
+        )),
+    }
+}
+
+/// The platform-specific installer of the latest Hardwave DAW release and
+/// the text of its signature: from the update feed on Windows, otherwise
+/// from the release's assets on GitHub. The asset filter lives in
 /// `target_asset_filter()` and matches the suffix the DAW's release.yml
 /// uploads.
-async fn resolve_download_url() -> Result<(String, String), String> {
+async fn resolve_download() -> Result<(String, String), String> {
     let client = reqwest::Client::builder()
         .user_agent("HardwaveDawInstaller/0.1")
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())?;
+
+    if let Some(entry) = feed_entry() {
+        let feed: serde_json::Value = client
+            .get(FEED_URL)
+            .send()
+            .await
+            .map_err(|e| format!("Could not reach the Hardwave DAW update feed: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("Could not read the Hardwave DAW update feed: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("The Hardwave DAW update feed is damaged: {e}"))?;
+        return installer_in_feed(&feed, entry);
+    }
 
     // The latest full release only: a release candidate is for testers
     // and carries a dash in its tag, which GitHub marks as prerelease.
@@ -387,7 +426,7 @@ async fn resolve_download_url() -> Result<(String, String), String> {
     let installer = url_of(&|name| name.ends_with(suffix));
     let signature = url_of(&|name| name.ends_with(&format!("{suffix}.sig")));
     match (installer, signature) {
-        (Some(installer), Some(signature)) => Ok((installer, signature)),
+        (Some(installer), Some(signature)) => Ok((installer, fetch_text(&signature).await?)),
         _ => Err(format!(
             "Could not find a signed installer ending in {suffix} on the latest Hardwave DAW release. \
              Please re-run the installer, or download manually from \
@@ -490,37 +529,60 @@ fn human_bytes(n: u64) -> String {
 mod tests {
     use super::*;
 
-    /// v0.266.47 changes the updater key. The DAW it installs trusts the
-    /// new key, but v0.266.47 is signed with the old key, and that release
-    /// is what this launcher downloads and checks. So here, and only in this
-    /// release, the launcher's key and the DAW's differ on purpose.
+    /// From v0.266.48 on, every release is signed with the key the DAW
+    /// trusts, so the launcher trusts that key too, and never again the old
+    /// one (only v0.266.47's launcher held it, for v0.266.47 itself).
     #[test]
-    fn the_launcher_trusts_the_key_v0_266_47_is_signed_with() {
+    fn the_launcher_trusts_the_same_key_as_the_daw() {
         let conf = include_str!("../../../src-tauri/tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(conf).unwrap();
-        let old_key = include_str!("../../../src-tauri/updater-key-until-v0.266.47.pub");
         assert_eq!(
-            UPDATER_PUBKEY,
-            old_key.trim(),
-            "v0.266.47 is signed with the old key"
-        );
-        assert_ne!(
             conf["plugins"]["updater"]["pubkey"].as_str(),
-            Some(UPDATER_PUBKEY),
-            "the DAW of v0.266.47 trusts the new key"
+            Some(UPDATER_PUBKEY)
         );
-        // Only v0.266.47 ships with this rule: a later release is signed
-        // with the new key, which this launcher would refuse.
-        let version: Vec<u64> = conf["version"]
-            .as_str()
-            .unwrap()
-            .split('.')
-            .map(|part| part.parse().unwrap())
-            .collect();
-        assert!(
-            version <= vec![0, 266, 47],
-            "v0.266.48 and later need the launcher that trusts the new key"
+        let old_key = include_str!("../../../src-tauri/updater-key-until-v0.266.47.pub");
+        assert_ne!(UPDATER_PUBKEY, old_key.trim(), "the old key was stolen");
+    }
+
+    /// The launcher installs what the DAW's own updater would offer: the
+    /// feed signed with the key both trust, not the frozen latest.json.
+    #[test]
+    fn the_launcher_reads_the_feed_the_daw_reads() {
+        let conf = include_str!("../../../src-tauri/tauri.conf.json");
+        let conf: serde_json::Value = serde_json::from_str(conf).unwrap();
+        assert_eq!(
+            conf["plugins"]["updater"]["endpoints"],
+            serde_json::json!([FEED_URL])
         );
+    }
+
+    #[test]
+    fn the_installer_and_its_signature_come_from_the_feed() {
+        // The shape scripts/updater_feeds.py writes.
+        let feed = serde_json::json!({
+            "version": "0.266.48",
+            "notes": "- fix: something",
+            "pub_date": "2026-11-14T10:00:00.000Z",
+            "platforms": {
+                "windows-x86_64": {
+                    "signature": "emlw",
+                    "url": "https://github.com/Dishairano/hardwave-daw/releases/download/v0.266.48/Hardwave.DAW_0.266.48_x64-setup.nsis.zip"
+                },
+                "windows-x86_64-nsis": {
+                    "signature": "ZXhl",
+                    "url": "https://github.com/Dishairano/hardwave-daw/releases/download/v0.266.48/Hardwave.DAW_0.266.48_x64-setup.exe"
+                }
+            }
+        });
+        assert_eq!(
+            installer_in_feed(&feed, "windows-x86_64-nsis"),
+            Ok((
+                "https://github.com/Dishairano/hardwave-daw/releases/download/v0.266.48/Hardwave.DAW_0.266.48_x64-setup.exe".to_string(),
+                "ZXhl".to_string()
+            ))
+        );
+        assert!(installer_in_feed(&feed, "darwin-aarch64").is_err());
+        assert!(installer_in_feed(&serde_json::json!({}), "windows-x86_64-nsis").is_err());
     }
 
     /// Run by hand with a published installer and its .sig:
