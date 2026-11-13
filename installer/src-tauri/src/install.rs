@@ -511,16 +511,35 @@ mod tests {
         );
         // Only v0.266.47 ships with this rule: a later release is signed
         // with the new key, which this launcher would refuse.
-        let version: Vec<u64> = conf["version"]
-            .as_str()
-            .unwrap()
-            .split('.')
-            .map(|part| part.parse().unwrap())
-            .collect();
+        let version = release_numbers(conf["version"].as_str().unwrap());
         assert!(
             version <= vec![0, 266, 47],
             "v0.266.48 and later need the launcher that trusts the new key"
         );
+    }
+
+    /// The release numbers of a version, without a release candidate's
+    /// `-rcN` (or a `+build`) part: v0.266.47-rc1 ships with this launcher
+    /// too.
+    fn release_numbers(version: &str) -> Vec<u64> {
+        version
+            .split(['-', '+'])
+            .next()
+            .unwrap_or_default()
+            .split('.')
+            .map(|part| {
+                part.parse()
+                    .unwrap_or_else(|_| panic!("{version:?} is not a version"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_release_candidate_counts_as_its_release() {
+        assert_eq!(release_numbers("0.266.47"), vec![0, 266, 47]);
+        assert_eq!(release_numbers("0.266.47-rc1"), vec![0, 266, 47]);
+        assert_eq!(release_numbers("0.266.47-rc.2+abc"), vec![0, 266, 47]);
+        assert!(release_numbers("0.266.48-rc1") > vec![0, 266, 47]);
     }
 
     /// Run by hand with a published installer and its .sig:
