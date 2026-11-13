@@ -400,6 +400,19 @@ jobs:
         # It needs no install scripts, and none run next to the signing key.
         run: npm install -g --ignore-scripts @tauri-apps/cli@2.11.5
 
+      # The signing secret again, on this machine, as soon as the Tauri CLI is
+      # here: the secret could have changed since updater-feeds-check ran. It
+      # runs before the release is created below, so a wrong key stops the
+      # release with nothing published. An empty public release would be the
+      # latest one, and every installed DAW's update check would get a 404.
+      - name: The signing secret is the key this version must be signed with
+        shell: bash
+        timeout-minutes: 5
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/updater-feeds.sh signing-key
+
       # Pre-create the GitHub release if it doesn't exist yet. tauri-action
       # auto-creates releases with the GITHUB_TOKEN, but during periods of
       # parallel-run contention (e.g. v0.157.36 + v0.157.37 finalising
@@ -438,17 +451,6 @@ jobs:
               --notes "$RELEASE_BODY" $PRE
           fi
 
-      # The signing secret again, on this machine, just before Tauri signs
-      # with it: the secret could have changed since updater-feeds-check ran.
-      - name: The signing secret is the key this version must be signed with (Linux, macOS)
-        if: matrix.platform != 'windows-latest'
-        shell: bash
-        timeout-minutes: 5
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bash scripts/updater-feeds.sh signing-key
-
       - name: Build Tauri app (Linux — with JACK)
         if: matrix.platform == 'ubuntu-22.04'
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
@@ -480,12 +482,21 @@ jobs:
       # binaries\hardwave-daw-uninstaller.exe and Windows Apps opens it with
       # --uninstall. So it is built and signed before the bundle, and the
       # same signed file is the HardwaveDAW-Setup.exe asset.
+      #
+      # Its packages install with no install scripts, from the lockfile when
+      # there is one: nothing it needs runs one (esbuild and the Tauri CLI
+      # take their binaries from their platform packages), and nothing that
+      # is not needed should run on a machine that signs.
       - name: Build Hardwave DAW launcher installer (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
         working-directory: installer
         run: |
-          npm install
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts
+          else
+            npm install --ignore-scripts
+          fi
           npm run tauri:build -- --no-bundle
           # The DAW's build runs next, and the Tauri CLI checks its Rust
           # crates against the npm packages of the first folder with a
@@ -538,17 +549,6 @@ jobs:
           # reach, so it is signed here (the script checks its imports
           # first).
           ./scripts/sign-windows.ps1 src-tauri/binaries/hardwave-plugin-bridge-x86.exe
-
-      # The signing secret again, on this machine, just before Tauri signs
-      # with it: the secret could have changed since updater-feeds-check ran.
-      - name: The signing secret is the key this version must be signed with (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: bash
-        timeout-minutes: 5
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bash scripts/updater-feeds.sh signing-key
 
       - name: Build Tauri app (Windows — with ASIO)
         if: matrix.platform == 'windows-latest'
@@ -662,6 +662,62 @@ jobs:
           # new-key content, not even between two uploads.
           includeUpdaterJson: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.tauri-bundles }}
+
+      # A leg that fails after the release was created leaves it public
+      # without its installers or update feeds (the feeds job only runs after
+      # every leg). While it is the latest release, every installed DAW's
+      # update check fails. Said on the run page and in Discord, with what to
+      # do, so it does not go unnoticed.
+      - name: Say that the build failed
+        if: failure()
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ matrix.platform }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          delete=""
+          if ! prerelease="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease 2>/dev/null)"; then
+            state="No release $tag could be found, so installed DAWs should not be affected (check the Releases page)."
+            todo="Fix the cause, then use Re-run failed jobs."
+          elif [ "$prerelease" = true ]; then
+            state="The prerelease $tag exists without all its files; installed DAWs never install a prerelease, so they are not affected."
+            todo="Fix the cause, then use Re-run failed jobs."
+          else
+            state="The release $tag is public without its installers or update feeds, so while it is the latest release every installed DAW's update check fails."
+            todo="Fix the cause and use Re-run failed jobs, or delete the release $tag on GitHub (keep the tag) so the previous release is the latest again."
+            delete="Deleting the release keeps the tag: \`gh release delete $tag --repo $GITHUB_REPOSITORY --yes\` (without \`--cleanup-tag\`)."
+          fi
+          msg="Hardwave DAW $tag: the $PLATFORM build FAILED. $state $todo $RUN_URL"
+          {
+            echo "## Build failed for $tag ($PLATFORM)"
+            echo
+            echo "$state"
+            echo
+            echo "$todo"
+            if [ -n "$delete" ]; then
+              echo
+              echo "$delete"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::$msg"
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL is not set: no Discord post"
+            exit 0
+          fi
+          # On a Windows runner `python3` may be missing or the Microsoft
+          # Store stub; jq may be missing.
+          py=python3
+          "$py" -c '' >/dev/null 2>&1 || py=python
+          payload="$("$py" -I -c 'import json, sys; print(json.dumps({"content": sys.argv[1], "allowed_mentions": {"parse": []}}))' "$msg")"
+          # Neither the webhook URL nor curl's own messages are printed.
+          if curl -sS --fail -o /dev/null -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL" 2>/dev/null; then
+            echo "posted to Discord"
+          else
+            echo "::warning::the Discord post about the failed build failed"
+          fi
 
   # Attaches the update feeds once the build has uploaded the installers and
   # their .sig files: latest-v2.json, built from this release's files, and
