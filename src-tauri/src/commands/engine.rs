@@ -84,9 +84,13 @@ pub fn start_engine(state: State<AppState>) -> Result<(), String> {
     // switch) is not a reason to rebuild the engine, which dropped every
     // plug-in it hosted.
     if engine.is_running() {
+        crate::audio_focus::opened_elsewhere();
         return Ok(());
     }
-    engine.start().map_err(|e| audio_start_hint(&e))
+    engine.start().map_err(|e| audio_start_hint(&e))?;
+    // Audio is on now: the background release has nothing to open again.
+    crate::audio_focus::opened_elsewhere();
+    Ok(())
 }
 
 /// Why the sound card would not open, in words that say what to do. The
