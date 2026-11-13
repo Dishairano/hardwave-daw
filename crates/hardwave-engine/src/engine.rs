@@ -1028,12 +1028,15 @@ const FAREWELL_WAIT: std::time::Duration = std::time::Duration::from_millis(250)
 
 /// The plug-ins a live callback handed back as its stream let it go: its
 /// graph (every track's insert chain and the master's are in there), the
-/// map saying which node is which track, and the frozen tracks' parked
-/// chains.
+/// map saying which node is which track, the frozen tracks' parked chains,
+/// and the commands parked for a track the next graph has not made yet
+/// (a plug-in added to it waits there). Those are only let go: they never
+/// played, and hold what the song already has.
 struct HandedBack {
     graph: AudioGraph,
     track_id_to_node: HashMap<String, crate::graph::NodeId>,
     parked_chains: HashMap<String, crate::insert_chain::InsertChain>,
+    parked_commands: Vec<crate::insert_chain::InsertCommand>,
 }
 
 /// Plug-ins stopped streams handed back, waiting for the main thread to
@@ -1072,12 +1075,16 @@ impl HandedBackPlugins {
         drop(too_late);
         let handed_back = std::mem::take(&mut *self.waiting.lock());
         let mut kept = 0;
-        for mut plugins in handed_back {
-            let states = plugin_states_in(
-                &mut plugins.graph,
-                &plugins.track_id_to_node,
-                &plugins.parked_chains,
-            );
+        for plugins in handed_back {
+            let HandedBack {
+                mut graph,
+                track_id_to_node,
+                parked_chains,
+                parked_commands,
+            } = plugins;
+            // Never played: nothing to read, only to let go, here.
+            drop(parked_commands);
+            let states = plugin_states_in(&mut graph, &track_id_to_node, &parked_chains);
             kept += states.len();
             keep_live_states_in(&mut self.project.lock(), states);
         }
@@ -4929,6 +4936,7 @@ impl EngineCallback {
             graph: std::mem::replace(&mut self.graph, AudioGraph::new(0)),
             track_id_to_node: std::mem::take(&mut self.track_id_to_node),
             parked_chains: std::mem::take(&mut self.parked_chains),
+            parked_commands: std::mem::take(&mut self.deferred_insert_commands),
         });
     }
 
@@ -8160,6 +8168,16 @@ mod rt_safety_tests {
         cmd_tx: &mut crate::insert_chain::InsertCommandSender,
         start: f64,
     ) -> Seen {
+        add_block_fed(cmd_tx, "master", "shape", start)
+    }
+
+    /// The same plug-in, on any track and slot.
+    fn add_block_fed(
+        cmd_tx: &mut crate::insert_chain::InsertCommandSender,
+        track_id: &str,
+        slot_id: &str,
+        start: f64,
+    ) -> Seen {
         let seen = Seen::default();
         use crate::insert_chain::{InsertCommand, LiveSlot};
         use hardwave_plugin_host::types::{
@@ -8187,7 +8205,7 @@ mod rt_safety_tests {
             sleep: Default::default(),
             param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
             levels: Default::default(),
-            slot_id: "shape".into(),
+            slot_id: slot_id.into(),
             plugin,
             enabled: true,
             wet: 1.0,
@@ -8196,7 +8214,7 @@ mod rt_safety_tests {
         };
         cmd_tx
             .try_send(InsertCommand::Add {
-                track_id: "master".into(),
+                track_id: track_id.into(),
                 slot,
             })
             .ok()
@@ -8334,26 +8352,51 @@ mod rt_safety_tests {
     }
 
     /// The hand-back runs on the audio thread on WASAPI: it moves the
-    /// plug-ins out without allocating or freeing anything, and asks no
-    /// plug-in for anything. (A knob still queued is handed to the plug-in
-    /// first, as a block would; the tests above cover that.)
+    /// plug-ins out without allocating anything, and asks no plug-in for
+    /// anything. Here with commands still queued, as when the device goes
+    /// between two blocks: a knob turn, handed to the plug-in as a block
+    /// would, and a plug-in for a track with no node yet, which is parked.
     #[test]
-    fn handing_the_plug_ins_back_allocates_and_frees_nothing() {
+    fn handing_the_plug_ins_back_allocates_nothing() {
         let mut engine = DawEngine::new();
         let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
         let farewell = live_farewell(&mut engine, &mut cb);
         let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
-        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
         let mut out = vec![0.0f32; 512];
         cb.process(&mut out, 256, 2);
+        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
+        let parked = add_block_fed(&mut cmd_tx, "no-node-yet", "waiting", 0.5);
 
         let (allocs, frees) = super::graph_swap_tests::counted(|| cb.hand_back_plugins(&farewell));
-        assert_eq!((allocs, frees), (0, 0), "allocations and frees");
+        assert_eq!(allocs, 0, "allocations");
+        // The knob command's own two names (its track and slot) are freed
+        // once it is applied, as by every block that applies one; the
+        // hand-back itself frees nothing.
+        assert_eq!(frees, 2, "frees");
         assert!(seen.lock().is_empty(), "nothing asked of the plug-in");
+        assert!(parked.lock().is_empty(), "nor of the parked one");
 
         drop(cb);
         engine.stop_for_restart();
         assert_eq!(saved_shape(&engine), 0.8);
+    }
+
+    /// A plug-in added to a track whose node the next graph has not made
+    /// yet waits, parked, for that graph. When the stream let the callback
+    /// go in that moment, the parked plug-in went with it, on the stream's
+    /// thread. It is handed back with the rest, and let go on the main
+    /// thread.
+    #[test]
+    fn a_plug_in_parked_for_its_track_is_handed_back_too() {
+        let mut engine = DawEngine::new();
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(&mut engine, &mut cb);
+        let parked = add_block_fed(&mut cmd_tx, "no-node-yet", "waiting", 0.5);
+        // The device goes before a block runs: the hand-back parks it.
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+        let here = std::thread::current().id();
+        assert_eq!(*parked.lock(), vec![("let go", here)]);
     }
 
     /// The same when the stream reports its error but has not let the
@@ -8465,6 +8508,7 @@ mod rt_safety_tests {
                     graph: AudioGraph::new(0),
                     track_id_to_node: HashMap::new(),
                     parked_chains: HashMap::new(),
+                    parked_commands: Vec::new(),
                 });
             })
         };
