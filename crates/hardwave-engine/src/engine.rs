@@ -1001,7 +1001,8 @@ impl PluginStateFarewell {
             .store(FAREWELL_IDLE, std::sync::atomic::Ordering::Release);
     }
 
-    /// Whether the hand-back is over, or was turned down.
+    /// Whether the callback has handed its plug-ins back: they are in
+    /// `left` then, until taken.
     fn settled(&self) -> bool {
         self.state.load(std::sync::atomic::Ordering::Acquire) == FAREWELL_IDLE
     }
@@ -1059,6 +1060,9 @@ pub struct HandedBackPlugins {
     /// Which song is open, counted up each time another song replaces it
     /// (see [`DawEngine::replace_song`]), under the song's own lock.
     song: Arc<std::sync::atomic::AtomicU64>,
+    /// A read is posted to the main thread and has not started yet: one
+    /// read takes everything waiting, so no other is posted meanwhile.
+    read_posted: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl HandedBackPlugins {
@@ -1074,6 +1078,10 @@ impl HandedBackPlugins {
     /// the plug-ins from the song by then, and settings that old could
     /// undo newer ones.
     pub fn keep_settings(&self) -> usize {
+        // Before taking anything: whatever is handed back after this is
+        // read by a read posted after it.
+        self.read_posted
+            .store(false, std::sync::atomic::Ordering::Release);
         let mut too_late = Vec::new();
         self.late.lock().retain(|farewell| {
             if !farewell.settled() {
@@ -1424,6 +1432,7 @@ impl DawEngine {
                 late: Arc::new(Mutex::new(Vec::new())),
                 project: Arc::clone(&project),
                 song: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                read_posted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             project,
             plugin_scanner: Arc::new(Mutex::new(PluginScanner::new())),
@@ -2030,11 +2039,7 @@ impl DawEngine {
         if let Some(farewell) = self.plugin_farewell.take() {
             self.take_hand_back(farewell);
         }
-        // Plug-ins a stopped stream handed back late are let go on the main
-        // thread now rather than whenever it next reads settings.
-        if !self.handed_back.late.lock().is_empty() {
-            self.read_handed_back_on_main_thread();
-        }
+        self.let_go_late_plugins_that_came();
         let transport = self.transport.clone();
         let project = Arc::clone(&self.project);
         let command_rx = self.command_rx.clone();
@@ -2229,6 +2234,13 @@ impl DawEngine {
     /// Have the main thread read what stopped streams handed back (see
     /// [`HandedBackPlugins::keep_settings`]).
     fn read_handed_back_on_main_thread(&self) {
+        if self
+            .handed_back
+            .read_posted
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
         let handed_back = self.handed_back.clone();
         match &self.main_thread {
             Some(run) => run(Box::new(move || {
@@ -2237,6 +2249,17 @@ impl DawEngine {
             None => {
                 handed_back.keep_settings();
             }
+        }
+    }
+
+    /// Plug-ins a stopped stream handed back after the engine stopped
+    /// waiting for them (see [`HandedBackPlugins::keep_settings`]): once
+    /// they have come, have the main thread let them go. Cheap when there
+    /// are none; runs with every health check and start.
+    fn let_go_late_plugins_that_came(&self) {
+        let came = self.handed_back.late.lock().iter().any(|f| f.settled());
+        if came {
+            self.read_handed_back_on_main_thread();
         }
     }
 
@@ -3156,8 +3179,12 @@ impl DawEngine {
     /// gone, starting it falls back to the default by itself); the default
     /// is forced only when it will not start, or when it fails again within
     /// five seconds of the last restart.
+    ///
+    /// It also has the main thread let go of plug-ins a stopped stream
+    /// handed back late, once they have come.
     pub fn poll_audio_health(&mut self) -> Result<Option<String>, String> {
         self.audio_device.log_thread_priority();
+        self.let_go_late_plugins_that_came();
         if !self.audio_device.take_stream_error() {
             return Ok(None);
         }
@@ -8533,11 +8560,14 @@ mod rt_safety_tests {
     fn a_callback_let_go_after_the_wait_is_let_go_on_the_main_thread_later() {
         let mut engine = DawEngine::new();
         let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        // The stream lets the callback go only once the engine has given up.
+        let (gave_up, given_up) = std::sync::mpsc::channel::<()>();
         let stream = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(400));
+            given_up.recv().unwrap();
             drop(cb);
         });
         engine.stop_for_restart();
+        gave_up.send(()).unwrap();
         stream.join().unwrap();
         assert!(seen.lock().is_empty(), "not let go on the stream's thread");
 
@@ -8547,6 +8577,40 @@ mod rt_safety_tests {
         assert_eq!(saved_shape(&engine), 0.333, "too late for the song");
         engine.handed_back_plugins().keep_settings();
         assert_eq!(seen.lock().len(), 1, "once");
+    }
+
+    /// Those late plug-ins waited for the next stop, start or song change
+    /// to be let go. The engine's health check, which the app runs on its
+    /// meter tick, now has the main thread let them go once they have come,
+    /// with one read posted however many ticks pass before it runs.
+    #[test]
+    fn late_plug_ins_are_let_go_on_the_main_thread_after_the_next_health_check() {
+        let mut engine = DawEngine::new();
+        let jobs: Arc<Mutex<Vec<MainThreadJob>>> = Arc::default();
+        {
+            let jobs = Arc::clone(&jobs);
+            engine
+                .set_main_thread_runner(Arc::new(move |job: MainThreadJob| jobs.lock().push(job)));
+        }
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let (gave_up, given_up) = std::sync::mpsc::channel::<()>();
+        let stream = std::thread::spawn(move || {
+            given_up.recv().unwrap();
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        gave_up.send(()).unwrap();
+        stream.join().unwrap();
+
+        let _ = engine.poll_audio_health();
+        let _ = engine.poll_audio_health();
+        let on_main = std::mem::take(&mut *jobs.lock());
+        assert_eq!(on_main.len(), 1, "one read posted");
+        for job in on_main {
+            job();
+        }
+        let main = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("let go", main)]);
     }
 
     /// When the device goes away the stream lets the callback go on its own
