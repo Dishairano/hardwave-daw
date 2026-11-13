@@ -1137,7 +1137,12 @@ pub enum InsertCommand {
     /// a track id both songs have (the mixer inserts and the master have
     /// fixed ids) kept the old song's plug-ins, and an old sampler went on
     /// playing its sample in a song that does not have it.
-    ClearAll,
+    ClearAll {
+        /// The song coming in, as the engine counts them
+        /// (`DawEngine::replace_song`): the plug-ins after this belong to
+        /// it.
+        song: u64,
+    },
 }
 
 /// UI-side handle for queueing commands toward the audio thread.
@@ -1164,7 +1169,7 @@ impl InsertCommand {
     /// `ClearAll`, which is for every track.
     pub fn target_track_id(&self) -> Option<&str> {
         Some(match self {
-            InsertCommand::ClearAll => return None,
+            InsertCommand::ClearAll { .. } => return None,
             InsertCommand::Add { track_id, .. }
             | InsertCommand::Remove { track_id, .. }
             | InsertCommand::Reorder { track_id, .. }
@@ -1372,7 +1377,7 @@ impl InsertRouter {
                     chain.set_slot_smart_disable(&slot_id, allowed);
                 }
             }
-            InsertCommand::ClearAll => {
+            InsertCommand::ClearAll { .. } => {
                 for chain in self.chains.values_mut() {
                     chain.bury_all(&mut self.graveyard);
                 }
@@ -2025,7 +2030,9 @@ pub(crate) mod tests {
             .ok()
             .unwrap();
         }
-        tx.try_send(InsertCommand::ClearAll).ok().unwrap();
+        tx.try_send(InsertCommand::ClearAll { song: 1 })
+            .ok()
+            .unwrap();
         router.drain(&mut rx);
         assert!(router.chains.values().all(|c| c.slots.is_empty()));
         assert_eq!(graveyard.drain_and_drop(), 3);

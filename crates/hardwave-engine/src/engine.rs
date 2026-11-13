@@ -962,9 +962,6 @@ pub struct PluginStateFarewell {
     /// once they are in `left`.
     state: std::sync::atomic::AtomicU8,
     left: Mutex<Option<HandedBack>>,
-    /// Which song is open (see [`DawEngine::replace_song`]), for the
-    /// plug-ins to say which song they came from.
-    song: Arc<std::sync::atomic::AtomicU64>,
 }
 
 const FAREWELL_IDLE: u8 = 0;
@@ -972,11 +969,10 @@ const FAREWELL_ARMED: u8 = 1;
 const FAREWELL_HANDING: u8 = 2;
 
 impl PluginStateFarewell {
-    fn armed(song: Arc<std::sync::atomic::AtomicU64>) -> Self {
+    fn armed() -> Self {
         Self {
             state: std::sync::atomic::AtomicU8::new(FAREWELL_ARMED),
             left: Mutex::new(None),
-            song,
         }
     }
 
@@ -1040,8 +1036,7 @@ const FAREWELL_WAIT: std::time::Duration = std::time::Duration::from_millis(250)
 /// (a plug-in added to it waits there). Those are only let go: they never
 /// played, and hold what the song already has.
 struct HandedBack {
-    /// The song open when they were handed back, which they belong to: a
-    /// new song takes the old one's plug-ins off before it brings its own.
+    /// The song they belong to (see `EngineCallback::plugins_song`).
     song: u64,
     graph: AudioGraph,
     track_id_to_node: HashMap<String, crate::graph::NodeId>,
@@ -1557,7 +1552,12 @@ impl DawEngine {
     /// Waits a moment for room in the queue rather than lose it, since the
     /// old song's plug-ins would otherwise go on playing in the new one.
     pub fn clear_live_plugins(&self) {
-        let mut cmd = crate::insert_chain::InsertCommand::ClearAll;
+        let mut cmd = crate::insert_chain::InsertCommand::ClearAll {
+            song: self
+                .handed_back
+                .song
+                .load(std::sync::atomic::Ordering::Acquire),
+        };
         for _ in 0..50 {
             if self.insert_command_sender.lock().is_none() {
                 // No audio thread yet, so no live plug-ins either.
@@ -2127,10 +2127,13 @@ impl DawEngine {
         callback.check_voice = crate::check_voice::CheckVoice::new(self.check_voice.clone());
         // Only the live callback hands its plug-ins back when it is let go:
         // the stream can lose its device at any moment.
-        let farewell = Arc::new(PluginStateFarewell::armed(Arc::clone(
-            &self.handed_back.song,
-        )));
+        let farewell = Arc::new(PluginStateFarewell::armed());
         callback.plugin_farewell = Some(Arc::clone(&farewell));
+        // Its plug-ins, loaded after this start, are the open song's.
+        callback.plugins_song = self
+            .handed_back
+            .song
+            .load(std::sync::atomic::Ordering::Acquire);
         self.plugin_farewell = Some(farewell);
         // From here on graphs are built on a thread of their own and only
         // swapped in on the audio thread.
@@ -4569,6 +4572,11 @@ struct EngineCallback {
     /// Where this callback hands its plug-ins back when it is dropped. Only
     /// the live callback has one; see [`PluginStateFarewell`].
     plugin_farewell: Option<Arc<PluginStateFarewell>>,
+    /// The song this callback's plug-ins belong to, as the engine counts
+    /// songs (`DawEngine::replace_song`): the one open when it started, then
+    /// the one each `ClearAll` it applies names. A song swapped in still
+    /// has the old song's plug-ins playing until its `ClearAll` lands.
+    plugins_song: u64,
     /// The Audio settings panel's behaviour switches, shared with the engine
     /// so a change applies to the next block.
     audio_prefs: crate::audio_prefs::AudioPrefs,
@@ -4846,6 +4854,7 @@ impl EngineCallback {
             test_tone: crate::test_tone::TestTone::unwired(),
             check_voice: crate::check_voice::CheckVoice::unwired(),
             plugin_farewell: None,
+            plugins_song: 0,
             audio_prefs,
             record_pass,
             record_last_pos,
@@ -4972,7 +4981,7 @@ impl EngineCallback {
         self.dispatch_insert_commands();
         self.flush_plugin_parameters();
         farewell.finish_hand_back(HandedBack {
-            song: farewell.song.load(std::sync::atomic::Ordering::Acquire),
+            song: self.plugins_song,
             graph: std::mem::replace(&mut self.graph, AudioGraph::new(0)),
             track_id_to_node: std::mem::take(&mut self.track_id_to_node),
             parked_chains: std::mem::take(&mut self.parked_chains),
@@ -5019,6 +5028,9 @@ impl EngineCallback {
         // A new song: every node's plug-ins go, and so does whatever was
         // parked for the old song's tracks.
         let Some(target) = cmd.target_track_id() else {
+            if let crate::insert_chain::InsertCommand::ClearAll { song } = cmd {
+                self.plugins_song = song;
+            }
             for parked in self.deferred_insert_commands.drain(..) {
                 if let crate::insert_chain::InsertCommand::Add { mut slot, .. } = parked {
                     slot.plugin.deactivate();
@@ -5029,7 +5041,9 @@ impl EngineCallback {
             }
             for node in self.graph.iter_nodes_mut() {
                 node.apply_insert_command(
-                    crate::insert_chain::InsertCommand::ClearAll,
+                    crate::insert_chain::InsertCommand::ClearAll {
+                        song: self.plugins_song,
+                    },
                     &mut self.insert_graveyard_tx,
                     sample_rate,
                     buffer_size,
@@ -5104,7 +5118,7 @@ impl EngineCallback {
             crate::insert_chain::InsertCommand::Add { .. }
                 | crate::insert_chain::InsertCommand::Remove { .. }
                 | crate::insert_chain::InsertCommand::SetEnabled { .. }
-                | crate::insert_chain::InsertCommand::ClearAll
+                | crate::insert_chain::InsertCommand::ClearAll { .. }
         );
         if let Some(node) = self.graph.node_mut(node_id) {
             node.apply_insert_command(cmd, &mut self.insert_graveyard_tx, sample_rate, buffer_size);
@@ -8280,10 +8294,12 @@ mod rt_safety_tests {
     /// As `start` does for the live callback: a farewell of its own, which
     /// the engine keeps too.
     fn live_farewell(engine: &mut DawEngine, cb: &mut EngineCallback) -> Arc<PluginStateFarewell> {
-        let farewell = Arc::new(PluginStateFarewell::armed(Arc::clone(
-            &engine.handed_back.song,
-        )));
+        let farewell = Arc::new(PluginStateFarewell::armed());
         cb.plugin_farewell = Some(Arc::clone(&farewell));
+        cb.plugins_song = engine
+            .handed_back
+            .song
+            .load(std::sync::atomic::Ordering::Acquire);
         engine.plugin_farewell = Some(Arc::clone(&farewell));
         farewell
     }
@@ -8539,7 +8555,7 @@ mod rt_safety_tests {
     /// callback hands them back once at most.
     #[test]
     fn a_hand_back_under_way_as_the_engine_stops_is_waited_for() {
-        let farewell = Arc::new(PluginStateFarewell::armed(Arc::default()));
+        let farewell = Arc::new(PluginStateFarewell::armed());
         assert!(farewell.begin_hand_back());
         assert!(!farewell.begin_hand_back(), "once");
         let device = {
@@ -8631,6 +8647,53 @@ mod rt_safety_tests {
             vec![("let go", here)],
             "not read, let go on the main thread"
         );
+    }
+
+    /// A song swapped in while the old song's plug-ins still play: the new
+    /// song's `ClearAll` has not reached the audio thread yet when the stream
+    /// lets the callback go. The plug-ins it hands back are the old song's,
+    /// but were counted as the new song's, so their settings went into it.
+    #[test]
+    fn plug_ins_handed_back_before_the_new_songs_clear_belong_to_the_old_song() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let mut next = Project::default();
+        next.set_plugin_state("shape", "vst3", 0.1f64.to_le_bytes().to_vec());
+        engine.replace_song(next);
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+
+        assert_eq!(saved_shape(&engine), 0.1, "the new song keeps its own");
+        let here = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("let go", here)], "only let go");
+    }
+
+    /// Once the new song's `ClearAll` has landed, the plug-ins after it are
+    /// the new song's, and their settings go into it.
+    #[test]
+    fn plug_ins_added_after_the_new_songs_clear_belong_to_the_new_song() {
+        let mut engine = DawEngine::new();
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(&mut engine, &mut cb);
+        engine.replace_song(Project::default());
+        let song = engine
+            .handed_back
+            .song
+            .load(std::sync::atomic::Ordering::Acquire);
+        cmd_tx
+            .try_send(crate::insert_chain::InsertCommand::ClearAll { song })
+            .ok()
+            .unwrap();
+        let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
+        cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        engine.stop_for_restart();
+
+        assert_eq!(saved_shape(&engine), 0.8);
+        let here = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("state read", here), ("let go", here)]);
     }
 
     /// The app's side of a restart, without the app. The engine has its own
@@ -8816,7 +8879,10 @@ mod rt_safety_tests {
 
         // Opening the new song: clear, swap the song, rebuild, then the new
         // song's own plug-in for the same track id.
-        cmd_tx.try_send(InsertCommand::ClearAll).ok().unwrap();
+        cmd_tx
+            .try_send(InsertCommand::ClearAll { song: 1 })
+            .ok()
+            .unwrap();
         *project_arc.lock() = with_plugin("new-synth");
         cb.needs_rebuild = true;
         let (new, _) = make_gain_slot("new-synth", 1.0, true);
