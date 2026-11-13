@@ -997,11 +997,22 @@ pub fn run() {
                 engine.lock().set_main_thread_runner(Arc::new(
                     move |job: hardwave_engine::engine::MainThreadJob| {
                         let app = app.clone();
-                        std::thread::spawn(move || {
-                            if let Err(e) = app.run_on_main_thread(job) {
-                                log::warn!("audio restart: could not reach the main thread: {e}");
-                            }
-                        });
+                        let posted = std::thread::Builder::new()
+                            .name("hw-post-to-main".into())
+                            .spawn(move || {
+                                if let Err(e) = app.run_on_main_thread(job) {
+                                    log::warn!(
+                                        "audio restart: could not reach the main thread: {e}"
+                                    );
+                                }
+                            });
+                        // The plug-ins stay queued: the reload after the
+                        // restart, or the next read, takes them.
+                        if let Err(e) = posted {
+                            log::warn!(
+                                "audio restart: no thread to reach the main thread with: {e}"
+                            );
+                        }
                     },
                 ));
             }

@@ -61,19 +61,51 @@ fn decide(
     }
 }
 
+/// What reopening does.
+#[derive(Debug, PartialEq, Eq)]
+enum Reopen {
+    /// This module did not close the device.
+    Nothing,
+    /// It did, but audio runs again, opened another way: only forget that.
+    Forget,
+    /// Open it again.
+    Start,
+}
+
+fn reopen_step(released: bool, running: bool) -> Reopen {
+    match (released, running) {
+        (false, _) => Reopen::Nothing,
+        (true, true) => Reopen::Forget,
+        (true, false) => Reopen::Start,
+    }
+}
+
 /// Open the device again if this module closed it. Called before playing
 /// or recording, so pressing play from a shortcut while another program is
 /// in front still plays.
+///
+/// Audio opened another way since (the window starting it, an audio
+/// settings change) is left running. Starting it again built the engine
+/// anew over the running stream: the sound stopped while every plug-in
+/// was loaded again.
 pub fn reopen_if_released(engine: &mut DawEngine) {
-    if RELEASED.load(Ordering::Relaxed) {
-        match engine.start() {
+    match reopen_step(RELEASED.load(Ordering::Relaxed), engine.is_running()) {
+        Reopen::Nothing => {}
+        Reopen::Forget => RELEASED.store(false, Ordering::Relaxed),
+        Reopen::Start => match engine.start() {
             Ok(()) => {
                 RELEASED.store(false, Ordering::Relaxed);
                 log::info!("audio device opened again");
             }
             Err(e) => log::warn!("could not open the audio device again: {e}"),
-        }
+        },
     }
+}
+
+/// Audio was opened another way (the window started it): the device is no
+/// longer this module's to open again.
+pub fn opened_elsewhere() {
+    RELEASED.store(false, Ordering::Relaxed);
 }
 
 /// Watch which program is in front, twice a second, for the life of the app.
@@ -160,6 +192,25 @@ fn ours_in_front() -> bool {
 mod tests {
     use super::{decide, Step, GRACE};
     use std::time::Duration;
+
+    /// Audio closed here and opened again another way since (the window
+    /// started it) is not started a second time over the running stream.
+    #[test]
+    fn a_device_opened_another_way_is_not_opened_again() {
+        use super::{reopen_step, Reopen};
+        assert_eq!(reopen_step(true, true), Reopen::Forget);
+        assert_eq!(reopen_step(true, false), Reopen::Start);
+        assert_eq!(reopen_step(false, true), Reopen::Nothing);
+        assert_eq!(reopen_step(false, false), Reopen::Nothing);
+
+        use std::sync::atomic::Ordering;
+        super::RELEASED.store(true, Ordering::Relaxed);
+        super::opened_elsewhere();
+        assert!(
+            !super::RELEASED.load(Ordering::Relaxed),
+            "the window starting audio takes it over"
+        );
+    }
 
     #[test]
     fn the_device_goes_once_another_program_has_been_in_front_a_while() {

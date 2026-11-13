@@ -1226,6 +1226,15 @@ impl AudioDeviceManager {
     }
 }
 
+/// A manager let go stops its stream first, so the stream's callback is let
+/// go on this thread, as on any stop (see `TakenBackOnStop`), and not left
+/// to a stream that may never let it go.
+impl Drop for AudioDeviceManager {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 impl Default for AudioDeviceManager {
     fn default() -> Self {
         Self::new()
@@ -1476,6 +1485,18 @@ mod take_back_tests {
         let mut click = [1.0f32; 4];
         kept_by_stream.process_split(&mut out, &mut click, 2);
         assert_eq!(click, [0.0; 4]);
+    }
+
+    /// A manager let go without a stop (the engine dropped at quit) left its
+    /// stream's callback to the stream, which may never let it go.
+    #[test]
+    fn a_manager_let_go_takes_its_callback_back() {
+        let let_go = Arc::new(PlMutex::new(None));
+        let (_kept_by_stream, take_back) = take_back_on_stop(Ones(Arc::clone(&let_go)));
+        let mut manager = AudioDeviceManager::new();
+        manager.take_back_output = Some(take_back);
+        drop(manager);
+        assert_eq!(*let_go.lock(), Some(std::thread::current().id()));
     }
 }
 
