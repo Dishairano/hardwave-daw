@@ -6,28 +6,37 @@ DAW only accepts an update signed with the key built into it, so releases
 are chained through v0.266.47, the bridge release:
 
   latest.json     read by every DAW up to v0.266.46. They trust only the
-                  old key. Up to v0.266.47 this is the feed Tauri writes.
+                  old key. Up to v0.266.47 it is this release's own feed.
                   From v0.266.48 on it is frozen: v0.266.47's own
                   latest.json, byte for byte, so those copies install
                   v0.266.47 (old key) and carry on from there.
   latest-v2.json  read from v0.266.47 on (the endpoint in tauri.conf.json).
                   v0.266.47's copy is the same as its latest.json (old key:
                   the GitHub secret switches after v0.266.47 is out). From
-                  v0.266.48 on it is written here from the release's own
-                  .sig files, signed with the key in tauri.conf.json.
+                  v0.266.48 on it is signed with the key in tauri.conf.json.
+
+Tauri does not write either feed (includeUpdaterJson is off in release.yml):
+both are built here from the release's own files and .sig files, in the
+shape tauri-action wrote them, with the release's publication time as
+pub_date, so a re-run writes the same bytes.
 
 So a DAW that skipped v0.266.47 is offered v0.266.47 by latest.json, and
 the newest release by latest-v2.json once it runs v0.266.47: no manual
-reinstall. Nothing here falls back: a feed that does not follow these rules
-stops the release.
+reinstall on Windows. Nothing here falls back: a feed that does not follow
+these rules stops the release, and latest.json never carries anything that
+is not signed with the old key.
+
+The launcher (installer/src-tauri/src/install.rs) moves with the feeds: up to
+v0.266.47 it trusts the old key and finds the installer through the GitHub
+API; after it, it trusts the key in tauri.conf.json and reads latest-v2.json.
 
 Everything here works on local files. scripts/updater-feeds.sh downloads
 and uploads with gh; the release workflow runs that. Commands:
 
-  plan --tag vX.Y.Z --conf src-tauri/tauri.conf.json
-      Checks tauri.conf.json against the rules for this version and prints
-      step outputs: tauri-feed=true|false (Tauri writes latest.json itself)
-      and frozen=true|false (latest.json is the frozen copy of v0.266.47's).
+  plan --tag vX.Y.Z --conf src-tauri/tauri.conf.json --launcher installer/src-tauri/src/install.rs
+      Checks tauri.conf.json and the launcher against the rules for this
+      version and prints the step output frozen=true|false (latest.json is
+      the frozen copy of v0.266.47's).
   bridge-tag
       Prints the bridge release's tag.
   signing-key --tag vX.Y.Z --conf ... --sig FILE
@@ -36,10 +45,12 @@ and uploads with gh; the release workflow runs that. Commands:
   frozen --conf ... --feed FILE --sigs DIR --bridge-conf FILE --out FILE
       Checks v0.266.47's latest.json, the .sig files of that release and
       v0.266.47's tauri.conf.json, then writes the frozen latest.json.
-  v2 --tag vX.Y.Z --conf ... --sigs DIR (--tauri-feed FILE | --release FILE) --out FILE
-      Writes this release's latest-v2.json: Tauri's own latest.json, checked
-      and unchanged (up to v0.266.47), or built from the release's assets
-      (`gh release view --json assets,body`) and its .sig files (after).
+  feeds --tag vX.Y.Z --conf ... --sigs DIR --release FILE --out DIR
+        [--bridge-feed FILE --bridge-sigs DIR --bridge-conf FILE]
+      Writes this release's latest-v2.json and latest.json into DIR.
+      FILE is `gh release view --json assets,body,publishedAt,createdAt`.
+      The bridge arguments (v0.266.47's latest.json, .sig files and
+      tauri.conf.json) are needed from v0.266.48 on.
 """
 import argparse
 import base64
@@ -49,11 +60,13 @@ import pathlib
 import re
 import sys
 import urllib.parse
-from datetime import datetime, timezone
 
 REPO = "Dishairano/hardwave-daw"
 DOWNLOAD = f"https://github.com/{REPO}/releases/download/"
 V2_ENDPOINT = f"https://github.com/{REPO}/releases/latest/download/latest-v2.json"
+# What the launcher asks for the installer up to v0.266.47 (and on macOS and
+# Linux after it): the latest release on the GitHub API.
+LAUNCHER_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 
 # The last release signed with the old key and the first that reads
 # latest-v2.json. Every DAW up to v0.266.46 reaches the new key through it.
@@ -65,7 +78,7 @@ BRIDGE_TAG = "v0.266.47"
 OLD_PUBKEY_FILE = pathlib.Path(__file__).resolve().parent.parent / "src-tauri" / "updater-key-until-v0.266.47.pub"
 
 # The updater files a Windows release carries, and the feed entry each one
-# fills, in the order and shape tauri-action wrote them up to v0.266.47:
+# fills, in the order and shape tauri-action wrote them up to v0.266.46:
 # `windows-x86_64` is the archive a DAW falls back to when it does not know it
 # was installed with NSIS, `windows-x86_64-nsis` the bare installer.
 UPDATER_FILES = (
@@ -76,6 +89,8 @@ UPDATER_FILES = (
 # Signature files on a release that are not updater files: the Secure Code
 # Check report signatures (release-evidence.yml).
 NOT_UPDATER_SIGS = ("-secure-code-check.json.sig", "-secure-code-check.html.sig")
+
+FEED_NAMES = ("latest-v2.json", "latest.json")
 
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(-[a-z0-9.]+)?$")
 RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
@@ -140,47 +155,106 @@ def signature_info(signature_b64: str, what: str) -> tuple:
     return key_id(raw), signed
 
 
-def old_pubkey() -> str:
+def read_text(path) -> str:
+    """A text file as UTF-8, whatever the machine's default (the build runs on Windows too)."""
     try:
-        return OLD_PUBKEY_FILE.read_text().strip()
-    except OSError as error:
-        raise FeedError(f"cannot read the old public key: {error}") from None
+        return pathlib.Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise FeedError(f"cannot read {path}: {error}") from None
+
+
+def old_pubkey() -> str:
+    return read_text(OLD_PUBKEY_FILE).strip()
+
+
+def old_key_id() -> str:
+    return pubkey_id(old_pubkey(), "the old public key")
 
 
 def load_conf(path) -> dict:
     """The parts of tauri.conf.json the feeds depend on."""
     try:
-        conf = json.loads(pathlib.Path(path).read_text())
+        conf = json.loads(read_text(path))
         updater = conf["plugins"]["updater"]
         return {"version": conf["version"], "pubkey": updater["pubkey"],
-                "endpoints": updater.get("endpoints")}
-    except (OSError, ValueError, KeyError, TypeError) as error:
+                "endpoints": updater.get("endpoints"),
+                "require_signed_version": updater.get("requireSignedVersion")}
+    except (ValueError, KeyError, TypeError) as error:
         raise FeedError(f"{path}: not a tauri.conf.json with an updater: {error}") from None
+
+
+def rust_str_const(source: str, name: str) -> list:
+    """The values of `const NAME: &str = "...";` in a Rust file."""
+    pattern = re.compile(r"\bconst\s+" + name + r"\s*:\s*&(?:'static\s+)?str\s*=\s*\"([^\"\\]*)\"\s*;")
+    return pattern.findall(source)
+
+
+def load_launcher(path) -> dict:
+    """What the launcher (installer/src-tauri/src/install.rs) trusts and reads."""
+    source = read_text(path)
+    keys = rust_str_const(source, "UPDATER_PUBKEY")
+    if len(keys) != 1:
+        raise FeedError(f"{path}: expected one `const UPDATER_PUBKEY: &str = \"...\";`, found {len(keys)}")
+    urls = rust_str_const(source, "FEED_URL")
+    if len(urls) > 1:
+        raise FeedError(f"{path}: more than one FEED_URL")
+    return {"pubkey": keys[0], "feed": urls[0] if urls else None, "api": f'"{LAUNCHER_API}"' in source}
 
 
 def signer_for(version: tuple, conf: dict) -> tuple:
     """(what, key id) of the key a release of `version` must be signed with."""
     if version <= BRIDGE:
-        return "the old key", pubkey_id(old_pubkey(), "the old public key")
+        return "the old key", old_key_id()
     return "the key in tauri.conf.json", pubkey_id(conf["pubkey"], "the public key in tauri.conf.json")
 
 
 def check_conf(tag: str, conf: dict) -> tuple:
-    """The app being released reads latest-v2.json and trusts the new key."""
+    """The app being released reads latest-v2.json, trusts the new key, and
+    only installs an update whose signature binds the version announced."""
     version, numbers = version_of_tag(tag)
     if conf["version"] != version:
         raise FeedError(f"tauri.conf.json says version {conf['version']}, the tag says {tag}")
     if conf["endpoints"] != [V2_ENDPOINT]:
         raise FeedError(f"the app must read {V2_ENDPOINT} and nothing else, "
                         f"tauri.conf.json has {conf['endpoints']!r}")
-    if pubkey_id(conf["pubkey"]) == pubkey_id(old_pubkey(), "the old public key"):
+    if pubkey_id(conf["pubkey"]) == old_key_id():
         raise FeedError("tauri.conf.json trusts the old (stolen) updater key")
+    if conf.get("require_signed_version") is not True:
+        raise FeedError("tauri.conf.json must set plugins.updater.requireSignedVersion to true, so a "
+                        "feed cannot pair a newer version number with an older signed release")
     return version, numbers
 
 
-def plan(tag: str, conf: dict) -> dict:
+def check_launcher(tag: str, numbers: tuple, conf: dict, launcher: dict) -> None:
+    """The launcher of this release trusts the key, and reads the source, of what it installs.
+
+    Up to v0.266.47 it installs a release signed with the old key, found through
+    the GitHub API. After it, it installs releases signed with the key in
+    tauri.conf.json, found through latest-v2.json.
+    """
+    got = pubkey_id(launcher["pubkey"], "the launcher's UPDATER_PUBKEY")
+    if numbers <= BRIDGE:
+        if got != old_key_id():
+            raise FeedError(f"the launcher of {tag} trusts key {got}, but it installs {tag}, which is signed "
+                            f"with the old key ({old_key_id()}): it would refuse every download")
+        if launcher["feed"] is not None:
+            raise FeedError(f"the launcher of {tag} reads {launcher['feed']}; up to {BRIDGE_TAG} it finds the "
+                            f"installer through the GitHub API ({LAUNCHER_API})")
+        if not launcher["api"]:
+            raise FeedError(f"the launcher of {tag} does not ask {LAUNCHER_API} for the installer")
+        return
+    wanted = pubkey_id(conf["pubkey"], "the public key in tauri.conf.json")
+    if got != wanted:
+        raise FeedError(f"the launcher of {tag} trusts key {got}, but {tag} is signed with the key in "
+                        f"tauri.conf.json ({wanted}): it would refuse every download")
+    if launcher["feed"] != V2_ENDPOINT:
+        raise FeedError(f"the launcher of {tag} must read {V2_ENDPOINT}, it reads {launcher['feed']!r}")
+
+
+def plan(tag: str, conf: dict, launcher: dict) -> dict:
     _, numbers = check_conf(tag, conf)
-    return {"tauri-feed": numbers <= BRIDGE, "frozen": numbers > BRIDGE}
+    check_launcher(tag, numbers, conf, launcher)
+    return {"frozen": numbers > BRIDGE}
 
 
 def read_sigs(folder) -> dict:
@@ -188,7 +262,7 @@ def read_sigs(folder) -> dict:
     folder = pathlib.Path(folder)
     if not folder.is_dir():
         raise FeedError(f"{folder}: no such folder")
-    return {p.name: p.read_text() for p in folder.iterdir() if p.is_file() and p.name.endswith(".sig")}
+    return {p.name: read_text(p) for p in folder.iterdir() if p.is_file() and p.name.endswith(".sig")}
 
 
 def check_feed(raw: bytes, *, name: str, tag: str, version: str, signer: tuple, sigs: dict) -> dict:
@@ -255,19 +329,23 @@ def frozen(feed_raw: bytes, sigs: dict, bridge_conf: dict, conf: dict, bridge_ta
     """The frozen latest.json: the bridge release's own latest.json, unchanged."""
     version, _ = version_of_tag(bridge_tag)
     check_bridge_conf(bridge_conf, conf)
-    old = ("the old key", pubkey_id(old_pubkey(), "the old public key"))
+    old = ("the old key", old_key_id())
     check_feed(feed_raw, name=f"latest.json of {bridge_tag}", tag=bridge_tag, version=version,
                signer=old, sigs=sigs)
     return feed_raw
 
 
-def utc_now() -> str:
-    """The time the way tauri-action writes pub_date."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+def release_date(release: dict) -> str:
+    """pub_date: when the release was published (created, for a draft), so a re-run writes the same feed."""
+    date = release.get("publishedAt") or release.get("createdAt")
+    if not isinstance(date, str) or not RFC3339.match(date):
+        raise FeedError(f"the release has no publishedAt or createdAt date ({date!r}); "
+                        f"read it with `gh release view --json assets,body,publishedAt,createdAt`")
+    return date
 
 
 def build_v2(release: dict, sigs: dict, version: str, pub_date: str) -> bytes:
-    """latest-v2.json from the release's files, in tauri-action's shape."""
+    """A feed from the release's files, byte for byte in tauri-action's shape."""
     assets = {a["name"]: a["url"] for a in release.get("assets", [])}
     platforms = {}
     used = set()
@@ -290,21 +368,55 @@ def build_v2(release: dict, sigs: dict, version: str, pub_date: str) -> bytes:
     return json.dumps(feed, indent=2, ensure_ascii=False).encode("utf-8")
 
 
-def v2(tag: str, conf: dict, sigs: dict, *, tauri_feed: bytes = None, release: dict = None,
-       pub_date: str = None) -> bytes:
-    """This release's latest-v2.json, checked against the rules for its version."""
+def v2(tag: str, conf: dict, sigs: dict, release: dict) -> bytes:
+    """This release's latest-v2.json, built from its files and checked against the rules for its version."""
     version, numbers = check_conf(tag, conf)
-    signer = signer_for(numbers, conf)
-    if numbers <= BRIDGE:
-        if tauri_feed is None:
-            raise FeedError(f"up to {BRIDGE_TAG}, latest-v2.json is a copy of the latest.json Tauri wrote")
-        raw = tauri_feed
-    else:
-        if release is None:
-            raise FeedError(f"after {BRIDGE_TAG}, latest-v2.json is built from the release's files")
-        raw = build_v2(release, sigs, version, pub_date or utc_now())
-    check_feed(raw, name="latest-v2.json", tag=tag, version=version, signer=signer, sigs=sigs)
+    raw = build_v2(release, sigs, version, release_date(release))
+    check_feed(raw, name="latest-v2.json", tag=tag, version=version, signer=signer_for(numbers, conf), sigs=sigs)
     return raw
+
+
+def check_latest_json(raw: bytes, name: str = "latest.json") -> None:
+    """latest.json is read by every DAW up to v0.266.46: nothing in it may be signed with anything but the old key."""
+    try:
+        feed = json.loads(raw)
+        platforms = feed["platforms"]
+        entries = list(platforms.items())
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise FeedError(f"{name} is not a feed") from None
+    old = old_key_id()
+    for target, entry in entries:
+        signed_by, _ = signature_info(entry.get("signature", "") if isinstance(entry, dict) else "",
+                                      f"{name}: {target} signature")
+        if signed_by != old:
+            raise FeedError(f"{name}: {target} is signed with key {signed_by}, not the old key ({old}): "
+                            f"DAWs up to v0.266.46 could never verify it")
+    _, numbers = version_of_tag("v" + str(feed.get("version")))
+    if numbers > BRIDGE:
+        raise FeedError(f"{name} offers {feed.get('version')}: nothing after {BRIDGE_TAG} is signed with the old key")
+
+
+def feeds(tag: str, conf: dict, sigs: dict, release: dict, *, bridge_feed: bytes = None,
+          bridge_sigs: dict = None, bridge_conf: dict = None) -> dict:
+    """{name: bytes} of both feeds this release publishes.
+
+    Up to v0.266.47 both are the release's own feed, signed with the old key.
+    After it, latest-v2.json is the release's own feed (key in tauri.conf.json)
+    and latest.json is v0.266.47's, frozen.
+    """
+    version, numbers = check_conf(tag, conf)
+    out = {"latest-v2.json": v2(tag, conf, sigs, release)}
+    if numbers <= BRIDGE:
+        out["latest.json"] = out["latest-v2.json"]
+        check_feed(out["latest.json"], name="latest.json", tag=tag, version=version,
+                   signer=("the old key", old_key_id()), sigs=sigs)
+    else:
+        if bridge_feed is None or bridge_sigs is None or bridge_conf is None:
+            raise FeedError(f"after {BRIDGE_TAG}, latest.json is {BRIDGE_TAG}'s own: pass its latest.json, "
+                            f".sig files and tauri.conf.json")
+        out["latest.json"] = frozen(bridge_feed, bridge_sigs, bridge_conf, conf)
+    check_latest_json(out["latest.json"])
+    return out
 
 
 def signing_key(tag: str, conf: dict, sig_text: str) -> str:
@@ -328,6 +440,13 @@ def read_bytes(path) -> bytes:
         raise FeedError(f"cannot read {path}: {error}") from None
 
 
+def read_json(path) -> dict:
+    try:
+        return json.loads(read_bytes(path))
+    except ValueError:
+        raise FeedError(f"{path} is not JSON") from None
+
+
 def write(path, data: bytes) -> None:
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,6 +460,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("plan")
     p.add_argument("--tag", required=True)
     p.add_argument("--conf", required=True)
+    p.add_argument("--launcher", required=True)
     sub.add_parser("bridge-tag")
     p = sub.add_parser("signing-key")
     p.add_argument("--tag", required=True)
@@ -352,19 +472,21 @@ def main(argv=None) -> int:
     p.add_argument("--sigs", required=True)
     p.add_argument("--bridge-conf", required=True)
     p.add_argument("--out", required=True)
-    p = sub.add_parser("v2")
+    p = sub.add_parser("feeds")
     p.add_argument("--tag", required=True)
     p.add_argument("--conf", required=True)
     p.add_argument("--sigs", required=True)
-    source = p.add_mutually_exclusive_group(required=True)
-    source.add_argument("--tauri-feed")
-    source.add_argument("--release")
+    p.add_argument("--release", required=True)
+    p.add_argument("--bridge-feed")
+    p.add_argument("--bridge-sigs")
+    p.add_argument("--bridge-conf")
     p.add_argument("--out", required=True)
     args = parser.parse_args(argv)
 
     try:
         if args.command == "plan":
-            for key, value in plan(args.tag, load_conf(args.conf)).items():
+            result = plan(args.tag, load_conf(args.conf), load_launcher(args.launcher))
+            for key, value in result.items():
                 print(f"{key}={'true' if value else 'false'}")
         elif args.command == "bridge-tag":
             print(BRIDGE_TAG)
@@ -373,16 +495,14 @@ def main(argv=None) -> int:
         elif args.command == "frozen":
             write(args.out, frozen(read_bytes(args.feed), read_sigs(args.sigs),
                                    load_conf(args.bridge_conf), load_conf(args.conf)))
-        elif args.command == "v2":
-            release = None
-            if args.release:
-                try:
-                    release = json.loads(read_bytes(args.release))
-                except ValueError:
-                    raise FeedError(f"{args.release} is not JSON") from None
-            write(args.out, v2(args.tag, load_conf(args.conf), read_sigs(args.sigs),
-                               tauri_feed=read_bytes(args.tauri_feed) if args.tauri_feed else None,
-                               release=release))
+        elif args.command == "feeds":
+            out = feeds(args.tag, load_conf(args.conf), read_sigs(args.sigs), read_json(args.release),
+                        bridge_feed=read_bytes(args.bridge_feed) if args.bridge_feed else None,
+                        bridge_sigs=read_sigs(args.bridge_sigs) if args.bridge_sigs else None,
+                        bridge_conf=load_conf(args.bridge_conf) if args.bridge_conf else None)
+            # Written only once both passed every check.
+            for name in FEED_NAMES:
+                write(pathlib.Path(args.out) / name, out[name])
     except FeedError as error:
         print(f"::error::updater feeds: {error}", file=sys.stderr)
         return 1
