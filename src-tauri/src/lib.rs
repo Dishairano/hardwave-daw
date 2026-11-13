@@ -986,6 +986,20 @@ pub fn run() {
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
 
+            // The plug-ins a stopped audio stream hands back have their
+            // settings read on the main thread: VST3 and CLAP allow it there
+            // only, and some plug-ins crash or hang when asked elsewhere.
+            {
+                let app = app_handle.clone();
+                engine
+                    .lock()
+                    .set_main_thread_runner(Arc::new(move |job: hardwave_engine::engine::MainThreadJob| {
+                        if let Err(e) = app.run_on_main_thread(job) {
+                            log::warn!("audio restart: could not reach the main thread: {e}");
+                        }
+                    }));
+            }
+
             // MIDI Learn dispatcher: drains incoming CC events and applies
             // mapped values to the live engine state. Also handles learn-mode
             // capture in the same loop so there's no race with the main
@@ -1221,7 +1235,15 @@ pub fn run() {
                             if restarted {
                                 // Slow (every plug-in loads), so not here.
                                 let app = app_handle.clone();
+                                let handed_back = eng.handed_back_plugins();
                                 std::thread::spawn(move || {
+                                    // The plug-ins the stopped stream handed
+                                    // back still have every knob turned since
+                                    // the last save: into the song first.
+                                    commands::plugins::keep_handed_back_settings(
+                                        &app,
+                                        handed_back,
+                                    );
                                     let state = app.state::<AppState>();
                                     match commands::plugins::hydrate_chains_from_project(&state) {
                                         Ok(()) => log::info!("plug-ins loaded again after the audio engine restarted"),

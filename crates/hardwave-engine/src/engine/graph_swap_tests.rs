@@ -51,7 +51,7 @@ unsafe impl GlobalAlloc for Watching {
 static WATCHING: Watching = Watching;
 
 /// Allocations and frees `f` makes on this thread.
-fn counted(f: impl FnOnce()) -> (usize, usize) {
+pub(super) fn counted(f: impl FnOnce()) -> (usize, usize) {
     let (a, b) = (ALLOCS.load(Relaxed), FREES.load(Relaxed));
     WATCHED.with(|w| w.set(true));
     f();
