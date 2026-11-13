@@ -956,8 +956,7 @@ pub type MainThreadRunner = Arc<dyn Fn(MainThreadJob) + Send + Sync>;
 pub struct PluginStateFarewell {
     /// `FAREWELL_ARMED` while the live stream runs, `FAREWELL_HANDING`
     /// while its dropped callback moves the plug-ins out, `FAREWELL_IDLE`
-    /// once they are in `left`, or once a stop that needs no settings (or
-    /// read them another way) said no.
+    /// once they are in `left`.
     state: std::sync::atomic::AtomicU8,
     left: Mutex<Option<HandedBack>>,
 }
@@ -997,18 +996,6 @@ impl PluginStateFarewell {
         }
         self.state
             .store(FAREWELL_IDLE, std::sync::atomic::Ordering::Release);
-    }
-
-    /// No hand-back from here on: a plain stop, or the settings were read
-    /// another way.
-    fn disarm(&self) {
-        use std::sync::atomic::Ordering;
-        let _ = self.state.compare_exchange(
-            FAREWELL_ARMED,
-            FAREWELL_IDLE,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
     }
 
     /// Whether the hand-back is over, or was turned down.
@@ -1367,6 +1354,10 @@ pub struct DawEngine {
     /// plug-ins handed back are read on the thread that stopped the stream
     /// then, which is never the audio thread.
     main_thread: Option<MainThreadRunner>,
+    /// Tests: take the engine for running, as with a stream playing on a
+    /// sound card, which no test machine has.
+    #[cfg(test)]
+    stream_in_test: bool,
     /// Rolling 3-minute capture of every live MIDI event seen by the
     /// engine. Audio thread pushes per-block; UI thread can dump the
     /// last N seconds into a clip without arming a track. The ring is
@@ -1453,6 +1444,8 @@ impl DawEngine {
             pending_state_snapshot: Arc::new(Mutex::new(None)),
             plugin_farewell: None,
             main_thread: None,
+            #[cfg(test)]
+            stream_in_test: false,
             midi_capture_ring: Arc::new(Mutex::new(MidiCaptureRing::new(8192))),
             starts: 0,
             start_failed: false,
@@ -2132,60 +2125,33 @@ impl DawEngine {
     }
 
     /// Stop the audio engine.
+    ///
+    /// The stream's callback hands its plug-ins back as the stream lets it
+    /// go (see [`PluginStateFarewell`]), and the main thread reads their
+    /// settings into the song and lets them go: a start loads the plug-ins
+    /// again from the song, with every knob turned since the last save.
+    /// Nothing asks the audio thread for the settings. That read every
+    /// plug-in's state on the audio thread, which VST3 and CLAP do not
+    /// allow (a plug-in that needs the main thread to save hung the app),
+    /// and the plug-ins were then let go on the stream's thread.
     pub fn stop(&mut self) {
-        // Nothing reloads the plug-ins after a plain stop: the callback need
-        // not hand them back on its way out.
-        if let Some(farewell) = self.plugin_farewell.take() {
-            farewell.disarm();
-        }
-        self.audio_device.stop();
-    }
-
-    /// Stop on the way to starting again (another device, rate, buffer,
-    /// driver or output). A start builds the engine's processing anew,
-    /// without the plug-ins, which the app then loads again from the song;
-    /// so their settings as they are now go into the song first, or every
-    /// knob turned since the last save would be lost.
-    pub fn stop_for_restart(&mut self) {
-        self.stop_for_restart_reading(true);
-    }
-
-    /// The same, saying whether the audio callback can still be asked for
-    /// the plug-ins' settings. After the stream failed it cannot: the ask
-    /// waited half a second with the engine locked for an answer that
-    /// never came. The plug-ins are still alive though, only the device
-    /// went away: the callback hands them back as the stream lets it go
-    /// (see [`PluginStateFarewell`]), and their settings are read into the
-    /// song on the main thread. Every knob turned since the last save used
-    /// to go back to its saved value here.
-    fn stop_for_restart_reading(&mut self, stream_alive: bool) {
-        // A stream that never started (or was stopped already) hosts no
-        // plug-ins: there is nothing to read then.
-        let was_running = self.is_running();
         let farewell = self.plugin_farewell.take();
-        let mut read = false;
-        if stream_alive {
-            if let Some(states) = self.snapshot_plugin_states(std::time::Duration::from_millis(500))
-            {
-                keep_live_states_in(&mut self.project.lock(), states);
-                read = true;
-                // Read already: the callback need not hand them back.
-                if let Some(farewell) = &farewell {
-                    farewell.disarm();
-                }
-            }
-        }
         self.audio_device.stop();
         // The stream lets the callback go by now (when the device went away
         // it may have done so before this stop, or do so a moment after):
         // what it hands back holds the plug-ins as they were at the end.
-        match farewell {
-            Some(farewell) => self.take_hand_back(farewell),
-            None if was_running && !read => log::warn!(
-                "audio restart: plug-in settings changed since the last save could not be read"
-            ),
-            None => {}
+        if let Some(farewell) = farewell {
+            self.take_hand_back(farewell);
         }
+    }
+
+    /// Stop on the way to starting again (another device, rate, buffer,
+    /// driver or output, or the device went away). A start builds the
+    /// engine's processing anew, without the plug-ins, which the app then
+    /// loads again from the song; so their settings as they are now go into
+    /// the song first, as [`Self::stop`] has them.
+    pub fn stop_for_restart(&mut self) {
+        self.stop();
     }
 
     /// Take what a stopped stream's callback hands back, and have the main
@@ -3117,6 +3083,10 @@ impl DawEngine {
     }
 
     pub fn is_running(&self) -> bool {
+        #[cfg(test)]
+        if self.stream_in_test {
+            return true;
+        }
         self.audio_device.is_running()
     }
 
@@ -3143,7 +3113,7 @@ impl DawEngine {
             return Ok(None);
         }
         let before = self.audio_device.active_device_name().map(str::to_string);
-        self.stop_for_restart_reading(false);
+        self.stop_for_restart();
         let failed_again = self
             .last_audio_restart
             .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5));
@@ -8283,7 +8253,7 @@ mod rt_safety_tests {
         cb.process(&mut out, 0, 2);
 
         std::thread::spawn(move || drop(cb)).join().unwrap();
-        engine.stop_for_restart_reading(false);
+        engine.stop_for_restart();
 
         assert_eq!(
             saved_shape(&engine),
@@ -8382,7 +8352,7 @@ mod rt_safety_tests {
         assert!(seen.lock().is_empty(), "nothing asked of the plug-in");
 
         drop(cb);
-        engine.stop_for_restart_reading(false);
+        engine.stop_for_restart();
         assert_eq!(saved_shape(&engine), 0.8);
     }
 
@@ -8406,7 +8376,7 @@ mod rt_safety_tests {
             drop(cb);
         });
         stream.join().unwrap();
-        engine.stop_for_restart_reading(false);
+        engine.stop_for_restart();
         assert_eq!(saved_shape(&engine), 0.61);
     }
 
@@ -8420,6 +8390,8 @@ mod rt_safety_tests {
             .set_plugin_state("shape", "vst3", 0.333f64.to_le_bytes().to_vec());
         let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
         live_farewell(engine, &mut cb);
+        // As `start` wires it: the engine's settings requests reach it.
+        cb.pending_state_snapshot = Arc::clone(&engine.pending_state_snapshot);
         let seen = add_block_fed_to_master(&mut cmd_tx, 0.333);
         cmd_tx.try_send(set_master_shape(0.8)).ok().unwrap();
         let mut out = vec![0.0f32; 512];
@@ -8539,24 +8511,66 @@ mod rt_safety_tests {
         );
     }
 
-    /// A plain stop reloads nothing, so the callback does not hand its
-    /// plug-ins back on the way out; nor does a callback the engine never
-    /// gave a farewell (an export's).
+    /// A buffer, rate, device or output change with the stream playing asked
+    /// the audio thread for every plug-in's settings, which it read right
+    /// there, and the plug-ins were then let go with the callback on the
+    /// stream's thread. A plug-in that needs the main thread to save its
+    /// state hung the app: the main thread waited on the audio thread, which
+    /// waited on the main thread. Now the stream is stopped and hands its
+    /// plug-ins back, as when the device goes away.
     #[test]
-    fn a_plain_stop_or_an_export_callback_hands_nothing_back() {
+    fn a_restart_with_the_stream_playing_reads_the_plug_ins_off_the_audio_thread() {
         let mut engine = DawEngine::new();
-        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
-        let farewell = live_farewell(&mut engine, &mut cb);
-        add_block_fed_to_master(&mut cmd_tx, 0.333);
-        let mut out = vec![0.0f32; 512];
-        cb.process(&mut out, 256, 2);
-        engine.stop();
-        drop(cb);
-        assert!(farewell.left.lock().is_none());
-        assert!(engine.handed_back.waiting.lock().is_empty());
+        let (mut cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        engine.stream_in_test = true;
+        // The stream's thread: blocks until the stop lets the callback go.
+        let stream = std::thread::spawn(move || {
+            let mut out = vec![0.0f32; 512];
+            for _ in 0..30 {
+                cb.process(&mut out, 256, 2);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            drop(cb);
+        });
+        engine.stop_for_restart();
+        stream.join().unwrap();
 
+        assert_eq!(saved_shape(&engine), 0.8, "the knob as it was");
+        let here = std::thread::current().id();
+        assert_eq!(
+            *seen.lock(),
+            vec![("state read", here), ("let go", here)],
+            "read and let go off the stream's thread"
+        );
+    }
+
+    /// A plain stop let the plug-ins go with the callback on the stream's
+    /// thread. They are handed back as on a restart: let go on the main
+    /// thread, their settings kept in the song for the next start.
+    #[test]
+    fn a_plain_stop_lets_the_plug_ins_go_off_the_audio_thread() {
+        let mut engine = DawEngine::new();
+        let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+        let stream = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(cb);
+        });
+        engine.stop();
+        stream.join().unwrap();
+
+        assert_eq!(saved_shape(&engine), 0.8, "the knob as it was");
+        let here = std::thread::current().id();
+        assert_eq!(*seen.lock(), vec![("state read", here), ("let go", here)]);
+    }
+
+    /// A callback the engine never gave a farewell (an export's) hands
+    /// nothing back.
+    #[test]
+    fn an_export_callback_hands_nothing_back() {
+        let engine = DawEngine::new();
         let (mut export, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
         add_block_fed_to_master(&mut cmd_tx, 0.333);
+        let mut out = vec![0.0f32; 512];
         export.process(&mut out, 256, 2);
         drop(export);
         assert!(engine.handed_back.waiting.lock().is_empty());
