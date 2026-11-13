@@ -4994,9 +4994,12 @@ impl EngineCallback {
 
     /// Hand this callback's plug-ins back through `farewell`, for the main
     /// thread to read their settings from and let them go. Runs on the
-    /// thread the stream lets the callback go on, which on WASAPI is the
-    /// audio thread itself: it moves the plug-ins out and asks them for
-    /// nothing, allocates nothing, frees nothing and waits for nothing.
+    /// thread that lets the callback go: the one stopping the stream, as the
+    /// device manager takes the callback back from it, which can be the
+    /// main thread inside an audio settings change with the engine locked;
+    /// or a stream's own audio thread, if one ever lets it go first. So it
+    /// moves the plug-ins out and asks them for nothing, allocates nothing,
+    /// frees nothing and waits for nothing.
     fn hand_back_plugins(&mut self, farewell: &PluginStateFarewell) {
         if !farewell.begin_hand_back() {
             return;
