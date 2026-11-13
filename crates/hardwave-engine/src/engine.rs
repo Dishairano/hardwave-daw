@@ -936,20 +936,23 @@ pub type MainThreadJob = Box<dyn FnOnce() + Send>;
 pub type MainThreadRunner = Arc<dyn Fn(MainThreadJob) + Send + Sync>;
 
 /// How a live stream's callback gives its plug-ins back when the stream
-/// lets it go. When the sound card goes away (a remote-desktop disconnect,
-/// an interface unplugged, a driver reset) the stream stops calling the
-/// callback, so a settings request is never answered; but the plug-ins are
-/// still there until the callback is dropped. On its way out it hands them
-/// back here, holding every knob turned since the last save, and the engine
-/// has their settings read into the song on the main thread before the
+/// lets it go: on every stop, a restart, and when the sound card goes away
+/// (a remote-desktop disconnect, an interface unplugged, a driver reset),
+/// where the stream stops calling the callback and a settings request is
+/// never answered. The plug-ins are still there until the callback is
+/// dropped. On its way out it hands them back here, holding every knob
+/// turned since the last save, and the engine has their settings read into
+/// the song on the main thread, and the plug-ins let go there, before the
 /// restart loads the plug-ins again.
 ///
 /// The callback is dropped on whatever thread the stream lets it go on:
-/// the audio thread itself on WASAPI (shared and exclusive), the thread that
-/// stops the stream on ASIO and CoreAudio. That is never the main thread,
-/// and some plug-ins crash or hang when asked for their state anywhere
-/// else, so the callback only moves its plug-ins out: it reads no settings,
-/// allocates nothing and waits for nothing.
+/// the audio thread itself on WASAPI (shared and exclusive); on ASIO and
+/// CoreAudio the thread that stops the stream, which can be any thread
+/// (on ASIO inside the driver's own callback lock). VST3 and CLAP allow a
+/// plug-in's state to be read on the main thread only, and some plug-ins
+/// crash or hang when asked anywhere else, so the callback only moves its
+/// plug-ins out: it reads no settings, allocates nothing and waits for
+/// nothing.
 ///
 /// One per live stream, so a callback let go late cannot hand its plug-ins
 /// to the stream started after it.
@@ -8628,6 +8631,70 @@ mod rt_safety_tests {
             vec![("let go", here)],
             "not read, let go on the main thread"
         );
+    }
+
+    /// The app's side of a restart, without the app. The engine has its own
+    /// main-thread job read what the stopped stream handed back; the app,
+    /// once it sees the start, posts the reload of the song's plug-ins,
+    /// which reads the handed-back plug-ins first in the same job. Whichever
+    /// job the main thread runs first, the reload finds the knobs as they
+    /// were, and each plug-in is read once.
+    #[test]
+    fn the_reload_after_a_restart_has_the_knobs_whichever_main_thread_job_runs_first() {
+        for reload_first in [false, true] {
+            let mut engine = DawEngine::new();
+            let jobs: Arc<Mutex<Vec<MainThreadJob>>> = Arc::default();
+            {
+                let jobs = Arc::clone(&jobs);
+                engine.set_main_thread_runner(Arc::new(move |job: MainThreadJob| {
+                    jobs.lock().push(job)
+                }));
+            }
+            let (cb, seen) = live_callback_with_a_turned_knob(&mut engine);
+            // The health check restarts audio on the meter thread while the
+            // stream's thread lets the callback go.
+            std::thread::scope(|s| {
+                s.spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    drop(cb);
+                });
+                s.spawn(|| engine.stop_for_restart());
+            });
+            let mut on_main = std::mem::take(&mut *jobs.lock());
+            assert_eq!(on_main.len(), 1, "the engine's own read is posted");
+
+            // What the app posts: the handed-back plug-ins, then the reload,
+            // which loads each plug-in with the song's settings.
+            let handed_back = engine.handed_back_plugins();
+            let song = Arc::clone(&engine.project);
+            let loaded = Arc::new(Mutex::new(None));
+            let reload: MainThreadJob = {
+                let loaded = Arc::clone(&loaded);
+                Box::new(move || {
+                    handed_back.keep_settings();
+                    *loaded.lock() = song
+                        .lock()
+                        .plugin_state("shape")
+                        .map(|entry| f64::from_le_bytes(entry.chunk[..8].try_into().unwrap()));
+                })
+            };
+            if reload_first {
+                on_main.insert(0, reload);
+            } else {
+                on_main.push(reload);
+            }
+            for job in on_main {
+                job();
+            }
+
+            assert_eq!(*loaded.lock(), Some(0.8), "reload first: {reload_first}");
+            let reads = seen
+                .lock()
+                .iter()
+                .filter(|(what, _)| *what == "state read")
+                .count();
+            assert_eq!(reads, 1, "reload first: {reload_first}");
+        }
     }
 
     /// A buffer, rate, device or output change with the stream playing asked

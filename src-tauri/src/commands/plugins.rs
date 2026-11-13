@@ -1838,28 +1838,34 @@ pub fn hydrate_chains_from_project(state: &AppState) -> Result<(), String> {
     hydrate_chains(state, None)
 }
 
-/// Read the settings of the plug-ins a stopped audio stream handed back
-/// into the song, on the main thread (the only thread VST3 and CLAP allow a
-/// plug-in's state to be read on), and wait until that is done. Call it
-/// before the song's plug-ins are loaded again after an audio restart, so
-/// they come back with every knob turned since the last save. The engine
-/// queues the same read itself when it takes the plug-ins back; whichever
-/// runs first reads them. Holds no lock while it waits.
-pub fn keep_handed_back_settings(
+/// Load the song's plug-ins again after an audio restart: a start drops
+/// the plug-ins the engine hosted. They are made on the main thread, where
+/// plug-ins expect to be made, as a posted job, as when a song opens; the
+/// ones not tried yet are tried first, here, off it. The plug-ins the
+/// stopped stream handed back still have every knob turned since the last
+/// save, so the same job reads their settings into the song first: the new
+/// copies load with them whichever of this job and the engine's own read
+/// the main thread runs first. Call it off the main thread, holding no
+/// lock; it does not wait for the job.
+pub fn reload_after_restart(
     app: &AppHandle,
     handed_back: hardwave_engine::engine::HandedBackPlugins,
 ) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    if let Err(e) = app.run_on_main_thread(move || {
-        let _ = tx.send(handed_back.keep_settings());
-    }) {
-        log::warn!(
-            "plug-in settings after the audio restart: could not reach the main thread: {e}"
-        );
-        return;
+    {
+        let state = app.state::<AppState>();
+        let descriptors = project_descriptors(&state);
+        probe_ahead(&state, &descriptors);
     }
-    if rx.recv_timeout(std::time::Duration::from_secs(30)).is_err() {
-        log::warn!("plug-in settings after the audio restart: the main thread did not get to them");
+    let for_main = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || {
+        handed_back.keep_settings();
+        let state = for_main.state::<AppState>();
+        match hydrate_chains_from_project(&state) {
+            Ok(()) => log::info!("plug-ins loaded again after the audio engine restarted"),
+            Err(e) => log::warn!("plug-ins after the restart: {e}"),
+        }
+    }) {
+        log::warn!("plug-ins after the restart: could not reach the main thread: {e}");
     }
 }
 
