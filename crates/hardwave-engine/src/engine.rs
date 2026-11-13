@@ -931,8 +931,9 @@ pub type MainThreadJob = Box<dyn FnOnce() + Send>;
 
 /// Runs a job on the app's main thread: the thread the app loads its
 /// plug-ins on, and the only one VST3 and CLAP allow a plug-in's state to
-/// be read on. Called on the main thread it may run the job at once;
-/// called on any other it queues it. It never waits for the job.
+/// be read on. It queues the job and never waits for it, and never runs it
+/// on the calling thread, even when that is the main thread: the engine
+/// calls it holding its own lock.
 pub type MainThreadRunner = Arc<dyn Fn(MainThreadJob) + Send + Sync>;
 
 /// How a live stream's callback gives its plug-ins back when the stream

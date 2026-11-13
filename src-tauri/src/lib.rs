@@ -989,13 +989,19 @@ pub fn run() {
             // The plug-ins a stopped audio stream hands back have their
             // settings read on the main thread: VST3 and CLAP allow it there
             // only, and some plug-ins crash or hang when asked elsewhere.
+            // Posted from a thread of its own: Tauri runs a job at once when
+            // asked on the main thread, and the engine asks holding its lock
+            // (inside a command such as an audio settings change).
             {
                 let app = app_handle.clone();
                 engine.lock().set_main_thread_runner(Arc::new(
                     move |job: hardwave_engine::engine::MainThreadJob| {
-                        if let Err(e) = app.run_on_main_thread(job) {
-                            log::warn!("audio restart: could not reach the main thread: {e}");
-                        }
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            if let Err(e) = app.run_on_main_thread(job) {
+                                log::warn!("audio restart: could not reach the main thread: {e}");
+                            }
+                        });
                     },
                 ));
             }
