@@ -946,14 +946,15 @@ pub type MainThreadRunner = Arc<dyn Fn(MainThreadJob) + Send + Sync>;
 /// the song on the main thread, and the plug-ins let go there, before the
 /// restart loads the plug-ins again.
 ///
-/// The callback is dropped on whatever thread the stream lets it go on:
-/// the audio thread itself on WASAPI (shared and exclusive); on ASIO and
-/// CoreAudio the thread that stops the stream, which can be any thread
-/// (on ASIO inside the driver's own callback lock). VST3 and CLAP allow a
-/// plug-in's state to be read on the main thread only, and some plug-ins
-/// crash or hang when asked anywhere else, so the callback only moves its
-/// plug-ins out: it reads no settings, allocates nothing and waits for
-/// nothing.
+/// The device manager takes the callback back from the stream as it stops
+/// it, so the callback is dropped on the thread that stops the stream: the
+/// main thread inside an audio settings change, with the engine locked,
+/// the meter thread when the device went away, or another. (It was the
+/// audio thread itself on WASAPI before the manager took it back.) VST3
+/// and CLAP allow a plug-in's state to be read on the main thread only,
+/// and some plug-ins crash or hang when asked anywhere else, so the
+/// callback only moves its plug-ins out: it reads no settings, allocates
+/// nothing and waits for nothing.
 ///
 /// One per live stream, so a callback let go late cannot hand its plug-ins
 /// to the stream started after it.
@@ -1009,12 +1010,10 @@ impl PluginStateFarewell {
     }
 
     /// The engine's side, once it has stopped the stream: the plug-ins, if
-    /// the callback handed them back. The stream can let the callback go a
-    /// moment after the stop returns (on WASAPI, when the device went away
-    /// and the stream's thread was already ending, the stop cannot reach
-    /// it), or be letting it go right now: either is waited for, a moment
-    /// at most, since the callback only moves its plug-ins out. `Err` when
-    /// it has not let the callback go by then.
+    /// the callback handed them back. The stop lets the callback go, so it
+    /// has normally handed them back by now; a callback let go a moment
+    /// later, or right now, is waited for, a moment at most, since it only
+    /// moves its plug-ins out. `Err` when it has not been let go by then.
     fn take_after_stop(&self) -> Result<Option<HandedBack>, ()> {
         let deadline = std::time::Instant::now() + FAREWELL_WAIT;
         while !self.settled() {
