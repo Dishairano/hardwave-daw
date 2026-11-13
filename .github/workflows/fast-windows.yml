@@ -134,7 +134,7 @@ jobs:
         # downloads does not define, so every Windows build died with
         # `macro named "RestartManager_StartSession" not found` (v0.230.0).
         # Move this forward deliberately, together with the tauri crate.
-        run: npm install -g @tauri-apps/cli@2.11.5
+        run: npm install -g --ignore-scripts @tauri-apps/cli@2.11.5
 
       # The launcher is also the DAW's uninstaller (Windows Apps opens it
       # with --uninstall), so a test build carries it the way a release

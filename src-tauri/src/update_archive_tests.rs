@@ -5,10 +5,13 @@
 //! - `latest.json`, read by every DAW up to v0.266.46. Those trust only the old key, so this
 //!   feed always offers an update signed with it: the newest release up to v0.266.47, and
 //!   v0.266.47 itself from then on.
-//! - `latest-v2.json`, the endpoint in tauri.conf.json, read from v0.266.47 on. Its update is
-//!   signed with the key in tauri.conf.json, apart from v0.266.47's own entry, which was
-//!   published before the signing secret switched and carries the old key (no copy reading
-//!   this feed installs it: they already run v0.266.47 or later).
+//! - `latest-v2.json`, the endpoint in tauri.conf.json, read by builds that carry the new key:
+//!   v0.266.47 and later, and test builds and release candidates made from the same code. Its
+//!   update is signed with the key in tauri.conf.json, apart from v0.266.47's own feed, which
+//!   was published before the signing secret switched and carries the old key. A release
+//!   reading it is not offered v0.266.47 (it already runs v0.266.47 or later), but a test
+//!   build or release candidate numbered below v0.266.47 is, and refuses its signature: such
+//!   a build stays where it is until v0.266.48 (new key) is out, or is reinstalled by hand.
 //!
 //! For each feed this takes the update it offers through the same steps the updater does.
 //! On Windows the updater downloads the `.nsis.zip` named in the feed when the running build
@@ -20,9 +23,11 @@
 //! unpacked file is byte for byte the one we signed.
 //!
 //! It downloads about 15 MB per feed, so it only runs when asked:
-//! `hw-daw-cargo test -j 1 -p hardwave-daw --lib update_archive -- --ignored`.
+//! `hw-daw-cargo test -j 1 -p hardwave-daw --lib update_archive -- --ignored --nocapture`.
 //! With `HW_UPDATE_FIXTURES` set to a folder holding the feeds and the files they name, it
-//! reads them from there instead.
+//! reads them from there instead. Each test prints one line saying which feed it verified
+//! and where from ("live" or the fixtures folder), or that it skipped the feed and why;
+//! switch-secret.sh (HQ) reads those lines, so a skip can never pass for a check.
 
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -53,6 +58,14 @@ fn endpoint(app: &tauri::App<MockRuntime>) -> String {
         .as_str()
         .expect("tauri.conf.json names an update endpoint")
         .to_string()
+}
+
+/// Where the feeds and archives come from: "live" (GitHub) or the fixtures folder.
+fn source() -> String {
+    match std::env::var("HW_UPDATE_FIXTURES") {
+        Ok(dir) => format!("fixtures {dir}"),
+        Err(_) => "live".to_string(),
+    }
 }
 
 async fn fetch(url: &str) -> Vec<u8> {
@@ -169,6 +182,12 @@ fn the_old_feed_offers_an_update_old_installs_accept() {
             manifest["version"]
         );
         check_update(&app, &manifest, Some(OLD_PUBKEY)).await;
+        println!(
+            "update_archive: verified latest.json ({}): offers {}, signed with the old key, \
+             unpacks to the installer we signed",
+            source(),
+            manifest["version"].as_str().unwrap_or_default()
+        );
     });
 }
 
@@ -184,13 +203,27 @@ fn the_new_feed_offers_an_update_signed_with_the_key_its_readers_trust() {
         );
         let newest = offered(&feed(OLD_FEED).await);
         if newest < BRIDGE {
-            eprintln!(
-                "the newest release is {newest:?}, older than latest-v2.json: nothing to check yet"
+            println!(
+                "update_archive: SKIPPED latest-v2.json ({}): NOT VERIFIED. The newest release is \
+                 {newest:?}, older than v0.266.47, the first release that publishes latest-v2.json",
+                source()
             );
             return;
         }
         let manifest = feed(&endpoint(&app)).await;
-        let pubkey = (offered(&manifest) == BRIDGE).then_some(OLD_PUBKEY);
+        let bridge = offered(&manifest) == BRIDGE;
+        let pubkey = bridge.then_some(OLD_PUBKEY);
         check_update(&app, &manifest, pubkey).await;
+        println!(
+            "update_archive: verified latest-v2.json ({}): offers {}, signed with {}, \
+             unpacks to the installer we signed",
+            source(),
+            manifest["version"].as_str().unwrap_or_default(),
+            if bridge {
+                "the old key"
+            } else {
+                "the key in tauri.conf.json"
+            }
+        );
     });
 }

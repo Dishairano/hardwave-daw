@@ -74,6 +74,10 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace
 
+      # The launcher is a workspace of its own; release.yml runs these too.
+      - name: Launcher tests
+        run: cargo test --manifest-path installer/src-tauri/Cargo.toml
+
   frontend:
     runs-on: ubuntu-latest
     steps:

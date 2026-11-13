@@ -66,8 +66,14 @@ Help → Check for updates.
 
 There are two updater feeds since the signing key changed with v0.266.47:
 the app reads `latest-v2.json`, and `latest.json` stays on v0.266.47 for
-copies up to v0.266.46, which only trust the old key. See
-`scripts/updater_feeds.py`.
+copies up to v0.266.46, which only trust the old key. The release workflow
+writes both from the release's own files (Tauri writes neither); see
+`scripts/updater_feeds.py`. The signing secret lives in the GitHub
+environment `daw-release`, which only `v*` tags can use. That bridge only
+exists on Windows: releases have been Windows-only since 2026-09-14, so
+v0.266.47 has no macOS or Linux build, and macOS and Linux installs up to
+v0.266.46 cannot reach the new key through the feeds. Those users reinstall
+by hand once macOS and Linux builds ship again.
 
 Bullet discipline matters: `- fix:` / `- feat:` / `- improve:` lines in the
 commit body become the user-facing changelog; a release with no bullets is
