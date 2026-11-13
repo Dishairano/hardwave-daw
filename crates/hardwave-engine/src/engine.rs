@@ -1976,6 +1976,15 @@ impl DawEngine {
     }
 
     fn start_stream(&mut self) -> Result<(), String> {
+        // A stream stopped without the engine (switching the driver stops it
+        // in the device manager) handed its plug-ins back all the same: their
+        // settings go into the song before this start's plug-ins are loaded
+        // from it.
+        if let Some(farewell) = self.plugin_farewell.take() {
+            if let Some(plugins) = farewell.settle_and_take() {
+                self.keep_handed_back(plugins);
+            }
+        }
         let transport = self.transport.clone();
         let project = Arc::clone(&self.project);
         let command_rx = self.command_rx.clone();
@@ -8378,6 +8387,40 @@ mod rt_safety_tests {
         device.join().unwrap();
         assert!(!farewell.begin_hand_back(), "nothing more after the stop");
         assert!(farewell.settle_and_take().is_none());
+    }
+
+    /// Switching the driver (WASAPI to ASIO, say) stops the stream in the
+    /// device manager, not through the engine's restart, and starts again.
+    /// The callback handed its plug-ins back, but nothing took them: every
+    /// knob turned since the last save went back to its saved value.
+    #[test]
+    fn a_driver_switch_keeps_the_plug_in_settings_turned_since_the_last_save() {
+        let mut engine = DawEngine::new();
+        // No stream starts here: no device has its mix on outputs 1000 up.
+        engine.set_channel_offsets(0, 1000);
+        engine
+            .project
+            .lock()
+            .set_plugin_state("shape", "vst3", 0.333f64.to_le_bytes().to_vec());
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&engine.project));
+        live_farewell(&mut engine, &mut cb);
+        add_block_fed_to_master(&mut cmd_tx, 0.333);
+        cmd_tx.try_send(set_master_shape(0.55)).ok().unwrap();
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+
+        // What the device manager's driver switch does to the live stream.
+        let host = engine.audio_host_name();
+        engine.set_audio_host(&host).unwrap();
+        std::thread::spawn(move || drop(cb)).join().unwrap();
+        // And what `set_audio_host` does next, with audio on.
+        let _ = engine.start();
+
+        assert_eq!(
+            saved_shape(&engine),
+            0.55,
+            "the plug-ins load again with the knob as it was"
+        );
     }
 
     /// A plain stop reloads nothing, so the callback does not hand its
