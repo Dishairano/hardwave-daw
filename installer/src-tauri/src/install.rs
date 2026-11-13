@@ -58,10 +58,14 @@ fn emit(app: &AppHandle, phase: &str, percent: u32, message: &str) {
     );
 }
 
-/// The public half of the key every Hardwave DAW update is signed with,
-/// the same one the DAW's own updater trusts (src-tauri/tauri.conf.json;
-/// a test keeps the two equal). The launcher runs what it downloads, so
-/// it runs nothing that this key did not sign.
+/// The public half of the key the latest Hardwave DAW release is signed
+/// with. The launcher runs what it downloads, so it runs nothing that this
+/// key did not sign.
+///
+/// In v0.266.47 this is the OLD key, on purpose: the DAW it installs
+/// already trusts the new key (src-tauri/tauri.conf.json), but v0.266.47
+/// itself is still signed with the old one. From v0.266.48 on the launcher
+/// trusts the DAW's key again (a test states the rule).
 const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxQkQ4NkQyQTVCOUE0OApSV1JJbWxzcWJkZ2JEMGZPOHU0ZTVMeEtQMERwQTlxTEJYaDkxTGpNZVQzYkRSSlJHNUhsVnhJMgo=";
 
 /// Whether `data` carries Hardwave's signature, given the `.sig` file
@@ -486,13 +490,36 @@ fn human_bytes(n: u64) -> String {
 mod tests {
     use super::*;
 
+    /// v0.266.47 changes the updater key. The DAW it installs trusts the
+    /// new key, but v0.266.47 is signed with the old key, and that release
+    /// is what this launcher downloads and checks. So here, and only in this
+    /// release, the launcher's key and the DAW's differ on purpose.
     #[test]
-    fn the_launcher_trusts_the_same_key_as_the_daw() {
+    fn the_launcher_trusts_the_key_v0_266_47_is_signed_with() {
         let conf = include_str!("../../../src-tauri/tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(conf).unwrap();
+        let old_key = include_str!("../../../src-tauri/updater-key-until-v0.266.47.pub");
         assert_eq!(
+            UPDATER_PUBKEY,
+            old_key.trim(),
+            "v0.266.47 is signed with the old key"
+        );
+        assert_ne!(
             conf["plugins"]["updater"]["pubkey"].as_str(),
-            Some(UPDATER_PUBKEY)
+            Some(UPDATER_PUBKEY),
+            "the DAW of v0.266.47 trusts the new key"
+        );
+        // Only v0.266.47 ships with this rule: a later release is signed
+        // with the new key, which this launcher would refuse.
+        let version: Vec<u64> = conf["version"]
+            .as_str()
+            .unwrap()
+            .split('.')
+            .map(|part| part.parse().unwrap())
+            .collect();
+        assert!(
+            version <= vec![0, 266, 47],
+            "v0.266.48 and later need the launcher that trusts the new key"
         );
     }
 

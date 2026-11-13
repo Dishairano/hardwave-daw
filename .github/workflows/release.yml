@@ -214,11 +214,63 @@ jobs:
     secrets:
       SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
 
+  # The DAW has two update feeds since the updater key changed with v0.266.47
+  # (scripts/updater_feeds.py says why). Checked here, before anything is
+  # built, so a release whose feeds old installs could not follow stops while
+  # there is nothing to take back: the app reads latest-v2.json and trusts the
+  # new key, the signing secret is the key this version must be signed with
+  # (the old key up to v0.266.47, the key in tauri.conf.json after it), and
+  # from v0.266.48 on v0.266.47's latest.json is there to be frozen.
+  updater-feeds-check:
+    name: Updater feeds (before the build)
+    runs-on: ubuntu-latest
+    outputs:
+      tauri-feed: ${{ steps.plan.outputs.tauri-feed }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Feed script tests
+        run: python3 -m unittest discover -s scripts -p 'test_updater_feeds.py'
+
+      # tauri-feed says whether Tauri writes latest.json (up to v0.266.47) or
+      # the feeds job writes both feeds itself (after it).
+      - name: Plan the feeds for this tag
+        id: plan
+        run: |
+          plan="$(python3 -I scripts/updater_feeds.py plan --tag "$GITHUB_REF_NAME" --conf src-tauri/tauri.conf.json)"
+          printf '%s\n' "$plan" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$plan"
+
+      - name: The frozen latest.json can be made
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/updater-feeds.sh check
+
+      - name: Install Tauri CLI
+        # The same pinned version as the build.
+        run: npm install -g @tauri-apps/cli@2.11.5
+
+      # Signs a throwaway file with the secret and reads which key signed it.
+      # A secret switched before v0.266.47 was out, or not yet switched for a
+      # later release, would publish updates nobody's DAW accepts.
+      - name: The signing secret is the key this version must be signed with
+        timeout-minutes: 5
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          printf 'Hardwave DAW updater key check\n' > "$RUNNER_TEMP/key-check.txt"
+          tauri signer sign "$RUNNER_TEMP/key-check.txt" > /dev/null
+          python3 -I scripts/updater_feeds.py signing-key --tag "$GITHUB_REF_NAME" \
+            --conf src-tauri/tauri.conf.json --sig "$RUNNER_TEMP/key-check.txt.sig"
+
   build:
     # Publishes the release, so it alone may write.
     permissions:
       contents: write
-    needs: [frontend, changelog, lint-and-test, ui-tests, secure-code-check]
+    needs: [frontend, changelog, lint-and-test, ui-tests, secure-code-check, updater-feeds-check]
     strategy:
       fail-fast: false
       matrix:
@@ -227,7 +279,7 @@ jobs:
           # legs are parked so a tag reaches a testable installer as fast as
           # the runners allow. Every gate still runs. Uncomment both legs to
           # go back to a three-platform release; while they are off,
-          # latest.json carries no Linux or macOS entry, so users on those
+          # the update feeds carry no Linux or macOS entry, so users on those
           # platforms stay on the version they have.
           # - platform: ubuntu-22.04
           #   target: x86_64-unknown-linux-gnu
@@ -402,6 +454,9 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
+          # latest.json is Tauri's own up to v0.266.47; after it the
+          # updater-feeds job writes both feeds (scripts/updater_feeds.py).
+          includeUpdaterJson: ${{ needs.updater-feeds-check.outputs.tauri-feed }}
           args: --target ${{ matrix.target }} --features jack --bundles ${{ matrix.tauri-bundles }}
 
       # Custom branded launcher-style installer (the small Tauri app
@@ -502,6 +557,9 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
+          # latest.json is Tauri's own up to v0.266.47; after it the
+          # updater-feeds job writes both feeds (scripts/updater_feeds.py).
+          includeUpdaterJson: ${{ needs.updater-feeds-check.outputs.tauri-feed }}
           args: --target ${{ matrix.target }} --features asio --bundles ${{ matrix.tauri-bundles }}
 
       - name: Stage HardwaveDAW-Setup.exe
@@ -577,16 +635,41 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
+          # latest.json is Tauri's own up to v0.266.47; after it the
+          # updater-feeds job writes both feeds (scripts/updater_feeds.py).
+          includeUpdaterJson: ${{ needs.updater-feeds-check.outputs.tauri-feed }}
           args: --target ${{ matrix.target }} --bundles ${{ matrix.tauri-bundles }}
+
+  # Attaches the update feeds once the build has uploaded the installers and
+  # their .sig files: latest-v2.json always, and from v0.266.48 on the frozen
+  # latest.json that sends DAWs up to v0.266.46 to v0.266.47. A job of its
+  # own after every build leg, so the feeds cover all of them. It checks
+  # everything before it uploads anything; a failure leaves the feed missing
+  # (no update offered), never one that installs cannot verify.
+  updater-feeds:
+    name: Updater feeds
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Write and attach the feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/updater-feeds.sh publish
 
   # Secure Code Check evidence for this release: the report (HTML and
   # JSON) built from this run's results, signed with our key, the SBOMs,
   # and the public page as files ready to publish. All attached to the
-  # GitHub release. Runs after the build, because the report lists the
-  # SHA-256 of every file the release carries.
+  # GitHub release. Runs after the build and the feeds, because the report
+  # lists the SHA-256 of every file the release carries.
   evidence:
     name: Secure Code Check evidence
-    needs: [secure-code-check, lint-and-test, ui-tests, build]
+    needs: [secure-code-check, lint-and-test, ui-tests, build, updater-feeds]
     permissions:
       contents: write
     uses: ./.github/workflows/release-evidence.yml
@@ -598,8 +681,9 @@ jobs:
     secrets:
       SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
 
+  # Announced once the in-app update can reach people.
   discord-changelog:
-    needs: [build]
+    needs: [build, updater-feeds]
     runs-on: ubuntu-latest
     if: success()
 

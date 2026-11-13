@@ -60,9 +60,14 @@ The script typechecks + unit-tests + builds the frontend, runs
 `cargo test --workspace`, bumps `tauri.conf.json` + workspace `Cargo.toml` in
 lockstep, generates the changelog from commit bullets, then commits, pushes and
 tags `v*`. The tag fires `.github/workflows/release.yml`: fmt + clippy
-(hard error) + tests, then Windows/macOS/Linux builds, the updater feed
-(`latest.json`), and the Discord changelog post. Users update in-app via
+(hard error) + tests, then Windows/macOS/Linux builds, the updater feeds,
+and the Discord changelog post. Users update in-app via
 Help → Check for updates.
+
+There are two updater feeds since the signing key changed with v0.266.47:
+the app reads `latest-v2.json`, and `latest.json` stays on v0.266.47 for
+copies up to v0.266.46, which only trust the old key. See
+`scripts/updater_feeds.py`.
 
 Bullet discipline matters: `- fix:` / `- feat:` / `- improve:` lines in the
 commit body become the user-facing changelog; a release with no bullets is
