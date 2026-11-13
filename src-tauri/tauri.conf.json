@@ -104,7 +104,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxQkQ4NkQyQTVCOUE0OApSV1JJbWxzcWJkZ2JEMGZPOHU0ZTVMeEtQMERwQTlxTEJYaDkxTGpNZVQzYkRSSlJHNUhsVnhJMgo=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFBQzc5ODA1MzM1Q0UzNjYKUldSbTQxd3pCWmpIcXVPeFE1NjcxUkcrUTBSTVRZK1U2dS8vOXdJRkRMcW52UXl3eHU5R0pHQ2EK",
       "endpoints": [
         "https://github.com/Dishairano/hardwave-daw/releases/latest/download/latest.json"
       ]
