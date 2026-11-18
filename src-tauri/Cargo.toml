@@ -69,7 +69,10 @@ vorbis_rs.workspace = true
 # Moves deleted packs and files to the Recycle Bin. Without its default
 # `chrono` feature: chrono is unmaintained (RUSTSEC-2026-0543), and trash
 # only used it on Linux, for the deletion date in the trash's info file.
-# Windows and macOS never built it, so nothing changes there.
+# Windows and macOS never built it, so nothing changes there. On Linux the
+# .trashinfo files now have no DeletionDate line, which file managers expect:
+# look at this again before Linux builds are released (trash 5.4 writes the
+# date with jiff).
 trash = { version = "5", default-features = false, features = ["coinit_apartmentthreaded"] }
 # Sample packs, DAWproject files and FL's zipped packages come from anyone.
 # zip 9 has the fix for RUSTSEC-2026-0429 and the three extract advisories
