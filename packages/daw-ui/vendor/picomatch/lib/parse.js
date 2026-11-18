@@ -300,7 +300,7 @@ const repeatedExtglobRecursion = pattern => {
  *   nested group.
  */
 
-const scanRepeatedBody = body => {
+const scanRepeatedBody = (body, options) => {
   let star = false;
   let unbounded = false;
   let mayMatchSlash = false;
@@ -317,7 +317,9 @@ const scanRepeatedBody = body => {
     prev = ch;
 
     if (ch === '\\') {
-      if (next === '/') mayMatchSlash = true;
+      // With `windows: true` an escaped backslash is a path separator, which
+      // a `*` does not cross.
+      if (next === '/' || (next === '\\' && options.windows === true)) mayMatchSlash = true;
       prev = '';
       i++;
       continue;
@@ -376,9 +378,10 @@ const scanRepeatedBody = body => {
  * nothing: B is P, then any text without a slash, then Q, so any run of
  * matches of B is P, then text without a slash, then Q, which is one match
  * of B. `+(B)` is then exactly `@(B)` and `*(B)` exactly `?(B)`, and that
- * is what it compiles to (`collapse`). Any other single branch with an open
- * quantifier is treated like upstream's other risky repeated extglobs and
- * matched literally (`risky`).
+ * is what it compiles to (`collapse`). Any other single branch is checked
+ * with modelRepeatedBody, and one whose repetition can backtrack
+ * exponentially is matched literally (`risky`), as upstream does with its
+ * other risky repeated extglobs.
  */
 
 const isSingleNegation = branch => {
@@ -414,8 +417,361 @@ const isSingleNegation = branch => {
   return false;
 };
 
-const analyzeSingleBranch = branch => {
-  const { star, unbounded, mayMatchSlash } = scanRepeatedBody(branch);
+/**
+ * Hardwave fork: a model of how a backtracking regex engine runs `+(B)`.
+ *
+ * B is read into a small expression tree: characters, `?`, `*`, `**`,
+ * brackets, nested `@( )`, `?( )`, `*( )`, `+( )` and plain groups, and a
+ * `+` quantifier. Brackets count as "any character, slash included", which
+ * only makes the model see more overlap than the regex has, never less.
+ * Anything else (`!( )` inside B, braces, quotes, POSIX classes) is not
+ * modelled, and the caller falls back to the cruder reading of
+ * scanRepeatedBody.
+ *
+ * The tree becomes a Thompson automaton, with the empty moves folded into
+ * the character moves while counting how many distinct empty paths each one
+ * stands for: that is where `(a+)+` hides its two ways round. A backtracking
+ * matcher tries every path, so it takes exponential time on some failing
+ * string exactly when the automaton has exponential ambiguity: two different
+ * loops from one state back to it that read the same text. In the automaton
+ * paired with itself that is a strongly connected part holding a state
+ * (p, p) together with a state (p, q) with p != q, or with a doubled move
+ * between two such states. A loop of empty moves (a repeated part that can
+ * match nothing) counts as exponential too.
+ */
+
+const REPEAT_MODEL_MAX_CHARS = 24;
+
+const modelRepeatedBody = (body, options) => {
+  const literals = new Set();
+  let unsupported = false;
+  let chars = 0;
+
+  const findClose = (str, open) => {
+    let depth = 0;
+    let bracket = false;
+
+    for (let i = open; i < str.length; i++) {
+      const ch = str[i];
+      if (ch === '\\') {
+        i++;
+      } else if (bracket) {
+        if (ch === ']') bracket = false;
+      } else if (ch === '[') {
+        bracket = true;
+      } else if (ch === '(') {
+        depth++;
+      } else if (ch === ')') {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+
+    return -1;
+  };
+
+  const sym = (kind, value) => {
+    chars++;
+    if (kind === 'lit') literals.add(value);
+    return { type: 'sym', kind, value };
+  };
+
+  const literal = ch => sym('lit', options.nocase === true ? ch.toLowerCase() : ch);
+
+  // The characters a bracket stands for. A bracket starting with `!` or `^`
+  // (which picomatch 4.0.7 passes on as `[!a]`, matching `!` or `a`), or
+  // with a range too wide to list, counts as any character.
+  const bracketClass = content => {
+    if (content[0] === '!' || content[0] === '^') {
+      chars++;
+      return { type: 'sym', kind: 'any' };
+    }
+    const members = new Set();
+    let wide = false;
+    for (let k = 0; k < content.length; k++) {
+      if (content[k + 1] === '-' && k + 2 < content.length) {
+        const from = content.charCodeAt(k);
+        const to = content.charCodeAt(k + 2);
+        if (to - from > 256) wide = true;
+        for (let c = from; c <= to && !wide; c++) members.add(String.fromCharCode(c));
+        k += 2;
+      } else {
+        members.add(content[k]);
+      }
+    }
+    const folded = [...members].map(ch => (options.nocase === true ? ch.toLowerCase() : ch));
+    for (const ch of folded) literals.add(ch);
+    chars++;
+    return wide ? { type: 'sym', kind: 'any' } : { type: 'sym', kind: 'class', members: new Set(folded) };
+  };
+
+  const parseSeq = str => {
+    const items = [];
+    // Whether the last item read was a group: picomatch passes a `?` after
+    // one through as a regex quantifier, and reads one at the start of a
+    // group as a plain character.
+    let afterGroup = false;
+
+    for (let i = 0; i < str.length && !unsupported; i++) {
+      const ch = str[i];
+      const next = str[i + 1];
+      const groupBefore = afterGroup;
+      afterGroup = false;
+
+      if (ch === '?' && i === 0) {
+        items.push(literal(ch));
+      } else if (ch === '?' && groupBefore && next !== '(') {
+        items.push({ type: 'opt', node: items.pop() });
+      } else if (ch === '\\') {
+        if (next === undefined) {
+          unsupported = true;
+          break;
+        }
+        items.push(literal(next));
+        i++;
+      } else if ('*+?@!'.includes(ch) && next === '(') {
+        const close = findClose(str, i + 1);
+        if (ch === '!' || close < 0) {
+          unsupported = true;
+          break;
+        }
+        const inner = parseAlt(str.slice(i + 2, close));
+        const type = { '*': 'star', '+': 'plus', '?': 'opt', '@': 'group' }[ch];
+        items.push(type === 'group' ? inner : { type, node: inner });
+        afterGroup = true;
+        i = close;
+      } else if (ch === '(') {
+        const close = findClose(str, i);
+        if (close < 0) {
+          unsupported = true;
+          break;
+        }
+        items.push(parseAlt(str.slice(i + 1, close)));
+        afterGroup = true;
+        i = close;
+      } else if (ch === '*') {
+        if (next === '*') {
+          while (str[i + 1] === '*') i++;
+          items.push({ type: 'star', node: sym('any') });
+        } else {
+          items.push({ type: 'star', node: sym('anyNoSlash') });
+        }
+      } else if (ch === '+') {
+        items.push(items.length ? { type: 'plus', node: items.pop() } : literal(ch));
+      } else if (ch === '?') {
+        items.push(sym('anyNoSlash'));
+      } else if (ch === '[') {
+        const close = str.indexOf(']', i + 2);
+        if (close < 0 || /\[:|\\/.test(str.slice(i + 1, close))) {
+          unsupported = true;
+          break;
+        }
+        // picomatch matches a bracket as its class or as its own text.
+        const text = str.slice(i, close + 1).split('').map(literal);
+        items.push({ type: 'alt', items: [bracketClass(str.slice(i + 1, close)), { type: 'seq', items: text }] });
+        i = close;
+      } else if ('{}"|)'.includes(ch)) {
+        unsupported = true;
+      } else {
+        items.push(literal(ch));
+      }
+    }
+
+    return { type: 'seq', items };
+  };
+
+  const parseAlt = str => {
+    const branches = splitTopLevel(str).map(parseSeq);
+    return branches.length === 1 ? branches[0] : { type: 'alt', items: branches };
+  };
+
+  const tree = parseAlt(body);
+  if (unsupported || chars === 0 || chars > REPEAT_MODEL_MAX_CHARS) {
+    return;
+  }
+
+  // With `windows: true` a `*` or `?` stops at a backslash as well.
+  const separators = options.windows === true ? ['/', '\\'] : ['/'];
+
+  const labelOf = node => {
+    // With `windows: true` a `/` in the glob matches a backslash too.
+    if (node.kind === 'lit' && separators.includes(node.value)) return new Set(separators);
+    if (node.kind === 'lit') return new Set([node.value]);
+    if (node.kind === 'class') {
+      const set = new Set(node.members);
+      if (separators.some(ch => set.has(ch))) separators.forEach(ch => set.add(ch));
+      return set;
+    }
+    const set = new Set([...literals].filter(ch => node.kind === 'any' || !separators.includes(ch)));
+    set.add('other');
+    if (node.kind === 'any') set.add('/');
+    return set;
+  };
+
+  // Thompson automaton: `empty[s]` lists empty moves, `move[s]` the one
+  // character move out of s, if any.
+  const empty = [];
+  const move = [];
+  const state = () => {
+    empty.push([]);
+    move.push(null);
+    return empty.length - 1;
+  };
+
+  const build = node => {
+    const start = state();
+    const end = state();
+
+    if (node.type === 'sym') {
+      move[start] = { to: end, label: labelOf(node) };
+    } else if (node.type === 'seq' || node.type === 'alt') {
+      if (node.items.length === 0) empty[start].push(end);
+      let prev = start;
+      for (const item of node.items) {
+        const part = build(item);
+        if (node.type === 'seq') {
+          empty[prev].push(part.start);
+          prev = part.end;
+        } else {
+          empty[start].push(part.start);
+          empty[part.end].push(end);
+        }
+      }
+      if (node.type === 'seq' && node.items.length) empty[prev].push(end);
+    } else {
+      const part = build(node.node);
+      empty[start].push(part.start);
+      if (node.type !== 'opt') empty[part.end].push(part.start);
+      if (node.type !== 'plus') empty[start].push(end);
+      empty[part.end].push(end);
+    }
+
+    return { start, end };
+  };
+
+  const root = build({ type: 'plus', node: tree });
+  const count = empty.length;
+
+  // Order the empty moves; a loop among them is a repeated part that can
+  // match nothing.
+  const order = [];
+  const mark = new Array(count).fill(0);
+  const visit = s => {
+    if (mark[s] === 1) return false;
+    if (mark[s] === 2) return true;
+    mark[s] = 1;
+    for (const t of empty[s]) {
+      if (!visit(t)) return false;
+    }
+    mark[s] = 2;
+    order.push(s);
+    return true;
+  };
+  for (let s = 0; s < count; s++) {
+    if (!visit(s)) return { exponential: true };
+  }
+  order.reverse();
+
+  // Fold the empty moves: from each state a character move can leave from
+  // (the start, and every state a character move lands on), the character
+  // moves reachable through empty moves, each with how many distinct empty
+  // paths lead to it (counting stops at 2).
+  const sources = [root.start, ...move.filter(Boolean).map(m => m.to)];
+  const edges = new Map();
+  const finals = new Set();
+
+  for (const from of new Set(sources)) {
+    const paths = new Array(count).fill(0);
+    paths[from] = 1;
+    for (const s of order) {
+      if (paths[s] === 0) continue;
+      for (const t of empty[s]) paths[t] = Math.min(2, paths[t] + paths[s]);
+    }
+    if (paths[root.end] > 0) finals.add(from);
+    const out = [];
+    for (let s = 0; s < count; s++) {
+      if (paths[s] > 0 && move[s]) out.push({ to: move[s].to, label: move[s].label, times: paths[s] });
+    }
+    edges.set(from, out);
+  }
+
+  // The automaton paired with itself, kept to the pairs that lie on a run
+  // from the start to an end.
+  const key = (p, q) => `${p},${q}`;
+  const overlap = (a, b) => [...a].some(ch => b.has(ch));
+  const next = new Map();
+  const prev = new Map();
+  const doubled = new Set();
+  const seen = new Set([key(root.start, root.start)]);
+  const queue = [[root.start, root.start]];
+
+  while (queue.length) {
+    const [p, q] = queue.shift();
+    const k = key(p, q);
+    next.set(k, []);
+    for (const a of edges.get(p)) {
+      for (const b of edges.get(q)) {
+        if (!overlap(a.label, b.label)) continue;
+        const nk = key(a.to, b.to);
+        next.get(k).push(nk);
+        if (!prev.has(nk)) prev.set(nk, []);
+        prev.get(nk).push(k);
+        if (p === q && a === b && a.times > 1) doubled.add(`${k}>${nk}`);
+        if (!seen.has(nk)) {
+          seen.add(nk);
+          queue.push([a.to, b.to]);
+        }
+      }
+    }
+  }
+
+  const live = new Set();
+  const back = [...seen].filter(k => k.split(',').every(s => finals.has(Number(s))));
+  for (const k of back) live.add(k);
+  while (back.length) {
+    for (const pk of prev.get(back.pop()) || []) {
+      if (!live.has(pk)) {
+        live.add(pk);
+        back.push(pk);
+      }
+    }
+  }
+
+  const reach = (from, links) => {
+    const found = new Set([from]);
+    const todo = [from];
+    while (todo.length) {
+      for (const k of links.get(todo.pop()) || []) {
+        if (live.has(k) && !found.has(k)) {
+          found.add(k);
+          todo.push(k);
+        }
+      }
+    }
+    return found;
+  };
+
+  for (const k of live) {
+    const [p, q] = k.split(',');
+    if (p !== q) continue;
+    const forward = reach(k, next);
+    const backward = reach(k, prev);
+    const part = [...forward].filter(x => backward.has(x));
+    if (part.some(x => { const [a, b] = x.split(','); return a !== b; })) {
+      return { exponential: true };
+    }
+    for (const x of part) {
+      for (const y of part) {
+        if (doubled.has(`${x}>${y}`)) return { exponential: true };
+      }
+    }
+  }
+
+  return { exponential: false };
+};
+
+const analyzeSingleBranch = (branch, options, max) => {
+  const { star, unbounded, mayMatchSlash } = scanRepeatedBody(branch, options);
 
   if (star && !mayMatchSlash) {
     return { risky: false, collapse: true };
@@ -429,11 +785,53 @@ const analyzeSingleBranch = branch => {
     return { risky: false, collapse: true };
   }
 
-  if (unbounded) {
-    return { risky: true };
+  // A caller that raised maxExtglobRecursion has accepted repeated extglobs
+  // nested to that depth, and gets them as upstream compiles them.
+  if (max > 0 && /[*+]\(/.test(branch)) {
+    return { risky: false };
   }
 
-  return { risky: false };
+  // Anything else is matched literally when repeating it can backtrack
+  // exponentially (`+(*(a)a)`, `+(a+)`, `+(*[a-z])`), and left as it is
+  // when it cannot (`*(*(of*(o)x)o)`, `+(a+b)`). A body the model does not
+  // read is matched literally whenever it holds an open-ended quantifier.
+  const model = modelRepeatedBody(branch, options);
+  if (model) {
+    return { risky: model.exponential };
+  }
+
+  return { risky: unbounded };
+};
+
+/**
+ * Hardwave fork: several branches, each starting with a plain `*` (or each
+ * ending with one), none able to match a slash: `+(*.js|*.ts)`,
+ * `+(*a|*a)`. Whatever a run of matches holds before the last one is text
+ * without a slash, which that last branch's leading `*` takes, so the run is
+ * one match; the same holds the other way round for trailing stars. The
+ * repetition is dropped as for a single branch. Other sets of branches
+ * keep upstream's handling (see vendor/picomatch/README.md for the ones
+ * that still backtrack).
+ */
+
+const plainStarAt = (branch, index) => {
+  if (branch[index] !== '*' || branch[index - 1] === '*' || branch[index + 1] === '*') {
+    return false;
+  }
+  if (branch[index + 1] === '(') return false;
+  let slashes = 0;
+  for (let k = index - 1; k >= 0 && branch[k] === '\\'; k--) slashes++;
+  return slashes % 2 === 0;
+};
+
+const analyzeBranches = (branches, options) => {
+  if (branches.some(branch => scanRepeatedBody(branch, options).mayMatchSlash)) {
+    return { risky: false };
+  }
+
+  const leading = branches.every(branch => plainStarAt(branch, 0));
+  const trailing = branches.every(branch => plainStarAt(branch, branch.length - 1));
+  return leading || trailing ? { risky: false, collapse: true } : { risky: false };
 };
 
 const analyzeRepeatedExtglob = (body, options) => {
@@ -496,10 +894,10 @@ const analyzeRepeatedExtglob = (body, options) => {
   }
 
   if (branches.length === 1) {
-    return analyzeSingleBranch(branches[0]);
+    return analyzeSingleBranch(branches[0], options, max);
   }
 
-  return { risky: false };
+  return analyzeBranches(branches, options);
 };
 
 /**
