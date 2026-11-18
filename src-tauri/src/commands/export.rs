@@ -1676,7 +1676,9 @@ pub async fn consolidate_track_range(
                     }
                 })
                 .collect();
-            let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+            let stamp = jiff::ZonedDateTime::now()
+                .strftime("%Y-%m-%d %H-%M-%S")
+                .to_string();
             let out_path = dir.join(format!("{safe} consolidated {stamp}.wav"));
 
             let fmt = format_for_a_track(sample_rate);
@@ -1848,7 +1850,9 @@ pub async fn bounce_track_to_audio(app: AppHandle, track_id: String) -> Result<S
                     }
                 })
                 .collect();
-            let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+            let stamp = jiff::ZonedDateTime::now()
+                .strftime("%Y-%m-%d %H-%M-%S")
+                .to_string();
             let out_path = dir.join(format!("{safe} {stamp}.wav"));
 
             let fmt = format_for_a_track(sample_rate);
@@ -2244,7 +2248,9 @@ pub async fn freeze_track(app: AppHandle, track_id: String) -> Result<String, St
                     }
                 })
                 .collect();
-            let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+            let stamp = jiff::ZonedDateTime::now()
+                .strftime("%Y-%m-%d %H-%M-%S")
+                .to_string();
             let out_path = dir.join(format!("{safe} frozen {stamp}.wav"));
 
             let fmt = format_for_a_track(sample_rate);

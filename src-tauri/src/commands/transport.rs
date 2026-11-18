@@ -193,7 +193,9 @@ fn recordings_dir(engine: &hardwave_engine::DawEngine) -> Result<PathBuf, String
 /// of takes should be readable without converting unix seconds, and a second
 /// take inside the same second must not overwrite the first.
 fn next_take_name(dir: &Path) -> String {
-    let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+    let stamp = jiff::ZonedDateTime::now()
+        .strftime("%Y-%m-%d %H-%M-%S")
+        .to_string();
     let base = format!("Take {stamp}");
     let mut candidate = format!("{base}.wav");
     let mut n = 2;
@@ -495,6 +497,13 @@ mod take_name_tests {
         let first = next_take_name(dir.path());
         assert!(first.starts_with("Take 20"), "got {first}");
         assert!(first.ends_with(".wav"));
+        // Local time as `YYYY-MM-DD HH-MM-SS`, the shape takes have always had.
+        let stamp = &first["Take ".len()..first.len() - ".wav".len()];
+        let shape: String = stamp
+            .chars()
+            .map(|c| if c.is_ascii_digit() { '9' } else { c })
+            .collect();
+        assert_eq!(shape, "9999-99-99 99-99-99", "got {first}");
 
         std::fs::write(dir.path().join(&first), b"x").unwrap();
         let second = next_take_name(dir.path());

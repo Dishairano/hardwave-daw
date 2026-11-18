@@ -794,7 +794,7 @@ pub fn set_project_meta(state: State<AppState>, meta: ProjectInfoMeta) {
     project.metadata.url = meta.url;
     project.metadata.show_on_open = meta.show_on_open;
     project.metadata.working_time_seconds = meta.working_time_seconds;
-    project.metadata.modified_at = chrono::Utc::now().to_rfc3339();
+    project.metadata.modified_at = hardwave_project::project::timestamp_now();
 }
 
 /// Reset the cumulative working-time counter to zero. Wired to the
@@ -805,7 +805,7 @@ pub fn reset_project_working_time(state: State<AppState>) {
     let engine = state.engine.lock();
     let mut project = engine.project.lock();
     project.metadata.working_time_seconds = 0;
-    project.metadata.modified_at = chrono::Utc::now().to_rfc3339();
+    project.metadata.modified_at = hardwave_project::project::timestamp_now();
 }
 
 /// Increment the working-time counter. The UI calls this on a 30s

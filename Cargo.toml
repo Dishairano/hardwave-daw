@@ -87,7 +87,10 @@ env_logger = "0.11"
 thiserror = "2"
 anyhow = "1"
 dirs = "5"
-chrono = { version = "0.4", features = ["serde"] }
+# Dates and times. chrono is unmaintained (RUSTSEC-2026-0543) and jiff is
+# the replacement it names. Only `std` here: a crate that needs the local
+# time zone turns on the time zone features itself.
+jiff = { version = "1", default-features = false, features = ["std"] }
 
 # Tauri
 # `protocol-asset` compiles in the built-in `asset:`/`http://asset.localhost`

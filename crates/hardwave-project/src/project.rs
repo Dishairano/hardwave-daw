@@ -49,6 +49,40 @@ pub struct ProjectMetadata {
     pub working_time_seconds: u64,
 }
 
+/// The time now, as a song's `created_at` and `modified_at` hold it.
+///
+/// RFC 3339 in UTC, offset written `+00:00`, and the fraction of a second
+/// in groups of three digits with nothing when it is zero:
+/// `2026-11-12T16:03:45.076632+00:00`. That is what chrono's `to_rfc3339`
+/// wrote into every song before the DAW moved off chrono, and a stamp
+/// written now reads exactly like one written then.
+pub fn timestamp_now() -> String {
+    rfc3339_utc(jiff::Timestamp::now())
+}
+
+fn rfc3339_utc(at: jiff::Timestamp) -> String {
+    let t = jiff::tz::TimeZone::UTC.to_datetime(at);
+    let nanos = t.subsec_nanosecond();
+    let fraction = if nanos == 0 {
+        String::new()
+    } else if nanos % 1_000_000 == 0 {
+        format!(".{:03}", nanos / 1_000_000)
+    } else if nanos % 1_000 == 0 {
+        format!(".{:06}", nanos / 1_000)
+    } else {
+        format!(".{nanos:09}")
+    };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}+00:00",
+        t.year(),
+        t.month(),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second()
+    )
+}
+
 /// The project file format this build writes.
 ///
 /// 1: MessagePack, struct written as a positional array.
@@ -206,14 +240,15 @@ impl Default for Project {
             tracks.push(Track::new_audio(id, format!("Insert {}", i)));
         }
 
+        let now = timestamp_now();
         let mut project = Self {
             version: FORMAT_VERSION,
             metadata: ProjectMetadata {
                 name: "Untitled".into(),
                 author: String::new(),
                 sample_rate: 48000,
-                created_at: chrono::Utc::now().to_rfc3339(),
-                modified_at: chrono::Utc::now().to_rfc3339(),
+                created_at: now.clone(),
+                modified_at: now,
                 title: String::new(),
                 genre: String::new(),
                 info: String::new(),
@@ -1163,6 +1198,82 @@ mod decompress_tests {
             decompress_within(&bomb, 8 * 1024 * 1024).unwrap().len(),
             4 * 1024 * 1024
         );
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    /// What chrono's `to_rfc3339` wrote for these instants, taken from
+    /// chrono 0.4.44 itself: no fraction, milli, micro and nanoseconds.
+    #[test]
+    fn a_stamp_reads_exactly_as_chrono_wrote_it() {
+        for (secs, nanos, chrono_wrote) in [
+            (1_762_787_328, 0, "2025-11-10T15:08:48+00:00"),
+            (1_762_787_328, 500_000_000, "2025-11-10T15:08:48.500+00:00"),
+            (1_762_787_328, 1_000, "2025-11-10T15:08:48.000001+00:00"),
+            (
+                1_762_963_425,
+                76_632_000,
+                "2025-11-12T16:03:45.076632+00:00",
+            ),
+            (
+                1_762_871_823,
+                293_907_800,
+                "2025-11-11T14:37:03.293907800+00:00",
+            ),
+            (
+                1_762_787_328,
+                579_220_561,
+                "2025-11-10T15:08:48.579220561+00:00",
+            ),
+            (0, 0, "1970-01-01T00:00:00+00:00"),
+        ] {
+            let at = jiff::Timestamp::new(secs, nanos).unwrap();
+            assert_eq!(rfc3339_utc(at), chrono_wrote, "{secs} s {nanos} ns");
+        }
+    }
+
+    #[test]
+    fn a_stamp_made_now_is_the_time_now() {
+        let before = jiff::Timestamp::now();
+        let stamp = timestamp_now();
+        let after = jiff::Timestamp::now();
+        assert!(stamp.ends_with("+00:00"), "{stamp}");
+        let read: jiff::Timestamp = stamp.parse().unwrap();
+        assert!(before <= read && read <= after, "{stamp}");
+        let new = Project::default();
+        assert_eq!(new.metadata.created_at, new.metadata.modified_at);
+    }
+
+    /// A song saved on Windows by a build that still stamped with chrono
+    /// (format 4, November 2026) opens with its stamps as they were, and
+    /// saving it writes them back byte for byte.
+    #[test]
+    fn a_song_stamped_by_chrono_keeps_its_stamps_through_open_and_save() {
+        let bytes = include_bytes!("testdata/song-with-chrono-stamps.hwp");
+        let song = Project::from_bytes(bytes).unwrap();
+        assert_eq!(
+            song.metadata.created_at,
+            "2026-11-11T12:17:03.293907800+00:00"
+        );
+        assert_eq!(
+            song.metadata.modified_at,
+            "2026-11-11T12:17:03.293946200+00:00"
+        );
+
+        let as_saved = Project::read_as_saved(bytes).unwrap();
+        let resaved = Project::read_as_saved(&song.to_bytes().unwrap()).unwrap();
+        assert_eq!(resaved.metadata, as_saved.metadata);
+
+        let dir = std::env::temp_dir().join(format!("hwp-stamps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("song.hwp");
+        song.save(&path).unwrap();
+        let reopened = Project::load(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(reopened.metadata, as_saved.metadata);
     }
 }
 
