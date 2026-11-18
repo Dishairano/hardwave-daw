@@ -284,6 +284,158 @@ const repeatedExtglobRecursion = pattern => {
   return depth;
 };
 
+/**
+ * Hardwave fork (GHSA-fc5q-39xc-vjpf, CVE-2026-112366).
+ *
+ * Reads a repeated extglob's body without compiling it, and says what it
+ * holds that can match text of any length:
+ *
+ * - `star`: a plain `*` at the top level of the body (not `**`, not the
+ *   start of a nested `*(`).
+ * - `unbounded`: anything at any depth that compiles to an open-ended
+ *   quantifier: a plain `*`, `**`, a negation `!(`, or a `+` that is a
+ *   quantifier rather than the start of a nested `+(`.
+ * - `mayMatchSlash`: anything that could let the body match a `/` or that
+ *   this reading does not follow: a slash, a bracket, a brace, a quote or a
+ *   nested group.
+ */
+
+const scanRepeatedBody = body => {
+  let star = false;
+  let unbounded = false;
+  let mayMatchSlash = false;
+  let depth = 0;
+  let bracket = false;
+  let quote = false;
+  // The character before, as glob syntax: an escaped one never counts.
+  let prev = '';
+
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    const next = body[i + 1];
+    const before = prev;
+    prev = ch;
+
+    if (ch === '\\') {
+      if (next === '/') mayMatchSlash = true;
+      prev = '';
+      i++;
+      continue;
+    }
+
+    if (quote) {
+      if (ch === '"') quote = false;
+      continue;
+    }
+
+    if (bracket) {
+      if (ch === ']') bracket = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      quote = true;
+      mayMatchSlash = true;
+    } else if (ch === '[') {
+      bracket = true;
+      mayMatchSlash = true;
+    } else if (ch === '/' || ch === '{' || ch === '}') {
+      mayMatchSlash = true;
+    } else if (ch === '(') {
+      depth++;
+      mayMatchSlash = true;
+      if (before === '!') unbounded = true;
+    } else if (ch === ')') {
+      depth--;
+    } else if (ch === '*') {
+      if (next === '(') continue;
+      unbounded = true;
+      if (next === '*' || before === '*') {
+        mayMatchSlash = true;
+      } else if (depth === 0) {
+        star = true;
+      }
+    } else if (ch === '+' && next !== '(') {
+      unbounded = true;
+    }
+  }
+
+  return { star, unbounded, mayMatchSlash };
+};
+
+/**
+ * Hardwave fork (GHSA-fc5q-39xc-vjpf, CVE-2026-112366).
+ *
+ * A repeated extglob with one branch, `+(B)` or `*(B)`, puts whatever open
+ * quantifier B holds under another one. Upstream only looked at bodies with
+ * several branches, so `+(*)`, `+(*a)` or `+(@(*a))` compiled to regexes
+ * such as `(?:[^/]*?a)+`, which backtrack exponentially on a short string
+ * that almost matches.
+ *
+ * When B has a top-level `*` and cannot match a `/`, the repetition adds
+ * nothing: B is P, then any text without a slash, then Q, so any run of
+ * matches of B is P, then text without a slash, then Q, which is one match
+ * of B. `+(B)` is then exactly `@(B)` and `*(B)` exactly `?(B)`, and that
+ * is what it compiles to (`collapse`). Any other single branch with an open
+ * quantifier is treated like upstream's other risky repeated extglobs and
+ * matched literally (`risky`).
+ */
+
+const isSingleNegation = branch => {
+  if (!branch.startsWith('!(') || branch.includes('/')) {
+    return false;
+  }
+
+  let depth = 0;
+  let bracket = false;
+  let quote = false;
+
+  for (let i = 1; i < branch.length; i++) {
+    const ch = branch[i];
+
+    if (ch === '\\') {
+      i++;
+    } else if (quote) {
+      if (ch === '"') quote = false;
+    } else if (bracket) {
+      if (ch === ']') bracket = false;
+    } else if (ch === '"') {
+      quote = true;
+    } else if (ch === '[') {
+      bracket = true;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i === branch.length - 1;
+    }
+  }
+
+  return false;
+};
+
+const analyzeSingleBranch = branch => {
+  const { star, unbounded, mayMatchSlash } = scanRepeatedBody(branch);
+
+  if (star && !mayMatchSlash) {
+    return { risky: false, collapse: true };
+  }
+
+  // `!(X)` compiles to a look-ahead on X followed by a `*` that takes any
+  // text without a slash, so the same holds for `+(!(X))` and `*(!(X))`:
+  // the first repetition's look-ahead is the only one that decides, and one
+  // repetition takes everything the others would.
+  if (isSingleNegation(branch)) {
+    return { risky: false, collapse: true };
+  }
+
+  if (unbounded) {
+    return { risky: true };
+  }
+
+  return { risky: false };
+};
+
 const analyzeRepeatedExtglob = (body, options) => {
   if (options.maxExtglobRecursion === false) {
     return { risky: false };
@@ -341,6 +493,10 @@ const analyzeRepeatedExtglob = (body, options) => {
     return combinable
       ? { risky: true, safeOutput: buildCharClassStar([...new Set(safeChars)]) }
       : { risky: true };
+  }
+
+  if (branches.length === 1) {
+    return analyzeSingleBranch(branches[0]);
   }
 
   return { risky: false };
@@ -565,7 +721,15 @@ const parse = (input, options) => {
       return;
     }
 
-    let output = token.close + (opts.capture ? ')' : '');
+    // Hardwave fork: `+(B)` matches as `@(B)` and `*(B)` as `?(B)` when
+    // repeating B cannot match anything B alone does not (see
+    // analyzeSingleBranch), so no quantifier is nested under another.
+    let close = token.close;
+    if (analysis.collapse === true && (token.type === 'plus' || token.type === 'star')) {
+      close = token.type === 'plus' ? ')' : ')?';
+    }
+
+    let output = close + (opts.capture ? ')' : '');
     let rest;
 
     if (token.type === 'negate') {
