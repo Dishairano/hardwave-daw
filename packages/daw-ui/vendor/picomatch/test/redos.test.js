@@ -28,7 +28,17 @@ const slowUpstream = [
   ['+(@(*a))', 'a'.repeat(24) + 'b'],
   ['+(a+)', 'a'.repeat(24) + 'b'],
   ['+(*[a-z])', 'a'.repeat(24) + '/'],
-  ['+([a-z]*)', 'a'.repeat(24) + '/']
+  ['+([a-z]*)', 'a'.repeat(24) + '/'],
+  // A repeated extglob nested in the one branch.
+  ['+(*(a)a)', 'a'.repeat(25) + 'b'],
+  ['*(*(a)a)', 'a'.repeat(25) + 'b'],
+  ['+(a*(a))', 'a'.repeat(25) + 'b'],
+  ['+(*(a|b)a)', 'a'.repeat(25) + 'b'],
+  ['+(+(b)?(a))', 'b'.repeat(25) + '/'],
+  ['+(@(a|b)@(a|b)?)', 'a'.repeat(25) + '!'],
+  // Several branches that each start with `*`.
+  ['+(*a|*a)', 'a'.repeat(18) + 'b'],
+  ['+(*.js|*.ts)', '.js'.repeat(24) + '/']
 ];
 
 for (const [glob, input] of slowUpstream) {
@@ -48,17 +58,25 @@ for (const [glob, input] of slowUpstream) {
 const collapsed = [
   '+(*)', '*(*)', '+(*a)', '*(*a)', '+(a*)', '*(a*)', '+(*?)', '+(?*)', '+(*.js)',
   '+(a*b)', '*(*a*)', '+(*a+)', '+(!(b))', '*(!(foo))', '+(!(f))', 'x+(*a)', '+(*)c',
-  '+(*)x', 'a/+(*b)', '+(*a)/b', '*+(a*)', '*(!(a))b'
+  '+(*)x', 'a/+(*b)', '+(*a)/b', '*+(a*)', '*(!(a))b',
+  // Several branches, all with a leading or all with a trailing `*`.
+  '+(*a|*a)', '+(*.js|*.ts)', '+(a*|b*)', '*(*a|*b)', 'x+(*a|*bc)'
 ];
 
 const strings = [''];
 for (let len = 1; len <= 5; len++) {
   for (const s of strings.filter(s => s.length === len - 1)) {
-    for (const ch of ['a', 'b', 'c', '.', '/', 'x']) strings.push(s + ch);
+    for (const ch of ['a', 'b', 'c', '.', '/', 'x', '\\']) strings.push(s + ch);
   }
 }
 
-for (const glob of collapsed) {
+// Repeated extglobs that cannot backtrack exponentially are compiled as
+// upstream compiles them. With `windows: true` a backslash is a separator
+// that a `*` does not cross, so `+(*\\a)` is kept there; without it, it is
+// dropped to one repetition, which matches the same strings.
+const kept = ['*(*(of*(o)x)o)', '+(a+b)', '+(*/)', '+(abc)', '*(foo|bar)', '+(*\\\\a)', '+(a\\\\*)', '*(*\\\\)'];
+
+for (const glob of [...collapsed, ...kept]) {
   test(`${glob} matches exactly what it matched before`, () => {
     for (const options of [{}, { dot: true }, { windows: true }, { nocase: true }, { capture: true }]) {
       const fixed = picomatch.makeRe(glob, options);
@@ -79,4 +97,14 @@ test('the patterns picomatch documents keep working', () => {
   assert.ok(picomatch.isMatch('bar', '*(!(foo))'));
   assert.ok(!picomatch.isMatch('foo', '*(!(foo))'));
   assert.ok(picomatch.isMatch('src/a.test.ts', 'src/**/*.test.{ts,tsx}'));
+  assert.ok(picomatch.isMatch('ofoxo', '*(*(of*(o)x)o)'));
+  assert.ok(picomatch.isMatch('\\a\\a', '+(*\\\\a)', { windows: false }));
+  assert.ok(picomatch.makeRe('+(*\\\\a)', { windows: true }).test('\\a\\a'));
+});
+
+test('a nested repeated extglob that would backtrack is matched literally', () => {
+  for (const glob of ['+(*(a)a)', '*(*(a)a)', '+(a*(a))', '+(*(a|b)a)']) {
+    assert.ok(picomatch.isMatch(glob, glob), glob);
+    assert.ok(!picomatch.isMatch('aaa', glob), glob);
+  }
 });

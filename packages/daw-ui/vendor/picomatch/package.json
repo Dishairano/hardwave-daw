@@ -1,6 +1,6 @@
 {
   "name": "@hardwave/picomatch",
-  "description": "picomatch 4.0.7 with the fix for GHSA-fc5q-39xc-vjpf (ReDoS through single-branch repeated extglobs). Used through npm overrides in place of picomatch for vite, vitest, tinyglobby and fdir.",
+  "description": "picomatch 4.0.7 with the fix for GHSA-fc5q-39xc-vjpf (ReDoS through repeated extglobs). Used through npm overrides in place of picomatch by the build tools of packages/daw-ui and installer; see README.md.",
   "version": "4.0.7-hardwave.1",
   "private": true,
   "license": "MIT",
