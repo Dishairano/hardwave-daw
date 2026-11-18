@@ -114,3 +114,26 @@ jobs:
           npm ci
           npx playwright install chromium --with-deps
           npx playwright test
+
+  picomatch-fork:
+    # packages/daw-ui and the installer take picomatch from
+    # packages/daw-ui/vendor/picomatch: 4.0.7 with our fix for
+    # GHSA-fc5q-39xc-vjpf, which no release fixes. npm audit and Dependabot
+    # never look at a local package, so this job does. It fails, rather than
+    # warns, when picomatch publishes a release after 4.0.7 or an advisory we
+    # have not reviewed: this run gates every release, so the fork is looked
+    # at again before the next one instead of quietly going stale.
+    name: picomatch fork
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+      - name: The fork's tests, and picomatch's own suite against it
+        run: scripts/picomatch-fork-check.sh tests
+      - name: No picomatch release or advisory since the fork was made
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/picomatch-fork-check.sh upstream
