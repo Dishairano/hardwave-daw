@@ -1,0 +1,33 @@
+{
+  "name": "@hardwave/picomatch",
+  "description": "picomatch 4.0.7 with the fix for GHSA-fc5q-39xc-vjpf (ReDoS through single-branch repeated extglobs). Used through npm overrides in place of picomatch for vite, vitest, tinyglobby and fdir.",
+  "version": "4.0.7-hardwave.1",
+  "private": true,
+  "license": "MIT",
+  "author": "Jon Schlinkert (https://github.com/jonschlinkert)",
+  "contributors": [
+    "Hardwave Studios (the GHSA-fc5q-39xc-vjpf fix in lib/parse.js)"
+  ],
+  "repository": "micromatch/picomatch",
+  "upstream": {
+    "package": "picomatch@4.0.7",
+    "tag": "https://github.com/micromatch/picomatch/tree/4.0.7",
+    "advisory": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "posix.js",
+    "lib"
+  ],
+  "sideEffects": false,
+  "main": "index.js",
+  "types": "index.d.ts",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=12"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
