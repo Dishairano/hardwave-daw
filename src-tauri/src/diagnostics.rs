@@ -80,6 +80,16 @@ pub fn init(app_version: &str) {
         std::env::consts::ARCH
     );
 
+    // Local times in file names come from jiff. When it cannot work out the
+    // system time zone (a Windows zone it has no mapping for, a bad TZ
+    // variable) it falls back to Etc/Unknown, which reads as UTC, and says
+    // nothing about it.
+    if jiff::tz::TimeZone::system().is_unknown() {
+        log::warn!(
+            "Could not read the system time zone; the times in take, bounce and log file names are UTC"
+        );
+    }
+
     install_panic_hook();
 }
 
