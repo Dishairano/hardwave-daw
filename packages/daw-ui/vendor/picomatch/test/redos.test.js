@@ -12,6 +12,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const differential = require('../fuzz/differential');
 
 const picomatch = require(process.env.PICOMATCH ? path.resolve(process.env.PICOMATCH) : '..');
 
@@ -38,7 +39,10 @@ const slowUpstream = [
   ['+(@(a|b)@(a|b)?)', 'a'.repeat(25) + '!'],
   // Several branches that each start with `*`.
   ['+(*a|*a)', 'a'.repeat(18) + 'b'],
-  ['+(*.js|*.ts)', '.js'.repeat(24) + '/']
+  ['+(*.js|*.ts)', '.js'.repeat(24) + '/'],
+  // Several branches, one holding a nested repetition.
+  ['+(a*(a)|b)', 'a'.repeat(25) + 'c'],
+  ['+(*(a)a|b)', 'a'.repeat(25) + 'c']
 ];
 
 for (const [glob, input] of slowUpstream) {
@@ -107,4 +111,41 @@ test('a nested repeated extglob that would backtrack is matched literally', () =
     assert.ok(picomatch.isMatch(glob, glob), glob);
     assert.ok(!picomatch.isMatch('aaa', glob), glob);
   }
+});
+
+// Nothing here may make a pattern slower than 4.0.7 or match differently,
+// apart from matching a risky repeated extglob literally. `hardwaveFork:
+// false` compiles exactly as 4.0.7 does. Skipped when PICOMATCH points at
+// another copy, which has no such switch.
+const forkOnly = { skip: Boolean(process.env.PICOMATCH) };
+
+test('a fuzzed glob is never slower and never matches differently', forkOnly, () => {
+  const stats = differential.run({ count: 300, seed: 7, length: 16 });
+  assert.deepStrictEqual(stats.mismatches, []);
+  assert.deepStrictEqual(stats.slower, []);
+  assert.ok(stats.collapsedCompared + stats.literal > 0, 'the fuzz reached the fork');
+});
+
+test('where 4.0.7 gives no valid regex, the fork gives the same', forkOnly, () => {
+  for (const glob of [
+    '+(*a)+',
+    '+(a+)+',
+    '+(\\\\+(*)+[a-z]|\\\\)',
+    '+(!(!([a-z]+.|**\\\\)|*(a?(\\\\/)@(?a)a|!(**\\a\\\\\\\\)+(**/)a)?[a-z]?([ab]!(a[a-z])!(.+**)[a-z]))?(\\a[ab]+(+..b))?\\\\)',
+    '*(?/b@(+(b?(b[a-z]+a|[ab])*(b+\\\\\\\\)?(/a/|b))*(*|@(***\\\\)@(\\a)?a)))'
+  ]) {
+    for (const options of [{}, { windows: true }]) {
+      const fork = picomatch.makeRe(glob, options).source;
+      const upstream = picomatch.makeRe(glob, { ...options, hardwaveFork: false }).source;
+      assert.strictEqual(fork, upstream, `${glob} ${JSON.stringify(options)}`);
+    }
+  }
+});
+
+test('a deeply nested body compiles as 4.0.7 compiles it', forkOnly, () => {
+  const glob = '+(' + '@('.repeat(4000) + 'a' + ')'.repeat(4001);
+  const start = Date.now();
+  const fork = picomatch.makeRe(glob).source;
+  assert.ok(Date.now() - start < 2000, `${Date.now() - start} ms`);
+  assert.strictEqual(fork, picomatch.makeRe(glob, { hardwaveFork: false }).source);
 });
