@@ -194,7 +194,11 @@ impl Trace {
         use std::io::Write;
         if let Some(file) = &self.0 {
             if let Ok(mut f) = file.lock() {
-                let _ = writeln!(f, "{} {what}", chrono::Local::now().format("%H:%M:%S%.3f"));
+                let _ = writeln!(
+                    f,
+                    "{} {what}",
+                    jiff::ZonedDateTime::now().strftime("%H:%M:%S%.3f")
+                );
             }
         }
     }

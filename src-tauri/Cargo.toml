@@ -61,9 +61,10 @@ url = "2"
 hound.workspace = true
 flacenc.workspace = true
 rusty_mp3.workspace = true
-# Used by Project Info dialog handlers to stamp modified_at on metadata
-# changes (RFC3339). chrono is already a workspace dep — wire it through.
-chrono.workspace = true
+# Local time for the stamps in take, bounce and log file names. The time
+# zone comes from the system: its zoneinfo on Linux and macOS, and on Windows
+# (which has none) a copy built into the app.
+jiff = { workspace = true, features = ["tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
 vorbis_rs.workspace = true
 trash = "5"
 # Sample packs, DAWproject files and FL's zipped packages come from anyone.

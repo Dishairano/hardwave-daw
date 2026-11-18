@@ -59,7 +59,7 @@ pub fn init(app_version: &str) {
             prune_old_sessions(&dir);
             let name = format!(
                 "session-{}.log",
-                chrono::Local::now().format("%Y%m%d-%H%M%S")
+                jiff::ZonedDateTime::now().strftime("%Y%m%d-%H%M%S")
             );
             let path = dir.join(name);
             if let Ok(f) = std::fs::File::create(&path) {
