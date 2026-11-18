@@ -1,0 +1,8 @@
+{
+  "name": "picomatch-fork-check",
+  "private": true,
+  "description": "What scripts/picomatch-fork-check.sh needs to run picomatch's own test suite: fill-range for two of its tests. Installed with npm ci from package-lock.json; the suite runs on node:test through shim.js instead of mocha.",
+  "devDependencies": {
+    "fill-range": "7.1.1"
+  }
+}

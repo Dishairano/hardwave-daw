@@ -6,10 +6,12 @@
 #
 #   tests     the fork's own tests, a check that only lib/parse.js differs
 #             from 4.0.7, and picomatch's own test suite at the 4.0.7 tag run
-#             against the fork
-#   upstream  fails when picomatch has published a release after 4.0.7, or
-#             when a picomatch advisory exists that is not in REVIEWED below;
-#             either one means the fork needs a look (drop it, or rebase it)
+#             against the fork (on node:test, with the pinned
+#             scripts/picomatch-fork-check/package-lock.json)
+#   upstream  fails when picomatch has published a release after 4.0.7, when
+#             a picomatch advisory exists that is not in REVIEWED below, or
+#             when GHSA-fc5q-39xc-vjpf is not among them (then the lookup
+#             itself is broken); any of these means the fork needs a look
 #
 # Usage: scripts/picomatch-fork-check.sh tests|upstream|all
 set -euo pipefail
@@ -43,9 +45,10 @@ run_tests() {
 
   # The fork in place of the 4.0.7 sources, then picomatch's own suite.
   cp "$fork/lib/parse.js" "$work/upstream/lib/parse.js"
-  (cd "$work" && npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund \
-    mocha@10.8.2 fill-range@7.1.1 >/dev/null)
-  (cd "$work/upstream" && "$work/node_modules/.bin/mocha" --reporter dot)
+  cp "$root/scripts/picomatch-fork-check/package.json" "$root/scripts/picomatch-fork-check/package-lock.json" "$work/"
+  (cd "$work" && npm ci --ignore-scripts --no-audit --no-fund >/dev/null)
+  (cd "$work/upstream" && node --require "$root/scripts/picomatch-fork-check/shim.js" \
+    --test --test-reporter=tap test/*.js | grep -E '^# (tests|pass|fail)')
 }
 
 check_upstream() {
@@ -56,6 +59,13 @@ check_upstream() {
     status=1
   fi
   ids=$(gh api -X GET /advisories -f ecosystem=npm -f affects=picomatch -f per_page=100 --jq '.[].ghsa_id')
+  case " $(echo $ids) " in
+    *" GHSA-fc5q-39xc-vjpf "*) ;;
+    *)
+      echo "::error::GHSA-fc5q-39xc-vjpf is not among picomatch's advisories (got: ${ids:-none}). Either the lookup failed, or the advisory was withdrawn: check, and drop vendor/picomatch if it was."
+      status=1
+      ;;
+  esac
   for id in $ids; do
     case " $REVIEWED " in
       *" $id "*) ;;
