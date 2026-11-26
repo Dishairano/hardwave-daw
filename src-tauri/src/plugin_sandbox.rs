@@ -176,6 +176,57 @@ pub fn crashed_sandboxes() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Bring the state the bridge holds for every plug-in in its own process
+/// up to date, before it is read for a save, a preset, the parameter
+/// sheet or a copy of the track.
+///
+/// The bridge never asks the plug-in's process while the audio waits, so
+/// what it hands out is the state it last fetched: after a knob move that
+/// is up to a second or two old, and a song saved right after a knob turn
+/// lost that turn. This asks the processes whose knobs moved since the
+/// last fetch for their state now and waits for it, `within` at most. With
+/// nothing moved it returns at once. Never called on the audio thread.
+pub fn settle_states(within: std::time::Duration) {
+    let waiting: Vec<Arc<Shared>> = {
+        let registry = match REGISTRY.lock() {
+            Ok(r) => r,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        registry
+            .iter()
+            .filter(|entry| !entry.crashed.load(Ordering::Relaxed))
+            .map(|entry| Arc::clone(&entry.shared))
+            .filter(|shared| {
+                shared.state_stale.load(Ordering::Relaxed)
+                    || shared.host_dirty.load(Ordering::Relaxed)
+                    || shared.state_pending.load(Ordering::Relaxed)
+                    || shared.editor_open.load(Ordering::Relaxed)
+            })
+            .collect()
+    };
+    if waiting.is_empty() {
+        return;
+    }
+    for shared in &waiting {
+        // Marked stale first, so the wait below does not end before the
+        // bridge has picked the request up.
+        shared.state_stale.store(true, Ordering::Relaxed);
+        shared.fetch_now.store(true, Ordering::Relaxed);
+    }
+    let deadline = std::time::Instant::now() + within;
+    while std::time::Instant::now() < deadline {
+        let done = waiting.iter().all(|shared| {
+            !(shared.state_stale.load(Ordering::Relaxed)
+                || shared.state_pending.load(Ordering::Relaxed))
+        });
+        if done {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    log::warn!("a plug-in in its own process did not hand over its settings in time");
+}
+
 /// Forget the crashes already shown, so the same one is not reported
 /// every time the app asks.
 pub fn clear_crashed_sandboxes() {
@@ -273,6 +324,9 @@ const POOL_FRAMES: usize = 8192;
 /// How long a freshly started plug-in may take to load and list its
 /// parameters. Big sample libraries take their time.
 pub const PARAMS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long the bridge waits for work before it looks whether the state
+/// is wanted. Short, so a save does not wait on an idle plug-in.
+const BRIDGE_TURN: std::time::Duration = std::time::Duration::from_millis(50);
 /// How often the plug-in's state is fetched while its window is open or
 /// its knobs have moved, so a save has what the person did in there.
 const STATE_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
@@ -400,6 +454,13 @@ struct Shared {
     /// is fetched once the moves have stopped for a moment, so a save, or
     /// a restart after a crash, has them.
     host_moved: AtomicBool,
+    /// A knob the host moved is not in the fetched state yet.
+    host_dirty: AtomicBool,
+    /// Someone is about to read the state (a save, the parameter sheet):
+    /// fetch it now rather than at the next turn (`settle_states`).
+    fetch_now: AtomicBool,
+    /// The state has been asked for and has not come back yet.
+    state_pending: AtomicBool,
     /// The delay the plug-in itself adds, as its process last said.
     plugin_latency: AtomicU32,
     /// A VST3 plug-in's class id, which names it in a `.vstpreset`.
@@ -1013,6 +1074,7 @@ impl HostedPlugin for SandboxedPlugin {
             }
         }
         self.shared.host_moved.store(true, Ordering::Relaxed);
+        self.shared.host_dirty.store(true, Ordering::Relaxed);
         let _ = self.to_child.try_send(ToChild::Param(id, value));
     }
 
@@ -1326,7 +1388,7 @@ fn bridge_loop(
     loop {
         // While its window is open, or after its knobs moved, the state is
         // fetched now and then, so a save has what was done in there.
-        let job = match to_rx.recv_timeout(STATE_EVERY) {
+        let job = match to_rx.recv_timeout(BRIDGE_TURN) {
             Ok(job) => Some(job),
             Err(RecvTimeoutError::Timeout) => None,
             // The plug-in was removed: the child goes with it.
@@ -1341,11 +1403,13 @@ fn bridge_loop(
         let stale = shared.state_stale.load(Ordering::Relaxed)
             || shared.editor_open.load(Ordering::Relaxed)
             || settled;
-        if stale && last_state.elapsed() >= STATE_EVERY {
+        // Someone is about to read the state: no waiting for a turn.
+        let now = shared.fetch_now.swap(false, Ordering::Relaxed);
+        if now || (stale && last_state.elapsed() >= STATE_EVERY) {
             shared.state_stale.store(false, Ordering::Relaxed);
-            if settled {
-                host_moved_at = None;
-            }
+            shared.host_dirty.store(false, Ordering::Relaxed);
+            shared.state_pending.store(true, Ordering::Relaxed);
+            host_moved_at = None;
             last_state = std::time::Instant::now();
             writing_since.store(
                 started.elapsed().as_millis().max(1) as u64,
@@ -1500,6 +1564,7 @@ fn take_aside(frame: &Frame, shared: &Shared) -> bool {
         }
         RES_STATE => {
             *shared.state.lock() = frame.payload.clone();
+            shared.state_pending.store(false, Ordering::Relaxed);
             true
         }
         RES_EDITOR => {
@@ -2162,13 +2227,17 @@ while True:
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(plugin.get_parameter_value(3), 0.2);
-        // A knob the host moves gets the state fetched once it is still.
+        // A knob the host moves gets the state fetched at once when
+        // someone is about to read it (a save right after a knob turn).
         plugin.set_parameter_value(3, 0.9);
-        let started = std::time::Instant::now();
-        while plugin.get_state() != b"state" && started.elapsed().as_secs() < 6 {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        let asked = std::time::Instant::now();
+        settle_states(std::time::Duration::from_secs(2));
         assert_eq!(plugin.get_state(), b"state".to_vec());
+        assert!(asked.elapsed() < std::time::Duration::from_secs(1));
+        // With nothing moved since, there is nothing to wait for.
+        let asked = std::time::Instant::now();
+        settle_states(std::time::Duration::from_secs(2));
+        assert!(asked.elapsed() < std::time::Duration::from_millis(100));
         assert!(!plugin.has_crashed());
         drop(plugin);
         let _ = std::fs::remove_dir_all(&dir);
@@ -2239,6 +2308,15 @@ while True:
         plugin.set_parameter_value(3, 0.8);
         let level = play(&mut plugin, 40);
         assert!((level - 0.4).abs() < 1e-6, "the knob is heard: {level}");
+        // Read right after the knob moved (a save, the parameter sheet):
+        // the state is fetched for it, not a second later.
+        settle_states(std::time::Duration::from_millis(500));
+        assert_eq!(
+            plugin.get_state(),
+            0.8f64.to_le_bytes().to_vec(),
+            "a state read straight after a knob move has the move"
+        );
+        plugin.set_parameter_value(3, 0.8);
         // The state follows the knob once it has been still a moment.
         let wanted = 0.8f64.to_le_bytes().to_vec();
         let started = std::time::Instant::now();
