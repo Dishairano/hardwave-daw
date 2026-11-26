@@ -777,19 +777,28 @@ pub fn close_plugin_editor(
     Ok(())
 }
 
-/// The plug-ins the person chose to run sandboxed, shared with the
-/// paths that load plug-ins without the app state at hand (export).
-static SANDBOXED: std::sync::OnceLock<
-    std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
-> = std::sync::OnceLock::new();
+/// Which plug-ins run in a process of their own, shared with the paths
+/// that load plug-ins without the app state at hand (export).
+static SANDBOXED: std::sync::OnceLock<SandboxChoices> = std::sync::OnceLock::new();
 
-/// Make the sandboxed set, once, and keep it where every loader finds it.
-pub(crate) fn sandboxed_set(
-    initial: std::collections::HashSet<String>,
-) -> std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>> {
+/// The choices as every loader holds them.
+pub(crate) type SandboxChoices = std::sync::Arc<parking_lot::Mutex<crate::plugin_sandbox::Choices>>;
+
+/// Make the choices, once, and keep them where every loader finds them.
+pub(crate) fn sandboxed_set(initial: crate::plugin_sandbox::Choices) -> SandboxChoices {
     std::sync::Arc::clone(
         SANDBOXED.get_or_init(|| std::sync::Arc::new(parking_lot::Mutex::new(initial))),
     )
+}
+
+/// Where this plug-in runs: in the DAW, or in a process of its own.
+pub(crate) fn plugin_home(
+    choices: &SandboxChoices,
+    descriptor: &PluginDescriptor,
+) -> crate::plugin_sandbox::Home {
+    let foreign = descriptor.path != std::path::Path::new("<native>")
+        && !hardwave_plugin_host::binary_arch::plugin_arch(&descriptor.path).matches_host();
+    choices.lock().home(descriptor, foreign)
 }
 
 /// Load a plug-in for any purpose (a slot, the parameter sheet, presets,
@@ -800,6 +809,16 @@ pub(crate) fn load_hosted(descriptor: &PluginDescriptor) -> Result<Box<dyn Hoste
     instantiate_for_slot(&sandboxed, descriptor)
 }
 
+/// [`load_hosted`] for a render to a file (export, bounce, freeze): a
+/// plug-in in its own process is waited for block by block, so it loses
+/// nothing however fast the render runs and adds no delay.
+pub(crate) fn load_hosted_offline(
+    descriptor: &PluginDescriptor,
+) -> Result<Box<dyn HostedPlugin>, String> {
+    let sandboxed = sandboxed_set(Default::default());
+    instantiate_paced(&sandboxed, descriptor, crate::plugin_sandbox::Pace::Offline)
+}
+
 /// Whether this plug-in may be loaded into the DAW's own process: not
 /// refused by the probe, not sandboxed by choice, built for this
 /// architecture. Its own window needs that, because a window cannot be
@@ -808,10 +827,8 @@ pub(crate) fn may_load_in_process(descriptor: &PluginDescriptor) -> Result<(), S
     if descriptor.path == std::path::Path::new("<native>") {
         return Ok(());
     }
-    if sandboxed_set(Default::default())
-        .lock()
-        .contains(&descriptor.id)
-    {
+    let home = plugin_home(&sandboxed_set(Default::default()), descriptor);
+    if home == (crate::plugin_sandbox::Home::Own { fixed: false }) {
         return Err(format!(
             "{} runs in its own process, so its own window is not available; its parameters are",
             descriptor.name
@@ -838,15 +855,10 @@ pub(crate) fn may_load_in_process(descriptor: &PluginDescriptor) -> Result<(), S
 /// architecture. Blocks until all have answered, so call it off the main
 /// thread (see `plugin_probe::warm`).
 pub(crate) fn probe_ahead(state: &AppState, descriptors: &[PluginDescriptor]) {
-    let sandboxed = state.sandboxed_plugins.lock().clone();
     let native = PathBuf::from("<native>");
     let paths: Vec<PathBuf> = descriptors
         .iter()
-        .filter(|d| {
-            d.path != native
-                && !sandboxed.contains(&d.id)
-                && hardwave_plugin_host::binary_arch::plugin_arch(&d.path).matches_host()
-        })
+        .filter(|d| d.path != native && !plugin_home(&state.sandboxed_plugins, d).is_own())
         .map(|d| d.path.clone())
         .collect();
     if !paths.is_empty() {
@@ -867,22 +879,34 @@ pub(crate) fn project_descriptors(state: &AppState) -> Vec<PluginDescriptor> {
         .collect()
 }
 
-/// Build the plug-in for a slot, in a process of its own when the user
-/// has asked for that one to be sandboxed.
+/// Build the plug-in for a slot: a third-party one in a process of its
+/// own, unless the producer chose to keep that one inside the DAW.
 ///
-/// A sandboxed plug-in costs a block of latency, which is why it is a
-/// choice rather than the default: what it buys is that its crash is
-/// its own process's problem and the song keeps playing.
+/// A plug-in in its own process costs a buffer of latency (compensated).
+/// What it buys is that its crash is its own process's problem: the song
+/// keeps playing and nothing unsaved is lost. Hardwave's own plug-ins and
+/// the built-in ones stay inside.
 pub(crate) fn instantiate_for_slot(
-    sandboxed_plugins: &std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<String>>>,
+    sandboxed_plugins: &SandboxChoices,
     descriptor: &PluginDescriptor,
 ) -> Result<Box<dyn HostedPlugin>, String> {
-    let sandboxed = sandboxed_plugins.lock().contains(&descriptor.id);
+    instantiate_paced(
+        sandboxed_plugins,
+        descriptor,
+        crate::plugin_sandbox::Pace::Live,
+    )
+}
+
+/// [`instantiate_for_slot`], for playing live or for a render.
+pub(crate) fn instantiate_paced(
+    sandboxed_plugins: &SandboxChoices,
+    descriptor: &PluginDescriptor,
+    pace: crate::plugin_sandbox::Pace,
+) -> Result<Box<dyn HostedPlugin>, String> {
     // A plug-in built for another architecture has no choice: this
-    // process cannot load it, so it goes out to a helper whether or
-    // not the user asked for a sandbox.
-    let foreign = !hardwave_plugin_host::binary_arch::plugin_arch(&descriptor.path).matches_host();
-    if !sandboxed && !foreign {
+    // process cannot load it, so it goes out to a helper whatever the
+    // producer chose.
+    if !plugin_home(sandboxed_plugins, descriptor).is_own() {
         return instantiate_plugin(descriptor);
     }
     let exe =
@@ -890,13 +914,14 @@ pub(crate) fn instantiate_for_slot(
     // No falling back to this process: the person sandboxed this plug-in
     // because it crashes, and a sandbox that will not start does not
     // change that. The slot says why it is empty instead.
-    let mut plugin = crate::plugin_sandbox::SandboxedPlugin::start(descriptor.clone(), &exe)
-        .map_err(|e| {
-            format!(
-                "{} could not start in its own process: {e}",
-                descriptor.name
-            )
-        })?;
+    let mut plugin =
+        crate::plugin_sandbox::SandboxedPlugin::start_paced(descriptor.clone(), &exe, pace)
+            .map_err(|e| {
+                format!(
+                    "{} could not start in its own process: {e}",
+                    descriptor.name
+                )
+            })?;
     // Its parameters before it goes into a chain, which reads them when it
     // takes the slot. A plug-in slow to load still plays, without them.
     if !plugin.wait_for_params(crate::plugin_sandbox::PARAMS_DEADLINE) {
@@ -2087,12 +2112,56 @@ pub fn drain_plugin_knob_moves(state: State<AppState>) -> Vec<PluginKnobMove> {
     moves
 }
 
-/// Which plug-ins run in a process of their own.
+/// Which of the plug-ins this computer has run in a process of their own.
 #[tauri::command]
 pub fn get_sandboxed_plugins(state: State<AppState>) -> Vec<String> {
-    let mut list: Vec<String> = state.sandboxed_plugins.lock().iter().cloned().collect();
+    let descriptors: Vec<PluginDescriptor> = {
+        let engine = state.engine.lock();
+        let scanner = engine.plugin_scanner.lock();
+        scanner.plugins().to_vec()
+    };
+    let mut list: Vec<String> = descriptors
+        .iter()
+        .filter(|d| plugin_home(&state.sandboxed_plugins, d).is_own())
+        .map(|d| d.id.clone())
+        .collect();
     list.sort();
     list
+}
+
+/// Where one plug-in runs, for the slot's menu.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHome {
+    /// It runs in a process of its own.
+    pub own_process: bool,
+    /// That cannot be changed: it is built in, or built for another kind
+    /// of processor.
+    pub fixed: bool,
+}
+
+/// Where this plug-in runs and whether the producer can change that.
+#[tauri::command]
+pub fn get_plugin_home(state: State<AppState>, plugin_id: String) -> Result<PluginHome, String> {
+    let descriptor = state
+        .engine
+        .lock()
+        .plugin_scanner
+        .lock()
+        .find(&plugin_id)
+        .cloned()
+        .ok_or_else(|| format!("Plug-in not found: {plugin_id}"))?;
+    use crate::plugin_sandbox::Home;
+    Ok(match plugin_home(&state.sandboxed_plugins, &descriptor) {
+        Home::Inside { fixed } => PluginHome {
+            own_process: false,
+            fixed,
+        },
+        Home::Own { fixed } => PluginHome {
+            own_process: true,
+            fixed,
+        },
+    })
 }
 
 /// Run this plug-in in a process of its own, or stop doing that.
@@ -2106,16 +2175,20 @@ pub fn set_plugin_sandboxed(
     plugin_id: String,
     sandboxed: bool,
 ) -> Result<bool, String> {
-    {
-        let mut list = state.sandboxed_plugins.lock();
-        if sandboxed {
-            list.insert(plugin_id);
-        } else {
-            list.remove(&plugin_id);
-        }
-    }
+    let descriptor = state
+        .engine
+        .lock()
+        .plugin_scanner
+        .lock()
+        .find(&plugin_id)
+        .cloned()
+        .ok_or_else(|| format!("Plug-in not found: {plugin_id}"))?;
+    state
+        .sandboxed_plugins
+        .lock()
+        .choose(&descriptor, sandboxed);
     crate::commands::engine::persist_audio_prefs_public(&state);
-    Ok(sandboxed)
+    Ok(plugin_home(&state.sandboxed_plugins, &descriptor).is_own())
 }
 
 /// A plug-in whose own process has gone.
@@ -2499,6 +2572,13 @@ pub fn restart_sandboxed_plugin(
             .find(&plugin_id)
             .cloned()
             .ok_or_else(|| format!("Plug-in not found: {plugin_id}"))?;
+        // What each slot's plug-in was set to when its process went: the
+        // bridge keeps the last state the process sent, so the knobs
+        // turned since the last save come back too. The saved state is
+        // only for a slot with nothing newer.
+        let mut live = engine
+            .snapshot_plugin_states(std::time::Duration::from_millis(500))
+            .unwrap_or_default();
         let project = engine.project.lock();
         let mut plan = Vec::new();
         for track in &project.tracks {
@@ -2512,9 +2592,9 @@ pub fn restart_sandboxed_plugin(
                         slot.enabled,
                         slot.wet,
                         slot.sidechain_source.is_some(),
-                        project
-                            .plugin_state(&slot.id)
-                            .map(|e| e.chunk.clone())
+                        live.remove(&(track.id.clone(), slot.id.clone()))
+                            .filter(|bytes| !bytes.is_empty())
+                            .or_else(|| project.plugin_state(&slot.id).map(|e| e.chunk.clone()))
                             .or_else(|| slot.state.clone()),
                     ));
                 }

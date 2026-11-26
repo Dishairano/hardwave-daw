@@ -29,7 +29,7 @@ pub(crate) fn offline_insert_factory(
     move |plugin_id: &str| {
         descriptors
             .get(plugin_id)
-            .and_then(|d| super::plugins::load_hosted(d).ok())
+            .and_then(|d| super::plugins::load_hosted_offline(d).ok())
     }
 }
 
@@ -254,6 +254,8 @@ where
     {
         return Ok(None);
     }
+    // Crashes from an earlier render are not this one's.
+    let _ = crate::plugin_sandbox::take_offline_crashes();
     let factory = offline_insert_factory(&engine);
     let render = engine.prepare_offline_span(
         fmt.sample_rate,
@@ -278,6 +280,17 @@ where
         &mut meter,
         on_progress,
     )?;
+    // A plug-in whose process went during the render played silence from
+    // there on. The file would look fine and have a hole in it, so it is
+    // not kept, and the person is told which plug-in it was.
+    let stopped = crate::plugin_sandbox::take_offline_crashes();
+    if completed && !stopped.is_empty() {
+        let _ = std::fs::remove_file(out_path);
+        return Err(format!(
+            "{} stopped while this was rendered, so the file would have a gap where it played. Nothing was kept. Start the plug-in again (or remove it) and render once more.",
+            stopped.join(", ")
+        ));
+    }
     Ok(completed.then(|| meter.finish()))
 }
 
@@ -1733,6 +1746,9 @@ fn place_consolidated(
     start_ticks: u64,
     end_ticks: u64,
 ) -> Result<(), String> {
+    // The file first: a render that cannot be read, or a track deleted
+    // while it rendered, must not leave an undo step or take the clips.
+    let file = crate::commands::audio::load_for_placing(engine, track_id, path)?;
     engine.snapshot_before_mutation();
     {
         let mut project = engine.project.lock();
@@ -1745,10 +1761,10 @@ fn place_consolidated(
                 .retain(|c| !inside_range(c, start_ticks, end_ticks));
         }
     }
-    let clip = crate::commands::audio::place_audio_file(
+    let clip = crate::commands::audio::place_loaded_file(
         engine,
         track_id.to_string(),
-        path.to_string(),
+        file,
         Some(start_ticks),
     )?;
     {
@@ -1902,6 +1918,9 @@ fn place_bounce(
     path: &str,
     end_ticks: u64,
 ) -> Result<String, String> {
+    // The file first: a render that cannot be read, or an original deleted
+    // while it rendered, must not leave an undo step or an empty track.
+    let file = crate::commands::audio::load_for_placing(engine, source_track_id, path)?;
     engine.snapshot_before_mutation();
     let new_track_id = {
         let mut project = engine.project.lock();
@@ -1919,12 +1938,8 @@ fn place_bounce(
         }
         id
     };
-    let clip = crate::commands::audio::place_audio_file(
-        engine,
-        new_track_id.clone(),
-        path.to_string(),
-        Some(0),
-    )?;
+    let clip =
+        crate::commands::audio::place_loaded_file(engine, new_track_id.clone(), file, Some(0))?;
     let end_ticks = sound_end_ticks(engine, &clip.source_id, end_ticks);
     {
         let mut project = engine.project.lock();
@@ -2297,13 +2312,12 @@ fn place_freeze(
     path: &str,
     end_ticks: u64,
 ) -> Result<(), String> {
+    // The file first: a render that cannot be read, or a track deleted
+    // while it rendered, must not leave an undo step.
+    let file = crate::commands::audio::load_for_placing(engine, track_id, path)?;
     engine.snapshot_before_mutation();
-    let clip = crate::commands::audio::place_audio_file(
-        engine,
-        track_id.to_string(),
-        path.to_string(),
-        Some(0),
-    )?;
+    let clip =
+        crate::commands::audio::place_loaded_file(engine, track_id.to_string(), file, Some(0))?;
     let end_ticks = sound_end_ticks(engine, &clip.source_id, end_ticks);
     {
         let mut project = engine.project.lock();
@@ -2416,19 +2430,28 @@ fn place_freeze_render(track: &mut hardwave_project::track::Track, clip_id: &str
 /// track is frozen again.
 #[tauri::command]
 pub fn unfreeze_track(state: State<AppState>, track_id: String) -> Result<(), String> {
-    state.engine.lock().snapshot_before_mutation();
+    let engine = state.engine.lock();
+    unfreeze(&engine, &track_id)
+}
+
+/// Unfreeze a track, as one undo step: one undo freezes it again. A track
+/// that is not frozen, or is gone, takes no step: it took one that undid
+/// nothing and threw the redo steps away.
+fn unfreeze(engine: &DawEngine, track_id: &str) -> Result<(), String> {
     {
-        let engine = state.engine.lock();
-        let mut project = engine.project.lock();
+        let project = engine.project.lock();
         let track = project
-            .track_mut(&track_id)
+            .track(track_id)
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
         if !track.frozen {
             return Err("that track is not frozen".into());
         }
+    }
+    engine.snapshot_before_mutation();
+    if let Some(track) = engine.project.lock().track_mut(track_id) {
         track.frozen = false;
     }
-    state.engine.lock().rebuild_graph();
+    engine.rebuild_graph();
     Ok(())
 }
 
@@ -3225,7 +3248,7 @@ mod stem_and_freeze_tests {
 
 #[cfg(test)]
 mod placing_tests {
-    use super::{place_bounce, place_consolidated, place_freeze};
+    use super::{place_bounce, place_consolidated, place_freeze, unfreeze};
     use hardwave_engine::DawEngine;
     use hardwave_project::clip::{AudioClip, ClipContent, ClipPlacement};
     use std::path::Path;
@@ -3625,6 +3648,224 @@ mod placing_tests {
         assert!(engine.undo());
         assert!(!engine.project.lock().track(&id).unwrap().frozen);
         assert_eq!(clip_ids(&engine, &id), ["a", "b"], "and leaves no render");
+    }
+
+    /// A song with a part of two clips on one track, its rows settled as
+    /// they are once the song has been edited.
+    fn song_with_a_part(engine: &DawEngine) -> String {
+        let mut p = engine.project.lock();
+        let id = p.add_audio_track("Vox".into());
+        let t = p.track_mut(&id).unwrap();
+        t.clips.push(clip("a", &id, 0, 960));
+        t.clips.push(clip("b", &id, 960, 960));
+        p.settle_rows();
+        id
+    }
+
+    /// The whole song as it is saved, to compare two moments of it.
+    fn saved(engine: &DawEngine) -> String {
+        serde_json::to_string(&*engine.project.lock()).unwrap()
+    }
+
+    /// The files the song's audio clips play, with whether each is on disk
+    /// and loaded: a clip that redo brings back has to find its audio.
+    fn every_clip_has_its_audio(engine: &DawEngine) -> bool {
+        let p = engine.project.lock();
+        p.tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter_map(|c| match &c.content {
+                ClipContent::Audio(a) if !a.source_file.is_empty() => Some(a),
+                _ => None,
+            })
+            .all(|a| {
+                Path::new(&a.source_file).exists()
+                    && engine.audio_pool.get(&a.source_path).is_some()
+            })
+    }
+
+    /// One undo after `edit` puts the song back exactly as it was saved
+    /// before it, and one redo brings back exactly what `edit` made, with
+    /// the rendered file still there to play.
+    fn one_undo_and_one_redo(engine: &DawEngine, what: &str, edit: impl FnOnce()) {
+        // An undo step keeps the song with every clip written down on the
+        // row it is drawn on, so that is the song one undo gives back.
+        engine.project.lock().settle_rows();
+        let before = saved(engine);
+        let (steps, _) = engine.history_sizes();
+        edit();
+        let after = saved(engine);
+        assert_ne!(after, before, "{what} changed the song");
+        assert_eq!(engine.history_sizes(), (steps + 1, 0), "{what} is one step");
+        assert!(engine.undo());
+        assert_eq!(saved(engine), before, "one undo after {what}");
+        assert_eq!(engine.history_sizes(), (steps, 1));
+        assert!(engine.redo());
+        assert_eq!(saved(engine), after, "one redo after {what}");
+        assert!(
+            every_clip_has_its_audio(engine),
+            "audio after redoing {what}"
+        );
+        assert_eq!(engine.history_sizes(), (steps + 1, 0));
+    }
+
+    #[test]
+    fn one_undo_after_a_consolidate_restores_the_song_and_redo_glues_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let id = song_with_a_part(&engine);
+        one_undo_and_one_redo(&engine, "a consolidate", || {
+            place_consolidated(&engine, &id, &file, 0, 1920).unwrap()
+        });
+        assert_eq!(clip_ids(&engine, &id).len(), 1);
+    }
+
+    #[test]
+    fn one_undo_after_a_bounce_restores_the_song_and_redo_bounces_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let id = song_with_a_part(&engine);
+        let tracks = engine.project.lock().tracks.len();
+        one_undo_and_one_redo(&engine, "a bounce", || {
+            place_bounce(&engine, &id, "Vox", &file, 1920).unwrap();
+        });
+        let p = engine.project.lock();
+        assert_eq!(p.tracks.len(), tracks + 1);
+        assert!(p.track(&id).unwrap().muted);
+    }
+
+    #[test]
+    fn one_undo_after_a_freeze_restores_the_song_and_redo_freezes_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let id = song_with_a_part(&engine);
+        one_undo_and_one_redo(&engine, "a freeze", || {
+            place_freeze(&engine, &id, &file, 1920).unwrap()
+        });
+        assert!(engine.project.lock().track(&id).unwrap().frozen);
+    }
+
+    #[test]
+    fn one_undo_after_an_unfreeze_freezes_the_track_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let engine = DawEngine::new();
+        let id = song_with_a_part(&engine);
+        place_freeze(&engine, &id, &file, 1920).unwrap();
+        one_undo_and_one_redo(&engine, "an unfreeze", || unfreeze(&engine, &id).unwrap());
+        assert!(!engine.project.lock().track(&id).unwrap().frozen);
+        assert!(engine.undo());
+        assert!(engine.project.lock().track(&id).unwrap().frozen);
+    }
+
+    /// A song with one edit made and one undone, so there is a step to
+    /// undo and a step to redo: what `(song, steps)` a failed command has
+    /// to leave alone.
+    fn song_with_history(engine: &DawEngine) -> (String, String, (usize, usize)) {
+        let id = song_with_a_part(engine);
+        for name in ["Lead", "Bass"] {
+            engine.snapshot_before_mutation();
+            engine.project.lock().track_mut(&id).unwrap().name = name.into();
+        }
+        assert!(engine.undo());
+        (id, saved(engine), engine.history_sizes())
+    }
+
+    /// A render that cannot be put on its track leaves the song and its
+    /// undo steps alone. The undo step was taken before the file was read:
+    /// a file that would not load, or a track deleted while it rendered,
+    /// left a step that undid nothing, threw the redo steps away, and left
+    /// the part's clips deleted after a consolidate or an empty track
+    /// after a bounce.
+    #[test]
+    fn a_consolidate_that_cannot_be_placed_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let gone = dir.path().join("gone.wav").to_string_lossy().into_owned();
+        let engine = DawEngine::new();
+        let (id, song, steps) = song_with_history(&engine);
+        assert!(place_consolidated(&engine, &id, &gone, 0, 1920).is_err());
+        assert_eq!(saved(&engine), song, "no file: the song is as it was");
+        assert_eq!(engine.history_sizes(), steps, "no file: no step, redo kept");
+        assert!(place_consolidated(&engine, "no such track", &file, 0, 1920).is_err());
+        assert_eq!(saved(&engine), song, "no track: the song is as it was");
+        assert_eq!(
+            engine.history_sizes(),
+            steps,
+            "no track: no step, redo kept"
+        );
+    }
+
+    #[test]
+    fn a_bounce_that_cannot_be_placed_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let gone = dir.path().join("gone.wav").to_string_lossy().into_owned();
+        let engine = DawEngine::new();
+        let (id, song, steps) = song_with_history(&engine);
+        assert!(place_bounce(&engine, &id, "Vox", &gone, 1920).is_err());
+        assert_eq!(saved(&engine), song, "no file: the song is as it was");
+        assert_eq!(engine.history_sizes(), steps, "no file: no step, redo kept");
+        assert!(place_bounce(&engine, "no such track", "Vox", &file, 1920).is_err());
+        assert_eq!(saved(&engine), song, "no track: the song is as it was");
+        assert_eq!(
+            engine.history_sizes(),
+            steps,
+            "no track: no step, redo kept"
+        );
+    }
+
+    #[test]
+    fn a_freeze_that_cannot_be_placed_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let gone = dir.path().join("gone.wav").to_string_lossy().into_owned();
+        let engine = DawEngine::new();
+        let (id, song, steps) = song_with_history(&engine);
+        assert!(place_freeze(&engine, &id, &gone, 1920).is_err());
+        assert_eq!(saved(&engine), song, "no file: the song is as it was");
+        assert_eq!(engine.history_sizes(), steps, "no file: no step, redo kept");
+        assert!(place_freeze(&engine, "no such track", &file, 1920).is_err());
+        assert_eq!(saved(&engine), song, "no track: the song is as it was");
+        assert_eq!(
+            engine.history_sizes(),
+            steps,
+            "no track: no step, redo kept"
+        );
+    }
+
+    /// Unfreezing a track that is not frozen, or one that is gone, is no
+    /// undo step. It took one that undid nothing and threw the redo steps
+    /// away.
+    #[test]
+    fn an_unfreeze_that_does_nothing_takes_no_undo_step() {
+        let engine = DawEngine::new();
+        let (id, song, steps) = song_with_history(&engine);
+        assert!(unfreeze(&engine, &id).is_err());
+        assert!(unfreeze(&engine, "no such track").is_err());
+        assert_eq!(saved(&engine), song);
+        assert_eq!(engine.history_sizes(), steps, "no step, redo kept");
+    }
+
+    /// A dropped sample that cannot be read is no undo step either.
+    #[test]
+    fn an_import_that_fails_takes_no_undo_step() {
+        use crate::commands::audio::import_onto_track;
+        let dir = tempfile::tempdir().unwrap();
+        let file = render_file(dir.path(), 4_800, 0.25);
+        let gone = dir.path().join("gone.wav").to_string_lossy().into_owned();
+        let engine = DawEngine::new();
+        let (id, song, steps) = song_with_history(&engine);
+        assert!(import_onto_track(&engine, id.clone(), gone, Some(0)).is_err());
+        assert!(import_onto_track(&engine, "no such track".into(), file.clone(), Some(0)).is_err());
+        assert_eq!(saved(&engine), song);
+        assert_eq!(engine.history_sizes(), steps, "no step, redo kept");
+        one_undo_and_one_redo(&engine, "an import", || {
+            import_onto_track(&engine, id.clone(), file.clone(), Some(0)).unwrap();
+        });
     }
 
     /// A clip that starts over a longer one on the same track plays on top

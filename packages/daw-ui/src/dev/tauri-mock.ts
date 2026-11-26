@@ -474,6 +474,8 @@ const mock: TauriInternals = {
         return [false, 9000]
       case 'set_osc_enabled':
         return [(args as { enabled?: boolean }).enabled ?? false, (args as { port?: number }).port ?? 9000]
+      case 'get_plugin_home':
+        return { ownProcess: false, fixed: false }
       case 'get_sandboxed_plugins':
         return []
       case 'set_plugin_sandboxed':

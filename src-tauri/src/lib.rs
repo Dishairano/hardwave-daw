@@ -110,8 +110,9 @@ pub struct AppState {
     /// The reference track's measured loudness and its name, which the
     /// engine itself has no reason to know.
     pub reference_meta: Arc<Mutex<(f32, String)>>,
-    /// Plug-ins the user has asked to run in a process of their own.
-    pub sandboxed_plugins: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Which plug-ins run in a process of their own: third-party ones
+    /// unless the producer chose otherwise.
+    pub sandboxed_plugins: Arc<Mutex<plugin_sandbox::Choices>>,
     /// Which live slots are running sandboxed, and whether their
     /// process has gone, so the mixer can say which plug-in it was.
     #[allow(clippy::type_complexity)]
@@ -351,6 +352,12 @@ pub fn run() {
     if prefs.link_enabled {
         engine.set_link_enabled(true);
     }
+    // A plug-in in its own process hands its state over a moment after a
+    // knob moves; whoever reads the states (a save, a preset, the parameter
+    // sheet) gets them brought up to date first.
+    engine.before_state_snapshot = Some(Arc::new(|| {
+        plugin_sandbox::settle_states(std::time::Duration::from_millis(400))
+    }));
     #[cfg(target_os = "windows")]
     if prefs.wasapi_exclusive {
         if let Err(e) = engine.set_wasapi_exclusive(true) {
@@ -385,9 +392,11 @@ pub fn run() {
             Arc::new(surface)
         },
         reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
-        sandboxed_plugins: commands::plugins::sandboxed_set(
-            prefs.sandboxed_plugins.iter().cloned().collect(),
-        ),
+        sandboxed_plugins: commands::plugins::sandboxed_set(plugin_sandbox::Choices {
+            always: prefs.sandboxed_plugins.iter().cloned().collect(),
+            never: prefs.in_process_plugins.iter().cloned().collect(),
+            third_party_inside: prefs.third_party_plugins_in_process,
+        }),
         sandbox_health: Arc::new(Mutex::new(std::collections::HashMap::new())),
         collab: Arc::new(crate::collab::Collab::default()),
         osc_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -598,6 +607,7 @@ pub fn run() {
             commands::engine::get_osc_status,
             commands::engine::set_osc_enabled,
             commands::plugins::get_sandboxed_plugins,
+            commands::plugins::get_plugin_home,
             commands::plugins::take_sandbox_crashes,
             commands::plugins::get_sandbox_stats,
             commands::plugins::restart_sandboxed_plugin,
@@ -953,7 +963,8 @@ pub fn run() {
             diagnostics::diagnostics_info,
         ]))
         .setup(move |app| {
-            // No main window (WebView2 did not start): start again or say why, never run unseen.
+            // The main window is built here, not by Tauri (tauri.conf.json: "create": false),
+            // so a WebView2 that is slow to start is tried again instead of ending the app.
             main_window::ensure(app.handle());
             // Watch the main thread from the start, not only while the FPS
             // meter is open: a stuck main thread has to leave a line in the log.

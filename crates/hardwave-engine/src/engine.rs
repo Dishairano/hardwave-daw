@@ -1376,6 +1376,10 @@ pub struct DawEngine {
     /// Used to capture plug-in state into `Project.plugin_states` so
     /// save/load round-trips preserve the user's knob tweaks.
     pub pending_state_snapshot: PluginStateSnapshotSlot,
+    /// Run before the plug-ins' states are read (`snapshot_plugin_states`),
+    /// off the audio thread: the app brings up to date what a plug-in in
+    /// its own process last handed over.
+    pub before_state_snapshot: Option<Arc<dyn Fn() + Send + Sync>>,
     /// How the live stream's callback hands its plug-ins back when the
     /// stream lets it go; see [`PluginStateFarewell`]. `None` while no
     /// stream runs.
@@ -1478,6 +1482,7 @@ impl DawEngine {
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
+            before_state_snapshot: None,
             plugin_farewell: None,
             main_thread: None,
             #[cfg(test)]
@@ -1501,6 +1506,11 @@ impl DawEngine {
         // the performance test half a second.
         if !self.is_running() {
             return None;
+        }
+        // Plug-ins that keep their state somewhere slower than a call (one
+        // in its own process) bring it up to date first.
+        if let Some(settle) = self.before_state_snapshot.as_ref() {
+            settle();
         }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         {
@@ -4653,6 +4663,9 @@ struct EngineCallback {
     /// worked out with.
     chain_boards: Vec<Option<Arc<ChainBoard>>>,
     assumed_latency: Vec<u32>,
+    /// Frames played since the chains' delays were last compared with the
+    /// ones the compensation assumes (`LATENCY_LOOK_EVERY`).
+    frames_since_latency_look: u32,
     /// The build request the graph in use answers.
     graph_seq: u64,
     /// The tempo map the graph in use was built with, for a block in which
@@ -4756,6 +4769,11 @@ fn smooth_load(previous: u32, reading: u32) -> u32 {
         previous - (previous - reading) / 8
     }
 }
+
+/// How many frames pass between looks at whether a plug-in changed its
+/// delay: half a second at 48 kHz. Cheap (one number per plug-in), and a
+/// track is out of time for no longer than this.
+const LATENCY_LOOK_EVERY: u32 = 24_000;
 
 impl EngineCallback {
     /// Show silence on every meter once the transport stops. Tries again
@@ -4875,6 +4893,7 @@ impl EngineCallback {
             builder: BuildMode::Inline(Box::new(builder)),
             chain_boards: Vec::new(),
             assumed_latency: Vec::new(),
+            frames_since_latency_look: 0,
             graph_seq: 0,
             tempo_map: hardwave_project::TempoMap::default(),
             preview: crate::preview_player::PreviewPlayer::new(preview),
@@ -5834,6 +5853,22 @@ impl EngineCallback {
                 }
                 self.publish_audio_load(block_started, num_frames);
                 return;
+            }
+        }
+
+        // A plug-in can change its delay while it plays: a limiter's
+        // lookahead knob, or a plug-in in its own process, whose delay is
+        // only known a moment after it starts. The delays were read when a
+        // graph went in and never again, so such a track stayed out of
+        // time with the others until the next edit. Looked at now and
+        // then; a difference asks for a graph that compensates for it.
+        self.frames_since_latency_look = self
+            .frames_since_latency_look
+            .saturating_add(num_frames as u32);
+        if self.frames_since_latency_look >= LATENCY_LOOK_EVERY {
+            self.frames_since_latency_look = 0;
+            if self.publish_chains() {
+                self.needs_rebuild = true;
             }
         }
 
@@ -8967,6 +9002,61 @@ mod rt_safety_tests {
             vec!["new-synth".to_string()],
             "the old song's plug-in must not survive into the new song"
         );
+    }
+
+    /// A plug-in that changes its delay while the song plays is compensated
+    /// for again within a moment. The delays were only read when a graph
+    /// went in, so the track stayed out of time until the next edit.
+    #[test]
+    fn a_plug_in_that_changes_its_delay_is_compensated_again() {
+        use crate::insert_chain::{tests::make_latent_slot, InsertCommand};
+        use std::sync::atomic::AtomicU32;
+        let mut project = Project::default();
+        let id = project.add_audio_track("Vox".into());
+        // In the song too, as adding a plug-in in the app does.
+        project
+            .track_mut(&id)
+            .unwrap()
+            .inserts
+            .push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: None,
+                id: "limiter".into(),
+                plugin_id: "test.gain".into(),
+                enabled: true,
+                state: None,
+                sidechain_source: None,
+                wet: 1.0,
+            });
+        let project_arc = Arc::new(Mutex::new(project));
+        let (mut cb, mut cmd_tx) = make_callback(Arc::clone(&project_arc));
+        let mut out = vec![0.0f32; 512];
+        cb.process(&mut out, 256, 2);
+        let latency = Arc::new(AtomicU32::new(0));
+        cmd_tx
+            .try_send(InsertCommand::Add {
+                track_id: id.clone(),
+                slot: make_latent_slot("limiter", Arc::clone(&latency)),
+            })
+            .ok()
+            .unwrap();
+        for _ in 0..4 {
+            cb.process(&mut out, 256, 2);
+        }
+        let node_id = *cb.track_id_to_node.get(&id).expect("the track's node");
+        assert_eq!(cb.assumed_latency.get(node_id).copied(), Some(0));
+
+        // The plug-in now says 384 samples. Nothing is edited.
+        latency.store(384, std::sync::atomic::Ordering::Relaxed);
+        let blocks = (LATENCY_LOOK_EVERY as usize / 256) + 8;
+        for _ in 0..blocks {
+            cb.process(&mut out, 256, 2);
+        }
+        assert_eq!(
+            cb.assumed_latency.get(node_id).copied(),
+            Some(384),
+            "the compensation was worked out again with the new delay"
+        );
+        assert!(!cb.needs_rebuild, "and it settled");
     }
 
     /// Freezing a track parks its plug-ins (they do not run while it plays

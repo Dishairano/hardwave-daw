@@ -178,6 +178,23 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
+    serve_with(plugin, input, output, title, None)
+}
+
+/// [`serve`], with something to run first on the thread that plays: the
+/// DAW raises that thread to the priority its own audio thread has, so a
+/// busy computer does not make the plug-in's process late with its blocks.
+pub fn serve_with<R, W>(
+    plugin: Box<dyn HostedPlugin>,
+    input: R,
+    output: W,
+    title: &str,
+    on_play_thread: Option<Box<dyn FnOnce() + Send>>,
+) -> i32
+where
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
     let editor = plugin.editor();
     let gui_log = plugin.gui_edit_log();
     let out: Out<W> = Arc::new(Mutex::new(BufWriter::new(output)));
@@ -189,6 +206,9 @@ where
         std::thread::Builder::new()
             .name("hardwave-bridge-play".into())
             .spawn(move || {
+                if let Some(prepare) = on_play_thread {
+                    prepare();
+                }
                 let code = serve_frames(plugin, input, &out, &ui_tx, &waker);
                 drop(ui_tx);
                 waker.wake();
@@ -202,6 +222,40 @@ where
     player.join().unwrap_or(6)
 }
 
+/// How long after a block a knob set by the host still counts as "the
+/// song is playing": the next block hands it to the plug-in. Past this,
+/// nothing is calling the plug-in, and the value is handed over at once.
+const PLAYING_WITHIN: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The block size a plug-in is activated with when a knob or a state
+/// request reaches it before the host has activated it. The host's own
+/// activation, with the real size, replaces it.
+const IDLE_BLOCK: u32 = 512;
+
+/// How many blocks pass between looks at the plug-in's delay, which some
+/// plug-ins change while they play (a limiter's lookahead knob).
+const LATENCY_EVERY: u32 = 32;
+
+/// The parameter list with where each one stands, as a frame.
+fn params_frame(plugin: &dyn HostedPlugin) -> Frame {
+    let list: Vec<_> = (0..plugin.get_parameter_count())
+        .filter_map(|index| plugin.get_parameter_info(index))
+        .map(|info| {
+            let value = plugin.get_parameter_value(info.id);
+            (info, value)
+        })
+        .collect();
+    Frame::params(&list)
+}
+
+/// What the plug-in says about itself now.
+fn info_of(plugin: &dyn HostedPlugin) -> ChildInfo {
+    ChildInfo {
+        latency: plugin.latency_samples(),
+        class_id: plugin.vst3_class_id(),
+    }
+}
+
 /// The frames, one after another, on the thread that plays.
 fn serve_frames<R: Read, W: Write>(
     mut plugin: Box<dyn HostedPlugin>,
@@ -213,9 +267,27 @@ fn serve_frames<R: Read, W: Write>(
     let mut reader = BufReader::new(input);
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];
+    let mut key_left = vec![0.0f32; 4096];
+    let mut key_right = vec![0.0f32; 4096];
     let mut outputs = vec![Vec::new(), Vec::new()];
     let mut midi = Vec::with_capacity(MAX_BLOCK_EVENTS);
+    let mut midi_out = Vec::with_capacity(64);
     let mut sample_rate = 48_000.0;
+    let mut told = None::<ChildInfo>;
+    // Whether the plug-in has been activated, by the host or here.
+    let mut active = false;
+    let mut last_block = None::<std::time::Instant>;
+    let mut blocks_since_look = 0u32;
+
+    // Tell the host what the plug-in says about itself, when that changed.
+    let tell = |plugin: &dyn HostedPlugin, told: &mut Option<ChildInfo>| -> bool {
+        let now = info_of(plugin);
+        if *told == Some(now) {
+            return true;
+        }
+        *told = Some(now);
+        send(out, Frame::info(&now))
+    };
 
     // The host going away, or the stream ending, ends this process too:
     // there is nothing here without it.
@@ -232,40 +304,83 @@ fn serve_frames<R: Read, W: Write>(
                     if left.len() < block as usize {
                         left.resize(block as usize, 0.0);
                         right.resize(block as usize, 0.0);
+                        key_left.resize(block as usize, 0.0);
+                        key_right.resize(block as usize, 0.0);
                     }
                     sample_rate = rate;
+                    // Activated here already, for a knob that came before
+                    // the host's own activation: put down first, as the
+                    // plug-in formats ask.
+                    if active {
+                        plugin.deactivate();
+                    }
                     let _ = plugin.activate(rate, block);
+                    active = true;
                 }
-                if !send(out, Frame::new(RES_OK, Vec::new())) {
+                // Its delay is only certain once it knows the rate, and the
+                // host hears it before it hears the plug-in is ready.
+                if !tell(plugin.as_ref(), &mut told) || !send(out, Frame::new(RES_OK, Vec::new())) {
                     break;
                 }
             }
             REQ_SET_PARAM => {
                 if let Some((id, value)) = frame.read_set_param() {
                     plugin.set_parameter_value(id, value);
+                    // VST3 and CLAP plug-ins only hear a value inside a
+                    // block. With the song stopped, or the plug-in left out
+                    // while it is silent, no block comes: hand it over now,
+                    // so its window and its saved state have it.
+                    let playing = last_block.is_some_and(|at| at.elapsed() < PLAYING_WITHIN);
+                    if !playing {
+                        // A plug-in on a track that has not played yet was
+                        // never activated, and one that is not active takes
+                        // no value at all: the knob the host set was lost,
+                        // and the state read back had the default.
+                        if !active {
+                            active = plugin.activate(sample_rate, IDLE_BLOCK).is_ok();
+                        }
+                        plugin.flush_parameters();
+                    }
                 }
             }
-            REQ_SET_STATE => {
-                let _ = plugin.set_state(&frame.payload);
+            REQ_SET_STATE | REQ_LOAD_PRESET => {
+                if frame.kind == REQ_SET_STATE {
+                    let _ = plugin.set_state(&frame.payload);
+                } else if let Some(index) = frame.read_preset_index() {
+                    let _ = plugin.load_factory_preset(index as usize);
+                }
+                // Every knob may stand somewhere else now, and the delay
+                // may differ: the host shows and compensates what is true.
+                if !send(out, params_frame(plugin.as_ref())) || !tell(plugin.as_ref(), &mut told) {
+                    break;
+                }
             }
             REQ_GET_STATE => {
                 // Values set since the last block go in first, or a
                 // plug-in asked while the song is stopped answers with
                 // the settings from before them.
+                if !active {
+                    active = plugin.activate(sample_rate, IDLE_BLOCK).is_ok();
+                }
                 plugin.flush_parameters();
                 if !send(out, Frame::new(RES_STATE, plugin.get_state())) {
                     break;
                 }
             }
             REQ_PARAMS => {
-                let list: Vec<_> = (0..plugin.get_parameter_count())
-                    .filter_map(|index| plugin.get_parameter_info(index))
-                    .map(|info| {
-                        let value = plugin.get_parameter_value(info.id);
-                        (info, value)
-                    })
-                    .collect();
-                if !send(out, Frame::params(&list)) {
+                if !send(out, params_frame(plugin.as_ref())) || !tell(plugin.as_ref(), &mut told) {
+                    break;
+                }
+            }
+            REQ_ASK => {
+                // Always answered, whatever was asked: the host is waiting.
+                let answer = match frame.read_ask() {
+                    Some(Ask::Text(id, value)) => Answer::Text(plugin.parameter_text(id, value)),
+                    Some(Ask::Options(id)) => Answer::Options(plugin.parameter_options(id)),
+                    Some(Ask::Presets) => Answer::Presets(plugin.factory_presets()),
+                    None => Answer::Text(None),
+                };
+                if !send(out, Frame::answer(&answer)) {
                     break;
                 }
             }
@@ -288,6 +403,7 @@ fn serve_frames<R: Read, W: Write>(
                 }
             }
             REQ_AUDIO | REQ_PROCESS => {
+                let mut keyed = false;
                 let frames = if frame.kind == REQ_PROCESS {
                     let wanted = frame
                         .payload
@@ -298,10 +414,19 @@ fn serve_frames<R: Read, W: Write>(
                     if left.len() < wanted {
                         left.resize(wanted, 0.0);
                         right.resize(wanted, 0.0);
+                        key_left.resize(wanted, 0.0);
+                        key_right.resize(wanted, 0.0);
                     }
-                    match frame.read_process(&mut left, &mut right, &mut midi, sample_rate) {
-                        Some((frames, transport)) => {
+                    match frame.read_process(
+                        &mut left,
+                        &mut right,
+                        Some((&mut key_left, &mut key_right)),
+                        &mut midi,
+                        sample_rate,
+                    ) {
+                        Some((frames, transport, with_key)) => {
                             plugin.set_transport(transport);
+                            keyed = with_key;
                             frames
                         }
                         // A block that does not add up gets silence back,
@@ -320,9 +445,23 @@ fn serve_frames<R: Read, W: Write>(
                     frames
                 };
                 if frames > 0 {
-                    let inputs: [&[f32]; 2] = [&left[..frames], &right[..frames]];
-                    plugin.process(&inputs, &mut outputs, &midi, &mut Vec::new(), frames);
+                    midi_out.clear();
+                    if keyed {
+                        // The same four channels the chain gives a keyed
+                        // plug-in in the DAW's own process.
+                        let inputs: [&[f32]; 4] = [
+                            &left[..frames],
+                            &right[..frames],
+                            &key_left[..frames],
+                            &key_right[..frames],
+                        ];
+                        plugin.process(&inputs, &mut outputs, &midi, &mut midi_out, frames);
+                    } else {
+                        let inputs: [&[f32]; 2] = [&left[..frames], &right[..frames]];
+                        plugin.process(&inputs, &mut outputs, &midi, &mut midi_out, frames);
+                    }
                 }
+                last_block = Some(std::time::Instant::now());
                 let out_l = outputs
                     .first()
                     .map(|c| &c[..frames.min(c.len())])
@@ -335,6 +474,13 @@ fn serve_frames<R: Read, W: Write>(
                 reply.kind = RES_AUDIO;
                 if !send(out, reply) {
                     break;
+                }
+                blocks_since_look += 1;
+                if blocks_since_look >= LATENCY_EVERY {
+                    blocks_since_look = 0;
+                    if !tell(plugin.as_ref(), &mut told) {
+                        break;
+                    }
                 }
             }
             _ => {}
@@ -812,7 +958,7 @@ mod tests {
             ..TransportInfo::default()
         };
         let mut payload = Vec::new();
-        Frame::write_process(&mut payload, &input, &input, &note, &transport);
+        Frame::write_process(&mut payload, &input, &input, None, &note, &transport);
         Frame::new(REQ_PROCESS, payload)
             .write(&mut to_child)
             .unwrap();
@@ -839,5 +985,172 @@ mod tests {
             .write(&mut to_child)
             .unwrap();
         assert_eq!(child.join().expect("child"), 0);
+    }
+
+    /// A plug-in that takes a knob the way VST3 and CLAP ones do: the value
+    /// waits until a block or a flush hands it over, and nothing is handed
+    /// over while the plug-in is not active. Its state is the value it has
+    /// taken. It counts how often it is activated and put down.
+    struct Waits {
+        desc: PluginDescriptor,
+        waiting: Option<f64>,
+        taken: f64,
+        active: bool,
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl HostedPlugin for Waits {
+        fn descriptor(&self) -> &PluginDescriptor {
+            &self.desc
+        }
+        fn activate(&mut self, _sr: f64, _max: u32) -> Result<(), String> {
+            assert!(!self.active, "activated twice without being put down");
+            self.active = true;
+            self.log.lock().unwrap().push("activate");
+            Ok(())
+        }
+        fn deactivate(&mut self) {
+            self.active = false;
+            self.log.lock().unwrap().push("deactivate");
+        }
+        fn process(
+            &mut self,
+            _inputs: &[&[f32]],
+            outputs: &mut [Vec<f32>],
+            _midi_in: &[MidiEvent],
+            _midi_out: &mut Vec<MidiEvent>,
+            n: usize,
+        ) {
+            self.flush_parameters();
+            for out in outputs.iter_mut() {
+                out.clear();
+                out.resize(n, self.taken as f32);
+            }
+        }
+        fn get_parameter_count(&self) -> u32 {
+            0
+        }
+        fn get_parameter_info(&self, _index: u32) -> Option<ParameterInfo> {
+            None
+        }
+        fn get_parameter_value(&self, _id: u32) -> f64 {
+            self.taken
+        }
+        fn set_parameter_value(&mut self, _id: u32, value: f64) {
+            self.waiting = Some(value);
+        }
+        fn flush_parameters(&mut self) {
+            if self.active {
+                if let Some(value) = self.waiting.take() {
+                    self.taken = value;
+                }
+            }
+        }
+        fn get_state(&self) -> Vec<u8> {
+            self.taken.to_le_bytes().to_vec()
+        }
+        fn set_state(&mut self, _s: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn latency_samples(&self) -> u32 {
+            0
+        }
+        fn open_editor(&mut self, _h: raw_window_handle::RawWindowHandle) -> bool {
+            false
+        }
+        fn close_editor(&mut self) {}
+        fn has_editor(&self) -> bool {
+            false
+        }
+    }
+
+    /// A knob the host sets on a plug-in that has never played (a track
+    /// with nothing on it yet, the song stopped) is in the state read back
+    /// right after. The plug-in was not active, took nothing, and the state
+    /// had the default: on the test machine WettBoi's Size and Decay set
+    /// from the DAW read back as their defaults.
+    #[test]
+    fn a_knob_set_before_the_plug_in_ever_played_is_in_its_state() {
+        let (from_host, to_child) = std::io::pipe().expect("pipe");
+        let (from_child, to_host) = std::io::pipe().expect("pipe");
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let plugin = Waits {
+            desc: PluginDescriptor {
+                id: "waits".into(),
+                name: "Waits".into(),
+                vendor: String::new(),
+                version: String::new(),
+                format: PluginFormat::Vst3,
+                path: "waits.vst3".into(),
+                category: PluginCategory::Effect,
+                num_inputs: 2,
+                num_outputs: 2,
+                has_midi_input: false,
+                has_editor: false,
+            },
+            waiting: None,
+            taken: 0.5,
+            active: false,
+            log: Arc::clone(&log),
+        };
+        let child =
+            std::thread::spawn(move || serve(Box::new(plugin), from_host, to_host, "Waits"));
+        let mut to_child = to_child;
+        let mut from_child = BufReader::new(from_child);
+        let mut next = |kind: u32| -> Frame {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                assert!(Instant::now() < deadline, "no frame of kind {kind}");
+                let frame = Frame::read(&mut from_child).expect("read").expect("frame");
+                if frame.kind == kind {
+                    return frame;
+                }
+            }
+        };
+        // No activation, no block: a knob, then the state.
+        Frame::set_param(1, 0.73).write(&mut to_child).unwrap();
+        Frame::new(REQ_GET_STATE, Vec::new())
+            .write(&mut to_child)
+            .unwrap();
+        assert_eq!(
+            next(RES_STATE).payload,
+            0.73f64.to_le_bytes().to_vec(),
+            "the state has the knob the host set"
+        );
+        // The host's own activation comes later and replaces the one made
+        // for the knob, put down first.
+        Frame::activate(44_100.0, 256).write(&mut to_child).unwrap();
+        next(RES_OK);
+        // While it plays, a knob rides in with the next block.
+        let mut payload = Vec::new();
+        Frame::write_process(
+            &mut payload,
+            &[0.0; 16],
+            &[0.0; 16],
+            None,
+            &[],
+            &TransportInfo::default(),
+        );
+        Frame::new(REQ_PROCESS, payload.clone())
+            .write(&mut to_child)
+            .unwrap();
+        next(RES_AUDIO);
+        Frame::set_param(1, 0.2).write(&mut to_child).unwrap();
+        Frame::new(REQ_PROCESS, payload)
+            .write(&mut to_child)
+            .unwrap();
+        let audio = next(RES_AUDIO);
+        let (mut l, mut r) = (vec![0.0f32; 16], vec![0.0f32; 16]);
+        audio.read_audio(&mut l, &mut r);
+        assert_eq!(l[0], 0.2, "automation reaches the audio in the next block");
+        Frame::new(REQ_SHUTDOWN, Vec::new())
+            .write(&mut to_child)
+            .unwrap();
+        assert_eq!(child.join().expect("child"), 0);
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["activate", "deactivate", "activate"],
+            "activated for the knob, then put down and activated by the host"
+        );
     }
 }

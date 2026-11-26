@@ -143,7 +143,7 @@ export function startPerfMeters(): () => void {
             restarts.set(row.pluginId, [...recent, now])
             invoke<number>('restart_sandboxed_plugin', { pluginId: row.pluginId })
               .then(() => notify('warning', `${row.pluginId} stopped and was started again`, {
-                detail: `${row.message}. The song kept playing; the plug-in is back with the settings it had at the last save.`,
+                detail: `${row.message}. The song kept playing; the plug-in is back with the settings it had.`,
               }))
               .catch((e) => notify('warning', `${row.pluginId} stopped`, {
                 detail: `${row.message}. Starting it again did not work (${String(e)}); remove and add it to bring it back.`,

@@ -241,15 +241,25 @@ changed.
 
 ## 14. A plug-in in its own process
 
-Right-click a plug-in in the mixer and switch "Own process" on, and it
-is loaded into a process of its own the next time it starts. A crash
-in it then takes that process, not the DAW: the slot goes quiet, the
-song keeps playing, and a message says which plug-in stopped.
+Plug-ins from other makers (VST3 and CLAP) run in a process of their
+own. A crash in one of them takes that process, not the DAW: the song
+keeps playing, nothing unsaved is lost, a message says which plug-in
+stopped, and it is started again with the settings it had. If it
+stops three times in a minute it is left off, and the message says so.
 
-It costs one buffer of latency, reported so delay compensation lines
-the track up with the rest, and a sandboxed plug-in uses the generic
-parameter sheet rather than its own window. Leave it off for plug-ins
-that behave, switch it on for the one that keeps falling over.
+It costs one buffer of latency for each such plug-in, reported so
+delay compensation lines the track up with the rest. You notice it
+only when you play an instrument live or monitor through the plug-in.
+Its window opens on its own, beside the DAW rather than inside it.
+Exports, bounces and freezes wait for the plug-in instead, so they add
+no delay.
+
+Hardwave's own plug-ins and the built-in ones run inside the DAW, with
+no added latency. To run another maker's plug-in inside the DAW too,
+right-click it in the mixer and switch "Own process" off; it takes
+effect the next time the plug-in loads. A crash in it then closes the
+DAW, as it did before version 0.266.51. The same switch moves one of
+Hardwave's plug-ins into a process of its own.
 
 ## 15. A phone as a remote (OSC)
 

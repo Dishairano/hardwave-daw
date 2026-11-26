@@ -505,13 +505,22 @@ mod take_name_tests {
             .collect();
         assert_eq!(shape, "9999-99-99 99-99-99", "got {first}");
 
-        std::fs::write(dir.path().join(&first), b"x").unwrap();
-        let second = next_take_name(dir.path());
-        assert_ne!(
-            second, first,
-            "a second take in the same second must differ"
-        );
-        assert!(second.contains("(2)"), "got {second}");
+        // A second take in the same second gets "(2)". The clock may tick
+        // over between the two names (it did once in the release checks,
+        // and stopped a release): then the next pair is looked at.
+        let mut earlier = first;
+        for _ in 0..5 {
+            std::fs::write(dir.path().join(&earlier), b"x").unwrap();
+            let next = next_take_name(dir.path());
+            assert_ne!(next, earlier, "a second take must not overwrite");
+            let same_second = next.starts_with(earlier.trim_end_matches(".wav"));
+            if same_second {
+                assert!(next.contains("(2)"), "got {next} after {earlier}");
+                return;
+            }
+            earlier = next;
+        }
+        panic!("the clock ticked over five times in a row");
     }
 }
 
