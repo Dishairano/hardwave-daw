@@ -258,7 +258,7 @@ Hardwave's own plug-ins and the built-in ones run inside the DAW, with
 no added latency. To run another maker's plug-in inside the DAW too,
 right-click it in the mixer and switch "Own process" off; it takes
 effect the next time the plug-in loads. A crash in it then closes the
-DAW, as it did before version 0.266.50. The same switch moves one of
+DAW, as it did before version 0.266.51. The same switch moves one of
 Hardwave's plug-ins into a process of its own.
 
 ## 15. A phone as a remote (OSC)

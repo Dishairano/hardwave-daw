@@ -42,7 +42,7 @@ pub struct AudioPrefs {
     #[serde(default)]
     pub link_enabled: bool,
     /// Plug-ins to run in a process of their own, by id, whoever made
-    /// them. Third-party plug-ins do so anyway since 0.266.50; this list
+    /// them. Third-party plug-ins do so anyway since 0.266.51; this list
     /// is what an older settings file holds, and where one of Hardwave's
     /// own goes when the producer moves it out.
     #[serde(default)]
@@ -52,7 +52,7 @@ pub struct AudioPrefs {
     #[serde(default)]
     pub in_process_plugins: Vec<String>,
     /// Run every third-party plug-in inside the DAW unless it is listed
-    /// in `sandboxed_plugins`, as before 0.266.50. No switch on screen.
+    /// in `sandboxed_plugins`, as before 0.266.51. No switch on screen.
     #[serde(default)]
     pub third_party_plugins_in_process: bool,
     /// Listen for OSC, so a phone running TouchOSC can drive the DAW.

@@ -266,7 +266,7 @@ pub struct Choices {
     /// producer's choice per plug-in, for one that needs no delay at all.
     pub never: std::collections::HashSet<String>,
     /// Third-party plug-ins run inside the DAW unless listed in `always`
-    /// (the behaviour before version 0.266.50). No switch on screen: a
+    /// (the behaviour before version 0.266.51). No switch on screen: a
     /// line in the settings file, for support.
     pub third_party_inside: bool,
 }
@@ -2411,17 +2411,22 @@ while True:
     }
 
     /// The real thing, end to end: a real CLAP plug-in that writes through
-    /// a null pointer on request, loaded by the real helper process. Not
-    /// run by default: it needs the helper built (`hardwave-plugin-bridge`)
-    /// and the crash-test plug-in, named in HW_TEST_BRIDGE and
-    /// HW_TEST_CRASH_CLAP. Its knobs: 1 crashes, 2 hangs, 3 is a gain
+    /// a null pointer on request, loaded by the real helper process. It
+    /// needs the helper built (`hardwave-plugin-bridge`) and the crash-test
+    /// plug-in, named in HW_TEST_BRIDGE and HW_TEST_CRASH_CLAP; where they
+    /// are not given (the release checks, which also run ignored tests)
+    /// it says so and passes. Its knobs: 1 crashes, 2 hangs, 3 is a gain
     /// (output = input * gain * 2) kept in its state.
     #[cfg(unix)]
     #[test]
-    #[ignore = "needs HW_TEST_BRIDGE and HW_TEST_CRASH_CLAP"]
     fn a_real_plug_in_that_crashes_or_hangs_is_survived_and_comes_back_as_it_was() {
-        let bridge = std::env::var("HW_TEST_BRIDGE").expect("HW_TEST_BRIDGE");
-        let clap = std::env::var("HW_TEST_CRASH_CLAP").expect("HW_TEST_CRASH_CLAP");
+        let (Ok(bridge), Ok(clap)) = (
+            std::env::var("HW_TEST_BRIDGE"),
+            std::env::var("HW_TEST_CRASH_CLAP"),
+        ) else {
+            eprintln!("skipped: HW_TEST_BRIDGE and HW_TEST_CRASH_CLAP are not set");
+            return;
+        };
         let dir = std::env::temp_dir().join(format!("hw-sandbox-real-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // The helper takes the plug-in's path and id; the switch the DAW's
@@ -2589,7 +2594,7 @@ while True:
 
     #[test]
     fn the_old_behaviour_can_be_asked_for_and_keeps_the_old_list() {
-        // What a settings file from before 0.266.50 held: a list of
+        // What a settings file from before 0.266.51 held: a list of
         // plug-ins to run in their own process.
         let mut choices = Choices {
             always: ["crashy.fx".to_string()].into_iter().collect(),
