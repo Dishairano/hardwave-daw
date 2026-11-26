@@ -174,6 +174,7 @@ permissions = [
   "allow-get-osc-status",
   "allow-set-osc-enabled",
   "allow-get-sandboxed-plugins",
+  "allow-get-plugin-home",
   "allow-take-sandbox-crashes",
   "allow-get-sandbox-stats",
   "allow-restart-sandboxed-plugin",

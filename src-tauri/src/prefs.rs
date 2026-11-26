@@ -41,13 +41,20 @@ pub struct AudioPrefs {
     /// Join an Ableton Link session at startup.
     #[serde(default)]
     pub link_enabled: bool,
-    /// Plug-ins to run in a process of their own, by id.
-    ///
-    /// Sandboxing costs a block of latency, so it is a choice per
-    /// plug-in rather than something done to all of them: switch it on
-    /// for the one that keeps falling over.
+    /// Plug-ins to run in a process of their own, by id, whoever made
+    /// them. Third-party plug-ins do so anyway since 0.266.49; this list
+    /// is what an older settings file holds, and where one of Hardwave's
+    /// own goes when the producer moves it out.
     #[serde(default)]
     pub sandboxed_plugins: Vec<String>,
+    /// Third-party plug-ins the producer chose to run inside the DAW, by
+    /// id: no added delay, and a crash in one of them closes the DAW.
+    #[serde(default)]
+    pub in_process_plugins: Vec<String>,
+    /// Run every third-party plug-in inside the DAW unless it is listed
+    /// in `sandboxed_plugins`, as before 0.266.49. No switch on screen.
+    #[serde(default)]
+    pub third_party_plugins_in_process: bool,
     /// Listen for OSC, so a phone running TouchOSC can drive the DAW.
     #[serde(default)]
     pub osc_enabled: bool,
@@ -155,6 +162,8 @@ impl AudioPrefs {
             worker_threads: 0,
             link_enabled: false,
             sandboxed_plugins: Vec::new(),
+            in_process_plugins: Vec::new(),
+            third_party_plugins_in_process: false,
             osc_enabled: false,
             osc_port: 0,
             trusted_sample_servers: Vec::new(),

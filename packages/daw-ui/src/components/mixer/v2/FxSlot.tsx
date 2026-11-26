@@ -127,14 +127,20 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
     if (rect) onOpenPicker(slotIndex, rect)
   }, [insert, onOpenPicker, slotIndex])
 
-  // Whether this plug-in is set to run in a process of its own. Read
-  // per slot rather than held globally: the list is short and the menu
-  // is the only place it is shown.
+  // Whether this plug-in runs in a process of its own: third-party
+  // plug-ins do unless switched off here, Hardwave's own and the built-in
+  // ones do not. Read per slot when the menu opens, the only place it is
+  // shown. `sandboxFixed`: built in, or built for another kind of
+  // processor, so there is nothing to choose.
   const [sandboxed, setSandboxed] = useState(false)
+  const [sandboxFixed, setSandboxFixed] = useState(false)
   useEffect(() => {
     if (!menuOpen || !insert) return
-    invoke<string[]>('get_sandboxed_plugins')
-      .then(list => setSandboxed(list.includes(insert.pluginId)))
+    invoke<{ ownProcess: boolean; fixed: boolean }>('get_plugin_home', { pluginId: insert.pluginId })
+      .then(home => {
+        setSandboxed(home.ownProcess)
+        setSandboxFixed(home.fixed)
+      })
       .catch(() => { /* older build or no engine */ })
   }, [menuOpen, insert])
 
@@ -153,7 +159,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
             {
               detail: next
                 ? t('A crash in it cannot take the song with it. It costs one buffer of latency, and its window opens on its own, beside the DAW rather than inside it. Takes effect the next time it loads.')
-                : t('Takes effect the next time it loads.'),
+                : t('It adds no latency there, but a crash in it closes the DAW. Takes effect the next time it loads.'),
             })
         })
       })
@@ -302,7 +308,7 @@ export const FxSlot = memo(function FxSlot(props: FxSlotProps) {
           <button
             role="menuitem"
             onClick={onToggleSandbox}
-            disabled={!insert}
+            disabled={!insert || sandboxFixed}
             title={sandboxed
               ? t('It runs in a process of its own: a crash cannot take the song with it, at the cost of one buffer of latency.')
               : t('Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and its window opens on its own, beside the DAW.')}

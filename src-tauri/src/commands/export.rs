@@ -29,7 +29,7 @@ pub(crate) fn offline_insert_factory(
     move |plugin_id: &str| {
         descriptors
             .get(plugin_id)
-            .and_then(|d| super::plugins::load_hosted(d).ok())
+            .and_then(|d| super::plugins::load_hosted_offline(d).ok())
     }
 }
 
@@ -254,6 +254,8 @@ where
     {
         return Ok(None);
     }
+    // Crashes from an earlier render are not this one's.
+    let _ = crate::plugin_sandbox::take_offline_crashes();
     let factory = offline_insert_factory(&engine);
     let render = engine.prepare_offline_span(
         fmt.sample_rate,
@@ -278,6 +280,17 @@ where
         &mut meter,
         on_progress,
     )?;
+    // A plug-in whose process went during the render played silence from
+    // there on. The file would look fine and have a hole in it, so it is
+    // not kept, and the person is told which plug-in it was.
+    let stopped = crate::plugin_sandbox::take_offline_crashes();
+    if completed && !stopped.is_empty() {
+        let _ = std::fs::remove_file(out_path);
+        return Err(format!(
+            "{} stopped while this was rendered, so the file would have a gap where it played. Nothing was kept. Start the plug-in again (or remove it) and render once more.",
+            stopped.join(", ")
+        ));
+    }
     Ok(completed.then(|| meter.finish()))
 }
 

@@ -30,6 +30,12 @@ pub const REQ_PARAMS: u32 = 8;
 /// Show the plug-in's own window, or put it away.
 pub const REQ_OPEN_EDITOR: u32 = 9;
 pub const REQ_CLOSE_EDITOR: u32 = 10;
+/// A question about the plug-in that is answered at once with
+/// `RES_ANSWER`: how a value reads, a parameter's choices, its presets.
+/// Never sent from the audio thread.
+pub const REQ_ASK: u32 = 11;
+/// Play one of the plug-in's own presets, by its place in the list.
+pub const REQ_LOAD_PRESET: u32 = 12;
 
 /// Frames the child sends back.
 pub const RES_AUDIO: u32 = 101;
@@ -44,6 +50,40 @@ pub const RES_PARAM_MOVES: u32 = 106;
 /// The plug-in's window opened (payload 1) or closed (payload 0), which
 /// it can do by itself when the person closes it.
 pub const RES_EDITOR: u32 = 107;
+/// What the host needs to know about the plug-in beyond its parameters:
+/// the delay it adds, and the id a `.vstpreset` names it by. Sent when
+/// the plug-in has loaded and again whenever its delay changes.
+pub const RES_INFO: u32 = 108;
+/// The answer to a `REQ_ASK`.
+pub const RES_ANSWER: u32 = 109;
+
+/// What a plug-in in its own process says about itself (`RES_INFO`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChildInfo {
+    /// The delay the plug-in itself adds, in samples.
+    pub latency: u32,
+    /// A VST3 plug-in's class id.
+    pub class_id: Option<[u8; 16]>,
+}
+
+/// A question for the plug-in's process (`REQ_ASK`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Ask {
+    /// How this value of this parameter reads ("1.2 kHz").
+    Text(u32, f64),
+    /// The choices of a parameter that picks one of a few.
+    Options(u32),
+    /// The presets that ship inside the plug-in.
+    Presets,
+}
+
+/// The answer to an [`Ask`] (`RES_ANSWER`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum Answer {
+    Text(Option<String>),
+    Options(Option<Vec<String>>),
+    Presets(Vec<String>),
+}
 
 /// The most notes and controller moves one block carries. More in one
 /// block than this is not playing, it is a stuck stream.
@@ -236,10 +276,15 @@ impl Frame {
     /// A block for the plug-in: its audio, the MIDI that falls in it, and
     /// the transport at its start. Written into `payload`, which is reused
     /// block after block so a steady stream allocates nothing.
+    ///
+    /// A sidechain, when the slot has one routed, follows the main audio
+    /// as a second stereo pair of the same length. Without it a compressor
+    /// keyed from the kick heard no key once it ran in its own process.
     pub fn write_process(
         payload: &mut Vec<u8>,
         left: &[f32],
         right: &[f32],
+        sidechain: Option<(&[f32], &[f32])>,
         midi: &[MidiEvent],
         transport: &TransportInfo,
     ) {
@@ -261,19 +306,29 @@ impl Frame {
             payload.extend_from_slice(&left[i].to_le_bytes());
             payload.extend_from_slice(&right[i].to_le_bytes());
         }
+        if let Some((key_left, key_right)) = sidechain {
+            for i in 0..frames {
+                let l = key_left.get(i).copied().unwrap_or(0.0);
+                let r = key_right.get(i).copied().unwrap_or(l);
+                payload.extend_from_slice(&l.to_le_bytes());
+                payload.extend_from_slice(&r.to_le_bytes());
+            }
+        }
     }
 
     /// Read a process frame into buffers the right size and a MIDI list
-    /// with room. Returns the frames written and the transport, or None
-    /// for a frame that does not add up. The sample rate is the one the
-    /// plug-in was activated at, so it is not carried.
+    /// with room. Returns the frames written, the transport and whether a
+    /// sidechain came with it (read into `sidechain`, when there is room),
+    /// or None for a frame that does not add up. The sample rate is the
+    /// one the plug-in was activated at, so it is not carried.
     pub fn read_process(
         &self,
         left: &mut [f32],
         right: &mut [f32],
+        sidechain: Option<(&mut [f32], &mut [f32])>,
         midi: &mut Vec<MidiEvent>,
         sample_rate: f64,
-    ) -> Option<(usize, TransportInfo)> {
+    ) -> Option<(usize, TransportInfo, bool)> {
         let b = &self.payload;
         let frames = le_u32(b, 0)? as usize;
         let events = le_u32(b, 4)? as usize;
@@ -289,7 +344,10 @@ impl Frame {
             position_samples: le_u64(b, 36)?,
         };
         let audio_at = PROCESS_HEADER + events * EVENT_BYTES;
-        if b.len() != audio_at + frames * 8 || frames > left.len() || frames > right.len() {
+        let plain = audio_at.checked_add(frames.checked_mul(8)?)?;
+        let keyed = audio_at.checked_add(frames.checked_mul(16)?)?;
+        let has_key = frames > 0 && b.len() == keyed;
+        if (b.len() != plain && !has_key) || frames > left.len() || frames > right.len() {
             return None;
         }
         midi.clear();
@@ -304,7 +362,55 @@ impl Frame {
             left[i] = f32::from_le_bytes(b[at..at + 4].try_into().ok()?);
             right[i] = f32::from_le_bytes(b[at + 4..at + 8].try_into().ok()?);
         }
-        Some((frames, transport))
+        let mut key_read = false;
+        if has_key {
+            if let Some((key_left, key_right)) = sidechain {
+                if frames <= key_left.len() && frames <= key_right.len() {
+                    for i in 0..frames {
+                        let at = plain + i * 8;
+                        key_left[i] = f32::from_le_bytes(b[at..at + 4].try_into().ok()?);
+                        key_right[i] = f32::from_le_bytes(b[at + 4..at + 8].try_into().ok()?);
+                    }
+                    key_read = true;
+                }
+            }
+        }
+        Some((frames, transport, key_read))
+    }
+
+    /// What the plug-in says about itself.
+    pub fn info(info: &ChildInfo) -> Self {
+        Self::new(RES_INFO, serde_json::to_vec(info).unwrap_or_default())
+    }
+
+    pub fn read_info(&self) -> Option<ChildInfo> {
+        serde_json::from_slice(&self.payload).ok()
+    }
+
+    /// A question for the plug-in's process.
+    pub fn ask(ask: &Ask) -> Self {
+        Self::new(REQ_ASK, serde_json::to_vec(ask).unwrap_or_default())
+    }
+
+    pub fn read_ask(&self) -> Option<Ask> {
+        serde_json::from_slice(&self.payload).ok()
+    }
+
+    pub fn answer(answer: &Answer) -> Self {
+        Self::new(RES_ANSWER, serde_json::to_vec(answer).unwrap_or_default())
+    }
+
+    pub fn read_answer(&self) -> Option<Answer> {
+        serde_json::from_slice(&self.payload).ok()
+    }
+
+    /// Play the preset at this place in the plug-in's own list.
+    pub fn load_preset(index: u32) -> Self {
+        Self::new(REQ_LOAD_PRESET, index.to_le_bytes().to_vec())
+    }
+
+    pub fn read_preset_index(&self) -> Option<u32> {
+        le_u32(&self.payload, 0)
     }
 
     /// The parameter list, each with where it stands now.
@@ -559,13 +665,14 @@ mod tests {
             position_samples: 123_456_789,
         };
         let mut payload = Vec::new();
-        Frame::write_process(&mut payload, &left, &right, &midi, &transport);
+        Frame::write_process(&mut payload, &left, &right, None, &midi, &transport);
         let frame = Frame::new(REQ_PROCESS, payload);
         let (mut l, mut r, mut events) = (vec![0.0; 64], vec![0.0; 64], Vec::with_capacity(8));
-        let (frames, back) = frame
-            .read_process(&mut l, &mut r, &mut events, 44_100.0)
+        let (frames, back, keyed) = frame
+            .read_process(&mut l, &mut r, None, &mut events, 44_100.0)
             .expect("reads");
         assert_eq!(frames, 64);
+        assert!(!keyed, "no sidechain was sent");
         assert_eq!((l, r), (left, right));
         assert_eq!(back, transport);
         assert_eq!(format!("{events:?}"), format!("{midi:?}"));
@@ -578,6 +685,7 @@ mod tests {
             &mut payload,
             &[0.0; 16],
             &[0.0; 16],
+            None,
             &[],
             &TransportInfo::default(),
         );
@@ -585,7 +693,7 @@ mod tests {
         let frame = Frame::new(REQ_PROCESS, payload);
         let (mut l, mut r, mut events) = (vec![0.0; 16], vec![0.0; 16], Vec::new());
         assert!(frame
-            .read_process(&mut l, &mut r, &mut events, 48_000.0)
+            .read_process(&mut l, &mut r, None, &mut events, 48_000.0)
             .is_none());
         // Nor a block bigger than the buffers it is read into.
         let mut payload = Vec::new();
@@ -593,13 +701,77 @@ mod tests {
             &mut payload,
             &[0.0; 32],
             &[0.0; 32],
+            None,
             &[],
             &TransportInfo::default(),
         );
         let frame = Frame::new(REQ_PROCESS, payload);
         assert!(frame
-            .read_process(&mut l, &mut r, &mut events, 48_000.0)
+            .read_process(&mut l, &mut r, None, &mut events, 48_000.0)
             .is_none());
+    }
+
+    #[test]
+    fn a_block_carries_its_sidechain_beside_the_main_audio() {
+        let left: Vec<f32> = (0..32).map(|n| n as f32).collect();
+        let right: Vec<f32> = left.iter().map(|s| -s).collect();
+        let key_left: Vec<f32> = (0..32).map(|n| 100.0 + n as f32).collect();
+        let key_right: Vec<f32> = key_left.iter().map(|s| -s).collect();
+        let mut payload = Vec::new();
+        Frame::write_process(
+            &mut payload,
+            &left,
+            &right,
+            Some((&key_left, &key_right)),
+            &[],
+            &TransportInfo::default(),
+        );
+        let frame = Frame::new(REQ_PROCESS, payload);
+        let (mut l, mut r) = (vec![0.0; 32], vec![0.0; 32]);
+        let (mut kl, mut kr) = (vec![0.0; 32], vec![0.0; 32]);
+        let mut events = Vec::new();
+        let (frames, _, keyed) = frame
+            .read_process(
+                &mut l,
+                &mut r,
+                Some((&mut kl, &mut kr)),
+                &mut events,
+                48_000.0,
+            )
+            .expect("reads");
+        assert_eq!(frames, 32);
+        assert!(keyed, "the sidechain came with it");
+        assert_eq!((l, r), (left.clone(), right.clone()));
+        assert_eq!((kl, kr), (key_left, key_right));
+        // A reader with no room for a sidechain still gets the main audio.
+        let (mut l, mut r) = (vec![0.0; 32], vec![0.0; 32]);
+        let (frames, _, keyed) = frame
+            .read_process(&mut l, &mut r, None, &mut events, 48_000.0)
+            .expect("reads");
+        assert_eq!((frames, keyed), (32, false));
+        assert_eq!((l, r), (left, right));
+    }
+
+    #[test]
+    fn what_the_plug_in_says_about_itself_and_its_answers_survive_the_round_trip() {
+        let info = ChildInfo {
+            latency: 512,
+            class_id: Some([7; 16]),
+        };
+        assert_eq!(Frame::info(&info).read_info(), Some(info));
+        for ask in [Ask::Text(3, 0.25), Ask::Options(9), Ask::Presets] {
+            assert_eq!(Frame::ask(&ask).read_ask(), Some(ask));
+        }
+        for answer in [
+            Answer::Text(Some("1.2 kHz".into())),
+            Answer::Options(None),
+            Answer::Presets(vec!["Init".into(), "Screech".into()]),
+        ] {
+            assert_eq!(Frame::answer(&answer).read_answer(), Some(answer));
+        }
+        assert_eq!(Frame::load_preset(41).read_preset_index(), Some(41));
+        // Bytes that are not an answer are no answer, not a panic.
+        assert_eq!(Frame::new(RES_ANSWER, vec![1, 2, 3]).read_answer(), None);
     }
 
     #[test]

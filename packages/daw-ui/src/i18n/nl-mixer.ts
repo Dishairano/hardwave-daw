@@ -69,6 +69,7 @@ export const nlMixer: Record<string, string> = {
   '{name} will run inside the DAW again': '{name} draait weer binnen de DAW',
   'A crash in it cannot take the song with it. It costs one buffer of latency, and its window opens on its own, beside the DAW rather than inside it. Takes effect the next time it loads.': 'Als de plug-in crasht, neemt hij de song niet mee. Het kost één buffer latency, en het venster opent los, naast de DAW in plaats van erin. Werkt vanaf de volgende keer dat de plug-in laadt.',
   'Takes effect the next time it loads.': 'Werkt vanaf de volgende keer dat de plug-in laadt.',
+  'It adds no latency there, but a crash in it closes the DAW. Takes effect the next time it loads.': 'Daar kost hij geen latency, maar als hij crasht sluit de DAW. Werkt vanaf de volgende keer dat de plug-in laadt.',
   'Could not remove {name}: {error}': 'Kon {name} niet verwijderen: {error}',
 
   // ---- Mixer: routing

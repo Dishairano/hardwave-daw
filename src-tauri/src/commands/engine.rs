@@ -30,10 +30,28 @@ fn persist_audio_prefs(state: &State<AppState>) {
         osc_enabled: state.osc_enabled.load(std::sync::atomic::Ordering::Relaxed),
         osc_port: *state.osc_port.lock(),
         sandboxed_plugins: {
-            let mut list: Vec<String> = state.sandboxed_plugins.lock().iter().cloned().collect();
+            let mut list: Vec<String> = state
+                .sandboxed_plugins
+                .lock()
+                .always
+                .iter()
+                .cloned()
+                .collect();
             list.sort();
             list
         },
+        in_process_plugins: {
+            let mut list: Vec<String> = state
+                .sandboxed_plugins
+                .lock()
+                .never
+                .iter()
+                .cloned()
+                .collect();
+            list.sort();
+            list
+        },
+        third_party_plugins_in_process: state.sandboxed_plugins.lock().third_party_inside,
         trusted_sample_servers: engine.trusted_servers(),
         audio_host: Some(engine.audio_host_name()),
         release_device_in_background: crate::audio_focus::enabled(),
