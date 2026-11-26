@@ -1914,6 +1914,17 @@ mod flush_tests {
     // What the fake plug-in has taken in, as f64 bits.
     static TAKEN: AtomicU64 = AtomicU64::new(0);
 
+    /// The stand-in plug-in keeps what it took in statics, so these tests
+    /// run one at a time: run together, one read the value another had
+    /// just set, and the release checks failed now and then.
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     unsafe extern "C" fn count(_: *const ClapPlugin) -> u32 {
         1
     }
@@ -2121,6 +2132,7 @@ mod flush_tests {
     /// saved state have it at once instead of after play starts.
     #[test]
     fn a_value_set_between_blocks_reaches_the_plug_in_on_flush() {
+        let _one = one_at_a_time();
         TAKEN.store(0.333f64.to_bits(), Ordering::SeqCst);
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
@@ -2140,6 +2152,7 @@ mod flush_tests {
     /// thrown away with the drained queue. Now they wait for the next block.
     #[test]
     fn changes_past_a_full_event_list_arrive_in_the_next_block() {
+        let _one = one_at_a_time();
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
         let window = Arc::clone(&instance.pending_params);
@@ -2171,6 +2184,7 @@ mod flush_tests {
     /// reported change to the app.
     #[test]
     fn a_flush_asked_for_while_active_is_done_on_the_audio_thread() {
+        let _one = one_at_a_time();
         let flushes = Box::new(std::sync::atomic::AtomicUsize::new(0));
         let mut plugin = fake_plugin();
         plugin.plugin_data = &*flushes as *const _ as *mut c_void;
@@ -2195,6 +2209,7 @@ mod flush_tests {
     /// change goes to the queue the playing copy takes, and to the app.
     #[test]
     fn a_flush_asked_for_while_inactive_is_done_at_once() {
+        let _one = one_at_a_time();
         let flushes = Box::new(std::sync::atomic::AtomicUsize::new(0));
         let mut plugin = fake_plugin();
         plugin.plugin_data = &*flushes as *const _ as *mut c_void;
@@ -2218,6 +2233,7 @@ mod flush_tests {
     /// list was a no-op), except read-only parameters.
     #[test]
     fn changes_a_plug_in_reports_while_playing_reach_the_app() {
+        let _one = one_at_a_time();
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
         let input = vec![0.25f32; 16];
@@ -2236,6 +2252,7 @@ mod flush_tests {
     /// about: a short input, or none at all, is filled out with silence.
     #[test]
     fn every_input_the_plug_in_reads_is_the_block_s_length() {
+        let _one = one_at_a_time();
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
         let short = vec![0.5f32; 8];
@@ -2258,6 +2275,7 @@ mod flush_tests {
     /// dropped instead of being handed over after it.
     #[test]
     fn a_state_load_drops_the_changes_made_before_it() {
+        let _one = one_at_a_time();
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
         instance.pending_params.push(3, 0.9);
@@ -2277,6 +2295,7 @@ mod flush_tests {
     /// automation write would record it as one.
     #[test]
     fn an_echo_of_what_the_host_sent_is_not_recorded() {
+        let _one = one_at_a_time();
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
         let input = vec![0.25f32; 16];
@@ -2296,6 +2315,7 @@ mod flush_tests {
     /// plug-in be called (smart disable asks this).
     #[test]
     fn a_waiting_change_is_reported_to_smart_disable() {
+        let _one = one_at_a_time();
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
         assert!(!instance.has_pending_changes());
@@ -2314,6 +2334,7 @@ mod flush_tests {
     /// CLAP_PARAM_IS_STEPPED.
     #[test]
     fn a_clap_parameter_is_automatable_by_its_own_flag() {
+        let _one = one_at_a_time();
         let plugin = fake_plugin();
         let mut instance = fake_instance(&plugin);
         let read = |instance: &mut ClapPluginInstance, flags: u32| {
