@@ -117,6 +117,15 @@ fn note_offline_crash(name: &str) {
     }
 }
 
+/// The longest the audio thread waits for a plug-in's process to hand a
+/// block back: a quarter of a buffer's time, between a fifth of a
+/// millisecond and two. A healthy process answers in well under that; one
+/// that does not is not waited for again until it has caught up.
+fn wait_budget(sample_rate: f64, block: u32) -> std::time::Duration {
+    let period = f64::from(block.max(1)) / sample_rate.max(1.0);
+    std::time::Duration::from_secs_f64((period / 4.0).clamp(0.0002, 0.002))
+}
+
 /// How a plug-in in its own process is driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pace {
@@ -152,6 +161,8 @@ pub fn sandbox_stats() -> Vec<SandboxStats> {
                 no_outputs: n(&s.no_outputs),
                 late: n(&s.late),
                 missed: n(&s.missed),
+                waited: n(&s.waited),
+                waited_in_vain: n(&s.waited_in_vain),
                 plugin_latency: entry.shared.plugin_latency.load(Ordering::Relaxed),
                 pid: entry.pid,
             }
@@ -255,7 +266,7 @@ pub struct Choices {
     /// producer's choice per plug-in, for one that needs no delay at all.
     pub never: std::collections::HashSet<String>,
     /// Third-party plug-ins run inside the DAW unless listed in `always`
-    /// (the behaviour before version 0.266.49). No switch on screen: a
+    /// (the behaviour before version 0.266.50). No switch on screen: a
     /// line in the settings file, for support.
     pub third_party_inside: bool,
 }
@@ -504,6 +515,11 @@ struct BlockStats {
     /// Calls that played a gap because the plug-in's audio for that moment
     /// had not come back (or was never sent).
     missed: AtomicU64,
+    /// Calls that waited a moment for the plug-in's process, because the
+    /// sound card asked for two buffers straight after each other.
+    waited: AtomicU64,
+    /// Of those, the ones that waited in vain.
+    waited_in_vain: AtomicU64,
 }
 
 /// One plug-in in its own process, as `sandbox_stats` reports it.
@@ -521,6 +537,8 @@ pub struct SandboxStats {
     pub no_outputs: u64,
     pub late: u64,
     pub missed: u64,
+    pub waited: u64,
+    pub waited_in_vain: u64,
     /// The delay the plug-in itself reports, in samples.
     pub plugin_latency: u32,
     pub pid: u32,
@@ -556,6 +574,15 @@ pub struct SandboxedPlugin {
     /// buffer of the size it was activated with. Fixed, so compensation
     /// holds: late audio is left out rather than played late.
     delay: u32,
+    /// Where the audio handed to the child so far ends, and where what
+    /// has come back so far ends, on the same clock.
+    sent_end: u64,
+    received_end: u64,
+    /// The child did not answer within the wait: no more waiting for it
+    /// until it has caught up by itself.
+    behind: bool,
+    /// The longest the audio thread waits for the child (`wait_budget`).
+    wait_budget: std::time::Duration,
     pace: Pace,
     transport: TransportInfo,
     crashed: Arc<AtomicBool>,
@@ -686,6 +713,10 @@ impl SandboxedPlugin {
             pending: VecDeque::with_capacity(POOL_BLOCKS + 2),
             clock: 0,
             delay: 0,
+            sent_end: 0,
+            received_end: 0,
+            behind: false,
+            wait_budget: wait_budget(48_000.0, 512),
             pace,
             transport: TransportInfo::default(),
             crashed,
@@ -801,6 +832,13 @@ impl hardwave_plugin_host::types::PluginEditor for SandboxEditor {
 }
 
 impl SandboxedPlugin {
+    /// A block came back from the child: kept until its moment.
+    fn take_back(&mut self, block: Block) {
+        let end = block.start + block.left.len().min(block.right.len()) as u64;
+        self.received_end = self.received_end.max(end);
+        self.pending.push_back(block);
+    }
+
     /// The child has gone: remember why, and say so if this was a render.
     fn mark_crashed(&mut self, message: Option<String>) {
         self.crashed.store(true, Ordering::Relaxed);
@@ -822,10 +860,27 @@ impl SandboxedPlugin {
     /// block push everything after it a buffer further behind, for good,
     /// with nothing compensating for it; and a call shorter than the last
     /// (a loop point, a driver that varies its block) cut blocks short.
-    fn play_back(&mut self, outputs: &mut [Vec<f32>], num_samples: usize, start: u64) {
+    ///
+    /// `sent_before`: where the audio handed over before this call ends.
+    /// When the audio this call plays has been handed over but is not back
+    /// yet, the call waits a moment for it. That happens when the sound
+    /// card asks for two buffers straight after each other (a device whose
+    /// own buffer is not the DAW's): the first went out microseconds ago,
+    /// and the process answers in a fraction of a millisecond. Without the
+    /// wait every such pair left a gap of one buffer in the plug-in's
+    /// sound. The wait is short and has an end (`wait_budget`), and a
+    /// process that does not answer in it is not waited for again until it
+    /// has caught up: a slow or dead plug-in never holds the audio up.
+    fn play_back(
+        &mut self,
+        outputs: &mut [Vec<f32>],
+        num_samples: usize,
+        start: u64,
+        sent_before: u64,
+    ) {
         loop {
             match self.from_child.try_recv() {
-                Ok(FromChild::Block(block)) => self.pending.push_back(block),
+                Ok(FromChild::Block(block)) => self.take_back(block),
                 Ok(FromChild::Crashed(message)) => {
                     self.mark_crashed(Some(message));
                     return;
@@ -839,6 +894,36 @@ impl SandboxedPlugin {
         }
         let want_start = start as i64 - i64::from(self.delay);
         let want_end = want_start + num_samples as i64;
+        // What this call plays and the child was given: is it back?
+        let needed = (want_end.max(0) as u64).min(sent_before);
+        if self.received_end >= needed {
+            self.behind = false;
+        } else if !self.behind {
+            self.shared.stats.waited.fetch_add(1, Ordering::Relaxed);
+            let deadline = std::time::Instant::now() + self.wait_budget;
+            while self.received_end < needed {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match self.from_child.recv_timeout(left) {
+                    Ok(FromChild::Block(block)) => self.take_back(block),
+                    Ok(FromChild::Crashed(message)) => {
+                        self.mark_crashed(Some(message));
+                        return;
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        self.behind = true;
+                        self.shared
+                            .stats
+                            .waited_in_vain
+                            .fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        self.mark_crashed(None);
+                        return;
+                    }
+                }
+            }
+        }
         // Before the plug-in's first audio is due there is nothing to miss.
         let due = (want_end - want_start.max(0)).max(0) as usize;
         let mut played = 0usize;
@@ -936,6 +1021,7 @@ impl HostedPlugin for SandboxedPlugin {
     fn activate(&mut self, sample_rate: f64, max_block: u32) -> Result<(), String> {
         self.block_size.store(max_block, Ordering::Relaxed);
         self.delay = max_block;
+        self.wait_budget = wait_budget(sample_rate, max_block);
         self.to_child
             .try_send(ToChild::Activate(sample_rate, max_block))
             .map_err(|_| "the plug-in's process is not answering".to_string())?;
@@ -986,6 +1072,7 @@ impl HostedPlugin for SandboxedPlugin {
         }
         let start = self.clock;
         self.clock += num_samples as u64;
+        let sent_before = self.sent_end;
 
         // Hand this block over and take whatever came back. The audio
         // thread never waits on the child: that is the one block of
@@ -997,7 +1084,7 @@ impl HostedPlugin for SandboxedPlugin {
         } else {
             let Ok(mut block) = self.free.try_recv() else {
                 stats.no_buffer.fetch_add(1, Ordering::Relaxed);
-                return self.play_back(outputs, num_samples, start);
+                return self.play_back(outputs, num_samples, start, sent_before);
             };
             {
                 let fill = |into: &mut Vec<f32>, from: &[f32]| {
@@ -1031,6 +1118,7 @@ impl HostedPlugin for SandboxedPlugin {
                 match sent {
                     Ok(()) => {
                         stats.sent.fetch_add(1, Ordering::Relaxed);
+                        self.sent_end = start + num_samples as u64;
                         if self.pace == Pace::Offline {
                             return self.play_now(outputs, num_samples, start);
                         }
@@ -1044,7 +1132,7 @@ impl HostedPlugin for SandboxedPlugin {
                 }
             }
         }
-        self.play_back(outputs, num_samples, start);
+        self.play_back(outputs, num_samples, start, sent_before);
     }
 
     fn get_parameter_count(&self) -> u32 {
@@ -2144,6 +2232,74 @@ while True:
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A sound card whose own buffer is not the DAW's asks for two buffers
+    /// straight after each other now and then. The second call plays what
+    /// the first handed over microseconds before: it waits a moment for
+    /// it. Without the wait every such pair left a gap of one buffer in the
+    /// plug-in's sound (on the test machine 168 of 26,984 blocks).
+    #[cfg(unix)]
+    #[test]
+    fn two_buffers_straight_after_each_other_leave_no_gap() {
+        let (mut plugin, dir) = full_child("pairs", "", Pace::Live);
+        // A slow rate, so the wait is the full two milliseconds: the stand-in
+        // process is a script, far slower to answer than a real one.
+        plugin.activate(8_000.0, 128).expect("activate");
+        let mut heard = Vec::new();
+        let mut t = 0usize;
+        for _ in 0..150 {
+            // Two calls with nothing between them, then the rest of the
+            // two buffers' time.
+            for _ in 0..2 {
+                let input: Vec<f32> = (t..t + 128).map(|s| (s + 1) as f32).collect();
+                let inputs: [&[f32]; 2] = [&input, &input];
+                let mut outputs = vec![Vec::new(), Vec::new()];
+                plugin.process(&inputs, &mut outputs, &[], &mut Vec::new(), 128);
+                heard.extend_from_slice(&outputs[0]);
+                t += 128;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        let mut gaps = 0usize;
+        for (t, &sample) in heard.iter().enumerate().skip(128) {
+            if sample == 0.0 {
+                gaps += 1;
+                continue;
+            }
+            assert_eq!(
+                sample,
+                2.0 * (t - 128 + 1) as f32,
+                "sample {t}: audio out of place"
+            );
+        }
+        let stats = &plugin.shared.stats;
+        assert!(
+            stats.waited.load(Ordering::Relaxed) >= 100,
+            "the second call of each pair waited for the first one's audio"
+        );
+        // Without the wait the second call of every pair is a gap: 150
+        // buffers. The stand-in script misses the two milliseconds now and
+        // then when the test machine is busy, so not none, but far fewer.
+        assert!(
+            gaps <= 60 * 128,
+            "{} buffers left a gap, {} waits were in vain",
+            gaps / 128,
+            stats.waited_in_vain.load(Ordering::Relaxed)
+        );
+        drop(plugin);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_wait_for_a_plug_in_s_process_is_short_and_has_an_end() {
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        // A quarter of the buffer's time...
+        assert!((ms(wait_budget(48_000.0, 256)) - 1.333).abs() < 0.01);
+        // ...never more than two milliseconds, however big the buffer...
+        assert_eq!(ms(wait_budget(44_100.0, 4096)), 2.0);
+        // ...and a fifth of one at least, however small.
+        assert_eq!(ms(wait_budget(96_000.0, 16)), 0.2);
+    }
+
     /// A render waits for every block: nothing is left out however fast it
     /// runs, and the plug-in adds no delay beyond its own.
     #[cfg(unix)]
@@ -2433,7 +2589,7 @@ while True:
 
     #[test]
     fn the_old_behaviour_can_be_asked_for_and_keeps_the_old_list() {
-        // What a settings file from before 0.266.49 held: a list of
+        // What a settings file from before 0.266.50 held: a list of
         // plug-ins to run in their own process.
         let mut choices = Choices {
             always: ["crashy.fx".to_string()].into_iter().collect(),
