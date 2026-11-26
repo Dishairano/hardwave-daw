@@ -8,10 +8,11 @@
 //! which is too much for what is effectively a colour effect.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::modulation::PhaserChain;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::f32::consts::TAU;
@@ -274,6 +275,25 @@ impl HostedPlugin for NativePhaser {
             self.mix = v.clamp(0.0, 1.0);
         }
         Ok(())
+    }
+
+    /// The allpass chain rings out at the lowest notch the sweep can take
+    /// it to (it never goes under 10 Hz).
+    fn tail(&self) -> Tail {
+        let lowest = (self.base_hz * 2.0_f32.powf(-self.depth_octaves.abs())).max(10.0);
+        let secs = tail::filter_ring_secs(lowest as f64, 0.5, STAGES);
+        tail::from_secs(secs, self.sample_rate)
+    }
+
+    /// The LFO runs on through silence. `process` moves it once a block, by
+    /// the block's length, so this does the same for each skipped block.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        let dphase = self.rate_hz * num_samples as f32 / self.sample_rate;
+        self.lfo_phase_l = (self.lfo_phase_l + dphase) % 1.0;
+        self.lfo_phase_r = (self.lfo_phase_r + dphase) % 1.0;
     }
 
     fn latency_samples(&self) -> u32 {

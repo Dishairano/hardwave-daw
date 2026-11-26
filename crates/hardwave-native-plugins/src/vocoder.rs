@@ -9,11 +9,12 @@
 //! talk-box voice; the noise carrier gives a whisper/breath effect.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::dynamics::{DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -388,6 +389,37 @@ impl HostedPlugin for NativeVocoder {
         }
         self.rebuild_bands();
         Ok(())
+    }
+
+    /// The carrier is shaped by the input's envelope, so with silence in it
+    /// fades as the band envelopes release, after the input's band filters
+    /// (the lowest and sharpest at 120 Hz) ring out. Sixteen bands and the
+    /// makeup gain can sum to some 40 dB over one envelope, so the release
+    /// is given a quarter longer than one envelope needs.
+    fn tail(&self) -> Tail {
+        let secs = tail::release_secs(self.release_ms as f64 / 1000.0) * 1.25
+            + tail::filter_ring_secs(BAND_LOW_HZ as f64, BAND_Q as f64, 1);
+        tail::from_secs(secs, self.sample_rate)
+    }
+
+    /// The carrier runs on through silence, and so do its band filters:
+    /// run them as `process` would, so the carrier picks up where it would
+    /// have been. The input's side is silent and is left alone.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        let phase_inc = self.carrier_freq / self.sample_rate;
+        for _ in 0..num_samples {
+            let carrier = carrier_sample(self.carrier, self.phase, &mut self.rng);
+            self.phase += phase_inc;
+            if self.phase >= 1.0 {
+                self.phase -= 1.0;
+            }
+            for band in self.bands.iter_mut() {
+                band.car_bp.process_mono(carrier);
+            }
+        }
     }
 
     fn latency_samples(&self) -> u32 {

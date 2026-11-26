@@ -8,12 +8,13 @@
 //! (recovery time), Drive (input gain → harder bite for harderstyles).
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::dynamics::{
     compressor_gain_reduction_db, db_to_linear, linear_to_db, DetectMode, EnvelopeFollower,
 };
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -331,6 +332,14 @@ impl HostedPlugin for NativeLimiter {
             self.drive_db = v;
         }
         Ok(())
+    }
+
+    /// The lookahead delay empties, and the detector falls back to rest so
+    /// the next sound is not held down by the last.
+    fn tail(&self) -> Tail {
+        let secs = tail::release_secs(self.release_ms as f64 / 1000.0)
+            + LOOKAHEAD_SAMPLES as f64 / self.sample_rate as f64;
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

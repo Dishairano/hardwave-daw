@@ -7,10 +7,11 @@
 //! gets its own plug-in (the parametric EQ already covers them).
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -325,6 +326,12 @@ impl HostedPlugin for NativeFilter {
         }
         self.needs_recoef = true;
         Ok(())
+    }
+
+    /// The filter rings out: longer the lower and sharper it is set.
+    fn tail(&self) -> Tail {
+        let secs = tail::filter_ring_secs(self.cutoff_hz as f64, self.q as f64, 1);
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

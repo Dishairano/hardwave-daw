@@ -16,6 +16,7 @@ pub mod link;
 pub mod live_midi_fx;
 pub mod master_node;
 pub mod master_tap;
+pub mod meter_reader;
 pub mod metronome;
 pub mod midi_track_node;
 pub mod pan;
@@ -24,6 +25,8 @@ pub mod parallel;
 /// Re-exported so callers outside this crate can hold the same atomic
 /// float the meters and gain-reduction channels use.
 pub use atomic_float;
+/// Which threads make the sound, and lowering background work (see the module).
+pub use hardwave_audio_io::thread_priority;
 pub mod preview_player;
 pub mod tempo_follow;
 pub mod test_tone;

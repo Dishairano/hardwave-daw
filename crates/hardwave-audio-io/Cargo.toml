@@ -18,6 +18,10 @@ parking_lot.workspace = true
 log.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# Lowering background threads (`thread_priority::lower_current_thread`).
+libc = "0.2"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Direct WASAPI bindings for exclusive-mode output. cpal 0.15 only exposes
 # shared mode, so the exclusive path is built on IAudioClient via this crate.

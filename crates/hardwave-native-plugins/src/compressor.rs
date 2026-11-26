@@ -2,12 +2,13 @@
 //! `HostedPlugin` trait.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::dynamics::{
     compressor_gain_reduction_db, db_to_linear, linear_to_db, DetectMode, EnvelopeFollower,
 };
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -347,6 +348,17 @@ impl HostedPlugin for NativeCompressor {
         };
         self.update_envelope();
         Ok(())
+    }
+
+    /// The input times a gain, so nothing rings; but the detector has to
+    /// fall back to rest so the next sound is not pulled down by the last.
+    /// RMS detection smooths through one more slow stage first.
+    fn tail(&self) -> Tail {
+        let mut secs = self.release_ms as f64 / 1000.0;
+        if self.mode == DetectMode::Rms {
+            secs += 2_000.0 / self.sample_rate as f64;
+        }
+        tail::from_secs(tail::release_secs(secs), self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

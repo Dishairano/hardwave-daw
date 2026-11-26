@@ -4,6 +4,7 @@
 //! by being preset + one-shot for non-mastering producers.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::dynamics::{
     compressor_gain_reduction_db, db_to_linear, linear_to_db, DetectMode, EnvelopeFollower,
 };
@@ -11,7 +12,7 @@ use hardwave_dsp::oversample::{OversampleFactor, Oversampler};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -261,6 +262,13 @@ impl HostedPlugin for NativeSoundgoodizer {
             .unwrap_or(OversampleFactor::Off);
         self.refresh();
         Ok(())
+    }
+
+    /// The limiter's detector falls back to rest, after the oversampler's
+    /// filters ring out.
+    fn tail(&self) -> Tail {
+        let secs = tail::release_secs(0.05) + tail::oversampler_secs(self.oversample);
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

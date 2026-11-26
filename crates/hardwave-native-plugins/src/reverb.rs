@@ -2,10 +2,11 @@
 //! in HostedPlugin. Mirrors Fruity Reverb 2's main controls.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::reverb::AlgorithmicReverb;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -257,6 +258,17 @@ impl HostedPlugin for NativeReverb {
         Ok(())
     }
 
+    /// The pre-delay, then the decay stretched from the 60 dB it is set by
+    /// to well past the 150 dB the host listens down to (three times the
+    /// decay is 180 dB, room for a resonance that built up louder than the
+    /// input), plus the combs' and diffusers' own lengths.
+    fn tail(&self) -> Tail {
+        let secs = self.pre_delay_ms.clamp(0.0, 1_000.0) as f64 / 1000.0
+            + self.decay_secs.clamp(0.05, 30.0) as f64 * 3.0
+            + 0.3;
+        tail::from_secs(secs, self.sample_rate)
+    }
+
     fn latency_samples(&self) -> u32 {
         0
     }
@@ -416,5 +428,48 @@ mod tests {
             "30 % is {blend_db:.2} dB from the dry signal"
         );
         assert!(energy(&blend[24_000 + 4_800..]) > 1e-4, "30 % has a tail");
+    }
+
+    fn tail_samples(r: &NativeReverb) -> usize {
+        match r.tail() {
+            Tail::Samples(n) => n as usize,
+            other => panic!("a reverb tail ends: {other:?}"),
+        }
+    }
+
+    /// The tail it states grows with the decay and the pre-delay.
+    #[test]
+    fn the_stated_tail_follows_decay_and_pre_delay() {
+        let r = started();
+        let default = tail_samples(&r);
+        // 20 ms pre-delay and 2 s decay to well past -150 dB.
+        assert!(default > 5 * 48_000, "{default}");
+        let mut r = started();
+        r.set_parameter_value(PARAM_DECAY, 1.0);
+        assert!(tail_samples(&r) > default);
+        r.set_parameter_value(PARAM_DECAY, 0.0);
+        assert!(tail_samples(&r) < default);
+        let mut r = started();
+        r.set_parameter_value(PARAM_PRE_DELAY, 1.0);
+        assert!(tail_samples(&r) > default);
+    }
+
+    /// The stated tail is long enough: an impulse, then that much silence,
+    /// and the next block is below -150 dBFS. The host stops calling the
+    /// reverb after it, so a shorter one would cut the reverb off.
+    #[test]
+    fn the_stated_tail_is_long_enough() {
+        for mix in [0.3, 1.0] {
+            let mut r = started();
+            r.set_parameter_value(PARAM_MIX, mix);
+            let n = tail_samples(&r);
+            let mut input = vec![0.0_f32; 1 + n + 512];
+            input[0] = 1.0;
+            let out = run(&mut r, &input);
+            let peak = out.iter().fold(0.0_f32, |m, v| m.max(v.abs()));
+            assert!(peak > 0.01, "the reverb rang: {peak}");
+            let after = out[1 + n..].iter().fold(0.0_f32, |m, v| m.max(v.abs()));
+            assert!(after < 3.2e-8, "mix {mix}: {after} left after the tail");
+        }
     }
 }

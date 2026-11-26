@@ -4,11 +4,12 @@
 //! tracks together when pushed.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::oversample::OversampleFactor;
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -249,6 +250,12 @@ impl HostedPlugin for NativeSaturator {
             self.oversample = OversampleFactor::from_normalised(v as f64);
         }
         Ok(())
+    }
+
+    /// Only the oversampler's filters hold anything, and only while it is
+    /// on.
+    fn tail(&self) -> Tail {
+        tail::from_secs(tail::oversampler_secs(self.oversample), self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

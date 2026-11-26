@@ -235,6 +235,8 @@ export const nlBrowser: Record<string, string> = {
   'Reset instruments when the transport moves': 'Instrumenten resetten als het transport verspringt',
   'Stops held notes when you press stop or move the playhead, instead of letting them carry on at the new position. Leave it on unless you want tails to ring through a jump.': 'Stopt vastgehouden noten als je op stop drukt of de afspeelkop verplaatst, in plaats van ze op de nieuwe positie door te laten klinken. Laat het aan, tenzij je wilt dat tails over een sprong heen doorklinken.',
   'Play truncated notes': 'Afgekapte noten afspelen',
+  'Smart disable': 'Slim uitschakelen',
+  'Stops calling a plug-in while its input is silent and its sound has died away, and calls it again the moment sound, notes or a knob move arrive. Saves CPU on big songs. Each plug-in can opt out from its slot menu.': 'Roept een plug-in niet meer aan zolang de invoer stil is en het geluid is uitgestorven, en roept hem meteen weer aan zodra er geluid, noten of een knopbeweging binnenkomen. Spaart CPU bij grote songs. Elke plug-in kan zich afmelden via het menu van zijn slot.',
   'When you start playing in the middle of a note, play the rest of it from where you started, with its envelope already open. Off means only notes that begin after that point sound.': 'Als je midden in een noot begint met afspelen, klinkt de rest ervan vanaf waar je begon, met de envelope al open. Uit betekent dat alleen noten klinken die na dat punt beginnen.',
 
   // Settings: recording

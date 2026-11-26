@@ -4,11 +4,12 @@
 //! glue 808 sub-layers under a kick punch.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -290,6 +291,12 @@ impl HostedPlugin for NativeSubBass {
             self.mix = v.clamp(0.0, 1.0);
         }
         Ok(())
+    }
+
+    /// The crossover filters ring out; tanh holds nothing.
+    fn tail(&self) -> Tail {
+        let secs = tail::filter_ring_secs(self.crossover_hz as f64, 0.707, 1);
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

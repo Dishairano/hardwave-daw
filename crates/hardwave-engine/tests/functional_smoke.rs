@@ -596,6 +596,7 @@ fn killer_track_insert_modifies_audio() {
         let mut project = engine.project.lock();
         if let Some(t) = project.track_mut(&track_id) {
             t.inserts.push(PluginSlot {
+                allow_smart_disable: None,
                 id: "slot-clip".into(),
                 plugin_id: "test.hardclip".into(),
                 enabled: true,
@@ -1526,6 +1527,7 @@ fn sidechain_bus_reaches_inserts_in_offline_render() {
         let mut project = engine.project.lock();
         if let Some(t) = project.track_mut(&bass_id) {
             t.inserts.push(PluginSlot {
+                allow_smart_disable: None,
                 id: "slot-duck".into(),
                 plugin_id: "test.ducker".into(),
                 enabled: true,
@@ -1689,6 +1691,7 @@ fn master_bus_insert_processes_the_mix() {
         };
         if let Some(t) = project.track_mut(&id) {
             t.inserts.push(PluginSlot {
+                allow_smart_disable: None,
                 id: "slot-master".into(),
                 plugin_id: "test.halfgain".into(),
                 enabled: true,
@@ -1818,6 +1821,7 @@ fn stem_render_keeps_its_sidechain_key() {
         let mut project = engine.project.lock();
         if let Some(t) = project.track_mut(&bass_id) {
             t.inserts.push(PluginSlot {
+                allow_smart_disable: None,
                 id: "slot-duck".into(),
                 plugin_id: "test.ducker".into(),
                 enabled: true,
@@ -1990,6 +1994,7 @@ fn plugin_latency_is_compensated() {
         let mut project = engine.project.lock();
         if let Some(t) = project.track_mut(&latent) {
             t.inserts.push(PluginSlot {
+                allow_smart_disable: None,
                 id: "slot-latent".into(),
                 plugin_id: "test.latent".into(),
                 enabled: true,

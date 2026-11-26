@@ -2,10 +2,11 @@
 //! Mirrors Fruity Delay 3's main controls: time, feedback, mix, ping-pong.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::delay_line::StereoDelayLine;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -258,6 +259,24 @@ impl HostedPlugin for NativeDelay {
         Ok(())
     }
 
+    /// Every echo, until the feedback has taken the last one below silence.
+    /// The top of the Feedback knob means hold for ever: the line caps it
+    /// at 99 %, which still takes many minutes to die, so it counts as
+    /// never stopping.
+    fn tail(&self) -> Tail {
+        if self.feedback >= 0.99 {
+            return Tail::Infinite;
+        }
+        let delay = ((self.time_ms / 1000.0) * self.sample_rate).max(1.0) as usize;
+        // A sample over the line's length, so the last echo is out before
+        // the host stops listening.
+        let secs = tail::feedback_secs(
+            (delay as f64 + 1.0) / self.sample_rate as f64,
+            self.feedback.clamp(0.0, 0.99) as f64,
+        );
+        tail::from_secs(secs, self.sample_rate)
+    }
+
     fn latency_samples(&self) -> u32 {
         0
     }
@@ -299,6 +318,78 @@ mod tests {
                 assert!(d.parameter_text(id, v).is_some(), "no text for {id}");
             }
             assert!(d.parameter_options(id).is_none());
+        }
+    }
+
+    fn started() -> NativeDelay {
+        let mut d = NativeDelay::new();
+        d.activate(48_000.0, 512).unwrap();
+        d
+    }
+
+    fn tail_samples(d: &NativeDelay) -> usize {
+        match d.tail() {
+            Tail::Samples(n) => n as usize,
+            other => panic!("a delay below full feedback ends: {other:?}"),
+        }
+    }
+
+    /// The tail grows with the delay time and the feedback, and with the
+    /// feedback all the way up the echoes never end.
+    #[test]
+    fn the_stated_tail_follows_time_and_feedback() {
+        let d = started();
+        let default = tail_samples(&d);
+        // At least the first echo, 250 ms in.
+        assert!(default > 12_000, "{default}");
+        let mut d = started();
+        d.set_parameter_value(PARAM_TIME_MS, 1.0);
+        assert!(tail_samples(&d) > default);
+        let mut d = started();
+        d.set_parameter_value(PARAM_FEEDBACK, 0.8);
+        let more = tail_samples(&d);
+        assert!(more > default);
+        d.set_parameter_value(PARAM_FEEDBACK, 0.0);
+        assert!(tail_samples(&d) < default);
+        assert!(tail_samples(&d) > 12_000, "the one echo still comes");
+        d.set_parameter_value(PARAM_FEEDBACK, 1.0);
+        assert_eq!(d.tail(), Tail::Infinite);
+    }
+
+    /// The stated tail is long enough: an impulse, then that much silence,
+    /// and the next block is below -150 dBFS.
+    #[test]
+    fn the_stated_tail_is_long_enough() {
+        for (fb, pp) in [(0.35, 0.0), (0.9, 0.0), (0.6, 1.0)] {
+            let mut d = started();
+            d.set_parameter_value(PARAM_FEEDBACK, fb);
+            d.set_parameter_value(PARAM_PING_PONG, pp);
+            d.set_parameter_value(PARAM_MIX, 1.0);
+            let n = tail_samples(&d);
+            let mut input = vec![0.0_f32; 1 + n + 512];
+            input[0] = 1.0;
+            let mut outputs = vec![Vec::new(), Vec::new()];
+            let mut heard = 0.0_f32;
+            let mut after = 0.0_f32;
+            for (k, block) in input.chunks(512).enumerate() {
+                d.process(
+                    &[block, block],
+                    &mut outputs,
+                    &[],
+                    &mut Vec::new(),
+                    block.len(),
+                );
+                for (i, v) in outputs.iter().flatten().enumerate() {
+                    let at = k * 512 + i % block.len();
+                    if at > n {
+                        after = after.max(v.abs());
+                    } else {
+                        heard = heard.max(v.abs());
+                    }
+                }
+            }
+            assert!(heard > 0.1, "the echo came: {heard}");
+            assert!(after < 3.2e-8, "feedback {fb}: {after} left after the tail");
         }
     }
 }

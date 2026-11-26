@@ -186,7 +186,7 @@ pub trait HostedPlugin: Send {
     /// plug-in window could be heard but never recorded. This second
     /// queue is written at the same moment and drained only by the app,
     /// which is what lets automation record a knob the plug-in owns.
-    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+    fn gui_edit_log(&self) -> Option<SharedEditLog> {
         None
     }
 
@@ -209,6 +209,85 @@ pub trait HostedPlugin: Send {
     /// delay could not be set in beats. Plug-ins that do not care
     /// ignore it.
     fn set_transport(&mut self, _transport: TransportInfo) {}
+
+    /// How long this plug-in goes on sounding after its input falls
+    /// silent: a reverb's decay, a delay's echoes, a synth's release.
+    ///
+    /// The host stops calling a plug-in whose input has been silent for
+    /// longer than this and whose output has died away, and calls it
+    /// again the moment sound, notes or a knob move arrive. Asked on the
+    /// audio thread, so it must be cheap and must not allocate.
+    fn tail(&self) -> Tail {
+        Tail::Unknown
+    }
+
+    /// What the plug-in said about the block it just processed, beyond
+    /// the audio: a CLAP plug-in's process status, or a VST3 plug-in
+    /// flagging every output channel silent.
+    fn process_hint(&self) -> ProcessHint {
+        ProcessHint::None
+    }
+
+    /// Whether a change waits to reach the plug-in's audio side: a knob
+    /// moved in its own window, or a flush it asked for. A sleeping
+    /// plug-in (smart disable) is then called anyway, so the change is
+    /// heard and reported. Audio thread: cheap, lock-free.
+    fn has_pending_changes(&self) -> bool {
+        false
+    }
+
+    /// Whether every input channel of the next block is exact silence, so
+    /// a plug-in that can tell (VST3 silence flags, CLAP constant mask)
+    /// may skip its own work on it. Set before `process`.
+    fn set_input_silent(&mut self, _silent: bool) {}
+
+    /// The plug-in was not called for this many samples because its input
+    /// and output were silent. A plug-in with its own free-running clock
+    /// (an LFO, a carrier) moves it on here, so it is where it would have
+    /// been had it been called, and a song sounds the same whether it was
+    /// asleep or not. Audio thread, cheap, no allocation.
+    ///
+    /// VST3 and CLAP have no way to be told this. Woken, such a plug-in is
+    /// given the true song position (`set_transport`), so anything synced
+    /// to the song lands right, but a free-running LFO inside it carries on
+    /// from where it was when it fell asleep, at a different phase than
+    /// had it run throughout. That is why a third-party plug-in is only
+    /// left out on its own word or the producer's.
+    fn skip_silence(&mut self, _num_samples: usize) {}
+}
+
+/// How long a plug-in goes on sounding after its input falls silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tail {
+    /// The plug-in does not say. The host assumes a few seconds and also
+    /// waits for the output to die away.
+    Unknown,
+    /// This many samples at the rate the plug-in runs at.
+    Samples(u32),
+    /// It may go on sounding forever with silence in (a delay at full
+    /// feedback, a drone): never stop calling it.
+    Infinite,
+}
+
+/// What a plug-in said about its last block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcessHint {
+    /// Nothing beyond the audio.
+    #[default]
+    None,
+    /// Keep calling it, whatever the input (CLAP_PROCESS_CONTINUE).
+    Continue,
+    /// Keep calling it while its output is not quiet
+    /// (CLAP_PROCESS_CONTINUE_IF_NOT_QUIET).
+    ContinueIfNotQuiet,
+    /// Go by its tail (CLAP_PROCESS_TAIL).
+    Tail,
+    /// It needs nothing more until input or events arrive
+    /// (CLAP_PROCESS_SLEEP).
+    Sleep,
+    /// It flagged every output channel silent (VST3 silence flags). A hint
+    /// only: the buffer is what is heard.
+    OutputSilent,
 }
 
 /// Where the song is, as the host sees it at the start of a block.
@@ -257,10 +336,17 @@ impl TransportInfo {
 }
 
 /// Shared queue for GUI → audio parameter edits, used by both VST3 and
-/// CLAP hosts. The editor pushes `(param_id, normalized_value)` entries;
-/// the audio thread drains them under `try_lock`/`lock` at the start of
-/// each `process` block and applies them to the chain instance.
-pub type SharedParamQueue = std::sync::Arc<parking_lot::Mutex<Vec<(u32, f64)>>>;
+/// CLAP hosts. The editor pushes `(param_id, normalized_value)` changes;
+/// the instance that plays takes them at the start of each block without
+/// ever waiting (see [`crate::param_queue`]).
+pub type SharedParamQueue = std::sync::Arc<crate::param_queue::ParamChangeQueue>;
+
+/// The app's copy of the edits made in a plug-in's own window (and of the
+/// changes a plug-in reports from its audio side), drained by the app for
+/// automation recording. The same lock-free queue as above, so a push from
+/// a window or from the audio thread never waits and never drops a move:
+/// it keeps the newest value per parameter until the app takes it.
+pub type SharedEditLog = std::sync::Arc<crate::param_queue::ParamChangeQueue>;
 
 /// A plug-in's own window on the instance that plays. Every call is made on
 /// the thread that owns the app's windows; the instance closes the window

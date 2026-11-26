@@ -375,7 +375,7 @@ pub(crate) fn take_room_song(
         .first()
         .map(|e| e.bpm)
         .unwrap_or(140.0);
-    *engine.project.lock() = incoming;
+    engine.replace_song(incoming);
     // Same queue as the plug-ins the song brings, so the order holds.
     engine.clear_live_plugins();
     engine.transport.bpm.store(bpm, Ordering::Relaxed);

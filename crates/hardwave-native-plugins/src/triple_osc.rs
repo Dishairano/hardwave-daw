@@ -6,7 +6,7 @@ use crate::voices::{self, Glide, HeldNotes, MonoStep, VoiceMode, VoiceSettings};
 use hardwave_dsp::synth::{AdsrEnvelope, AdsrStage, Oscillator, Waveform};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -515,6 +515,16 @@ impl HostedPlugin for NativeTripleOsc {
         Ok(())
     }
 
+    /// An instrument sounds while any voice does, releasing included; the
+    /// host already keeps calling it while notes are held.
+    fn tail(&self) -> Tail {
+        if self.voices.iter().any(|v| v.active) {
+            Tail::Infinite
+        } else {
+            Tail::Samples(0)
+        }
+    }
+
     fn latency_samples(&self) -> u32 {
         0
     }
@@ -628,5 +638,29 @@ mod tests {
                 "parameter {id} came back different"
             );
         }
+    }
+
+    /// While a voice is still ringing out the host must keep calling: the
+    /// tail is endless until the release is over, and nothing after.
+    #[test]
+    fn tail_lasts_while_a_voice_releases() {
+        let mut p = NativeTripleOsc::new();
+        p.activate(48_000.0, 512).unwrap();
+        assert_eq!(p.tail(), Tail::Samples(0), "nothing sounding yet");
+        play(&mut p, &[on(60)], 1024);
+        let off = MidiEvent::NoteOff {
+            timing: 0,
+            channel: 0,
+            note: 60,
+            velocity: 0.0,
+        };
+        let releasing = play(&mut p, &[off], 512);
+        assert!(releasing.iter().any(|v| v.abs() > 1e-3), "still sounding");
+        assert_eq!(p.tail(), Tail::Infinite, "releasing");
+        // The 150 ms release, with room to spare.
+        for _ in 0..30 {
+            play(&mut p, &[], 512);
+        }
+        assert_eq!(p.tail(), Tail::Samples(0), "the voice has ended");
     }
 }

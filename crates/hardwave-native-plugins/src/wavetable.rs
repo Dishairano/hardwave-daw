@@ -9,7 +9,7 @@ use hardwave_dsp::synth::{AdsrEnvelope, AdsrStage};
 use hardwave_dsp::wavetable::{Wavetable, WavetableOscillator};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -491,6 +491,16 @@ impl HostedPlugin for NativeWavetable {
         }
         self.voice_settings.read_state(read);
         Ok(())
+    }
+
+    /// An instrument sounds while any voice does, releasing included; the
+    /// host already keeps calling it while notes are held.
+    fn tail(&self) -> Tail {
+        if self.voices.iter().any(|v| v.active) {
+            Tail::Infinite
+        } else {
+            Tail::Samples(0)
+        }
     }
 
     fn latency_samples(&self) -> u32 {

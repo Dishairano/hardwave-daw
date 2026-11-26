@@ -4,13 +4,14 @@
 //! is purely modulation, no saturation/HF-loss colour).
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::biquad::{Biquad, BiquadKind};
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_dsp::oversample::{OversampleFactor, Oversampler};
 use hardwave_dsp::synth_extras::FilterDrive;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -347,6 +348,27 @@ impl HostedPlugin for NativeTape {
             .map(|v| OversampleFactor::from_normalised(v as f64))
             .unwrap_or(OversampleFactor::Off);
         Ok(())
+    }
+
+    /// The wow delay line, then the high-frequency loss filter ringing out
+    /// and the oversampler's filters. Tape here adds no hiss, so silence in
+    /// ends in silence out.
+    fn tail(&self) -> Tail {
+        let secs = MAX_DELAY_SAMPLES as f64 / self.sample_rate as f64
+            + tail::filter_ring_secs(self.hf_loss_hz as f64, 0.707, 1)
+            + tail::oversampler_secs(self.oversample);
+        tail::from_secs(secs, self.sample_rate)
+    }
+
+    /// The wow LFOs run on through silence. The delay line moves its
+    /// sweep and write position on as running silence through it would,
+    /// without reading or writing the line.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        self.wow_l.skip(num_samples);
+        self.wow_r.skip(num_samples);
     }
 
     fn latency_samples(&self) -> u32 {

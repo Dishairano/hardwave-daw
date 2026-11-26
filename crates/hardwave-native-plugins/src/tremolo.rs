@@ -4,7 +4,7 @@
 use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::f32::consts::TAU;
@@ -272,6 +272,23 @@ impl HostedPlugin for NativeTremolo {
             self.stereo_phase = v.clamp(0.0, 1.0);
         }
         Ok(())
+    }
+
+    /// A gain on the input, so silence in is silence out.
+    fn tail(&self) -> Tail {
+        Tail::Samples(0)
+    }
+
+    /// The LFOs run on through silence: move them as `process` would.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        let dphase = self.rate_hz / self.sample_rate;
+        for _ in 0..num_samples {
+            self.phase_l = (self.phase_l + dphase) % 1.0;
+            self.phase_r = (self.phase_r + dphase) % 1.0;
+        }
     }
 
     fn latency_samples(&self) -> u32 {

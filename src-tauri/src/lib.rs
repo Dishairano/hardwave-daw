@@ -12,6 +12,7 @@ mod diagnostics;
 mod endpoints;
 mod frontend_updater;
 mod main_window;
+mod meter_tick;
 mod midi_clock;
 mod midi_hotplug;
 mod midi_map;
@@ -83,8 +84,9 @@ pub struct AppState {
     /// editor and chain hold separate queues and GUI knob movements
     /// never reach the audio thread.
     #[allow(clippy::type_complexity)]
-    pub slot_param_queues:
-        Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
+    pub slot_param_queues: Arc<
+        Mutex<std::collections::HashMap<(String, String), hardwave_plugin_host::SharedParamQueue>>,
+    >,
     /// The last value the app sent each insert's parameters, by slot. A
     /// window opening reads the live state from the audio thread; when
     /// the audio thread is not running (the device dropped out, as the
@@ -122,8 +124,9 @@ pub struct AppState {
     pub osc_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub osc_port: Arc<Mutex<u16>>,
     #[allow(clippy::type_complexity)]
-    pub slot_gui_edit_logs:
-        Arc<Mutex<std::collections::HashMap<(String, String), Arc<Mutex<Vec<(u32, f64)>>>>>>,
+    pub slot_gui_edit_logs: Arc<
+        Mutex<std::collections::HashMap<(String, String), hardwave_plugin_host::SharedEditLog>>,
+    >,
     /// Where each insert publishes its gain reduction, keyed by track and
     /// slot. Compressors and limiters worked this out every sample and
     /// Peak levels in and out of each slot, for the plug-in window's meters.
@@ -715,6 +718,7 @@ pub fn run() {
             commands::plugins::open_plugin_editor,
             commands::plugins::close_plugin_editor,
             commands::plugins::set_insert_enabled,
+            commands::plugins::set_insert_smart_disable,
             commands::plugins::reorder_insert,
             commands::plugins::set_fx_chain_bypassed,
             commands::plugins::set_insert_wet,
@@ -734,6 +738,7 @@ pub fn run() {
             commands::engine::process_memory,
             commands::engine::set_reset_on_transport,
             commands::engine::set_play_truncated_notes,
+            commands::engine::set_smart_disable,
             commands::engine::set_record_offset_ms,
             commands::engine::set_pan_law,
             commands::engine::get_recording_latency,
@@ -981,6 +986,37 @@ pub fn run() {
             let engine = Arc::clone(&state.engine);
             let app_handle = app.handle().clone();
 
+            // The plug-ins a stopped audio stream hands back have their
+            // settings read on the main thread: VST3 and CLAP allow it there
+            // only, and some plug-ins crash or hang when asked elsewhere.
+            // Posted from a thread of its own: Tauri runs a job at once when
+            // asked on the main thread, and the engine asks holding its lock
+            // (inside a command such as an audio settings change).
+            {
+                let app = app_handle.clone();
+                engine.lock().set_main_thread_runner(Arc::new(
+                    move |job: hardwave_engine::engine::MainThreadJob| {
+                        let app = app.clone();
+                        let posted = std::thread::Builder::new()
+                            .name("hw-post-to-main".into())
+                            .spawn(move || {
+                                if let Err(e) = app.run_on_main_thread(job) {
+                                    log::warn!(
+                                        "audio restart: could not reach the main thread: {e}"
+                                    );
+                                }
+                            });
+                        // The plug-ins stay queued: the reload after the
+                        // restart, or the next read, takes them.
+                        if let Err(e) = posted {
+                            log::warn!(
+                                "audio restart: no thread to reach the main thread with: {e}"
+                            );
+                        }
+                    },
+                ));
+            }
+
             // MIDI Learn dispatcher: drains incoming CC events and applies
             // mapped values to the live engine state. Also handles learn-mode
             // capture in the same loop so there's no race with the main
@@ -1152,8 +1188,16 @@ pub fn run() {
                 // the page. Now only what changed goes, with everything
                 // again every two seconds so a window that starts
                 // listening late catches up.
-                let mut sent_tracks: std::collections::HashMap<String, String> =
-                    std::collections::HashMap::new();
+                //
+                // The tracks' levels are read from their meters' atomics,
+                // outside the engine lock, and only a track whose reading
+                // moved is written out (see `TrackMeterReader`). The engine
+                // lock is held for the device check and the transport alone:
+                // every command the window sends waits for it.
+                let mut track_reader = hardwave_engine::meter_reader::TrackMeterReader::new(
+                    Arc::clone(&engine.lock().track_meters),
+                );
+                let mut master_strip = meter_tick::MasterStrip::default();
                 let mut sent_meters = String::new();
                 let mut sent_transport = String::new();
                 let mut tick: u32 = 0;
@@ -1174,7 +1218,7 @@ pub fn run() {
                     // Single lock acquisition per tick — coalesces what used to be
                     // four separate engine.lock() calls and eliminates per-tick
                     // contention with command handlers.
-                    let (meters, track_payload, transport_payload) = {
+                    let (meters, project, transport_payload) = {
                         use std::sync::atomic::Ordering;
                         let mut eng = engine.lock();
                         // Surface stream death to the user: recovery (device
@@ -1206,61 +1250,17 @@ pub fn run() {
                             let restarted = seen_starts > 0;
                             seen_starts = starts;
                             if restarted {
-                                // Slow (every plug-in loads), so not here.
+                                // Slow (every plug-in loads), so not here:
+                                // on the main thread, after the plug-ins
+                                // the stopped stream handed back are read.
                                 let app = app_handle.clone();
+                                let handed_back = eng.handed_back_plugins();
                                 std::thread::spawn(move || {
-                                    let state = app.state::<AppState>();
-                                    match commands::plugins::hydrate_chains_from_project(&state) {
-                                        Ok(()) => log::info!("plug-ins loaded again after the audio engine restarted"),
-                                        Err(e) => log::warn!("plug-ins after the restart: {e}"),
-                                    }
+                                    commands::plugins::reload_after_restart(&app, handed_back);
                                 });
                             }
                         }
                         let meters = eng.master_meter();
-                        // What automation does to each fader and pan, so the
-                        // mixer can move with it.
-                        let automated: std::collections::HashMap<_, _> = eng
-                            .track_automation()
-                            .into_iter()
-                            .map(|(id, v, p)| (id, (v, p)))
-                            .collect();
-                        let mut track_payload: Vec<_> = eng
-                            .track_meter_snapshots()
-                            .into_iter()
-                            .map(|(id, pl, pr, rms, pre_fader)| {
-                                let (auto_db, auto_pan) =
-                                    automated.get(&id).copied().unwrap_or((None, None));
-                                serde_json::json!({
-                                    "id": id,
-                                    "peakL": pl,
-                                    "peakR": pr,
-                                    "rms": rms,
-                                    "preFaderPeak": pre_fader,
-                                    "autoVolumeDb": auto_db,
-                                    "autoPan": auto_pan,
-                                })
-                            })
-                            .collect();
-                        // The master has no track meter of its own (it is not
-                        // an audio-bearing track), so the mixer's master strip
-                        // never moved. It reads the master meter instead.
-                        let master_id = eng
-                            .project
-                            .lock()
-                            .tracks
-                            .iter()
-                            .find(|t| matches!(t.kind, hardwave_project::TrackKind::Master))
-                            .map(|t| t.id.clone());
-                        if let Some(id) = master_id {
-                            track_payload.push(serde_json::json!({
-                                "id": id,
-                                "peakL": meters.peak_db,
-                                "peakR": meters.peak_db,
-                                "rms": meters.rms_db,
-                                "preFaderPeak": meters.peak_db,
-                            }));
-                        }
                         let pos = eng.transport.position();
                         let playing = eng.transport.is_playing();
                         let bpm = eng.transport.bpm.load(Ordering::Relaxed);
@@ -1288,21 +1288,21 @@ pub fn run() {
                             "loopEnd": loop_end,
                             "sampleRate": sample_rate,
                         });
-                        (meters, track_payload, transport_payload)
+                        (meters, Arc::clone(&eng.project), transport_payload)
                     };
 
-                    let changed_tracks: Vec<serde_json::Value> = track_payload
-                        .into_iter()
-                        .filter(|entry| {
-                            let id = entry["id"].as_str().unwrap_or_default().to_string();
-                            let now = entry.to_string();
-                            if !resend_all && sent_tracks.get(&id) == Some(&now) {
-                                return false;
-                            }
-                            sent_tracks.insert(id, now);
-                            true
-                        })
-                        .collect();
+                    // What automation does to each fader and pan rides along
+                    // with the levels, so the mixer can move with it.
+                    let mut changed_tracks: Vec<serde_json::Value> = Vec::new();
+                    track_reader.changed(resend_all, |id, r| {
+                        changed_tracks.push(meter_tick::track_entry(id, r));
+                    });
+                    // The master has no track meter of its own (it is not
+                    // an audio-bearing track), so the mixer's master strip
+                    // never moved. It reads the master meter instead.
+                    if let Some(entry) = master_strip.changed(&project, &meters, resend_all) {
+                        changed_tracks.push(entry);
+                    }
                     if !changed_tracks.is_empty() {
                         let _ = app_handle.emit("daw:trackMeters", &changed_tracks);
                     }

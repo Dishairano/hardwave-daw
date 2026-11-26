@@ -8,10 +8,11 @@
 //! transients and low during sustain. Modulate gain accordingly.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::dynamics::{linear_to_db, DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -234,6 +235,13 @@ impl HostedPlugin for NativeTransient {
             self.output_db = v.clamp(-12.0, 12.0);
         }
         Ok(())
+    }
+
+    /// The input times a gain, so nothing rings; but both detectors have to
+    /// fall back to rest (the slow one takes longest) so the next hit is
+    /// shaped the way it would have been.
+    fn tail(&self) -> Tail {
+        tail::from_secs(tail::release_secs(0.2), self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

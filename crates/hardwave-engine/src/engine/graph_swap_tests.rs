@@ -51,7 +51,7 @@ unsafe impl GlobalAlloc for Watching {
 static WATCHING: Watching = Watching;
 
 /// Allocations and frees `f` makes on this thread.
-fn counted(f: impl FnOnce()) -> (usize, usize) {
+pub(super) fn counted(f: impl FnOnce()) -> (usize, usize) {
     let (a, b) = (ALLOCS.load(Relaxed), FREES.load(Relaxed));
     WATCHED.with(|w| w.set(true));
     f();
@@ -365,6 +365,7 @@ fn the_audio_thread_neither_builds_nor_allocates_for_an_edit() {
             .unwrap()
             .inserts
             .push(hardwave_project::track::PluginSlot {
+                allow_smart_disable: None,
                 id: slot.into(),
                 plugin_id: "test.gain".into(),
                 enabled: true,

@@ -7,7 +7,7 @@
 use crate::format;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::f32::consts::TAU;
@@ -203,6 +203,22 @@ impl HostedPlugin for NativeRingMod {
             self.mix = v.clamp(0.0, 1.0);
         }
         Ok(())
+    }
+
+    /// The carrier multiplies the input, so silence in is silence out.
+    fn tail(&self) -> Tail {
+        Tail::Samples(0)
+    }
+
+    /// The carrier runs on through silence: move it as `process` would.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        let dphase = self.frequency_hz / self.sample_rate;
+        for _ in 0..num_samples {
+            self.phase = (self.phase + dphase) % 1.0;
+        }
     }
 
     fn latency_samples(&self) -> u32 {

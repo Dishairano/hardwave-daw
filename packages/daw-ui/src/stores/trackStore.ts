@@ -195,6 +195,9 @@ export interface InsertInfo {
   sidechainSource: string | null
   /** For a sampler: the file its sample came from. */
   samplePath?: string
+  /** The slot's "Allow smart disable" box as it stands: the producer's
+   *  choice, or the default (on for a built-in plug-in). */
+  allowSmartDisable?: boolean
 }
 
 /** What an armed track lets you hear: nothing, always the input, or the

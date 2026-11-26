@@ -69,6 +69,9 @@ pub struct AudioConfig {
     pub input_thread_priority: String,
     /// The same for the threads that share the work, when there are any.
     pub worker_thread_priority: String,
+    /// How many threads share the work beside the audio thread (the audio
+    /// setting), zero for the audio thread alone.
+    pub worker_threads: usize,
     /// The process's priority class, and the one it started in when the
     /// DAW lifted it.
     pub process_priority: String,
@@ -81,9 +84,13 @@ pub fn start_engine(state: State<AppState>) -> Result<(), String> {
     // switch) is not a reason to rebuild the engine, which dropped every
     // plug-in it hosted.
     if engine.is_running() {
+        crate::audio_focus::opened_elsewhere();
         return Ok(());
     }
-    engine.start().map_err(|e| audio_start_hint(&e))
+    engine.start().map_err(|e| audio_start_hint(&e))?;
+    // Audio is on now: the background release has nothing to open again.
+    crate::audio_focus::opened_elsewhere();
+    Ok(())
 }
 
 /// Why the sound card would not open, in words that say what to do. The
@@ -284,6 +291,7 @@ pub fn get_audio_config(state: State<AppState>) -> AudioConfig {
         audio_thread_priority,
         input_thread_priority,
         worker_thread_priority,
+        worker_threads: engine.worker_threads(),
         process_priority: crate::process_priority::describe(),
     }
 }
@@ -614,6 +622,14 @@ pub fn set_play_truncated_notes(state: State<AppState>, enabled: bool) {
         .set_play_truncated_notes(enabled);
 }
 
+/// Smart disable for the whole engine (Settings > Audio): a plug-in whose
+/// input has been silent for longer than its tail, and whose sound has
+/// died away, is not called until sound, notes or a knob move arrive.
+#[tauri::command]
+pub fn set_smart_disable(state: State<AppState>, enabled: bool) {
+    state.engine.lock().audio_prefs().set_smart_disable(enabled);
+}
+
 /// Which pan law the tracks use: "-3", "-4.5", "-6" or "0" (dB at centre).
 #[tauri::command]
 pub fn set_pan_law(state: State<AppState>, law: String) -> Result<(), String> {
@@ -814,17 +830,35 @@ pub struct WorkerThreads {
     /// What this machine would use when asked for "as many as it can".
     pub suggested: usize,
     pub cores: usize,
+    /// Levels of the graph handed out to the threads since they started.
+    pub levels_shared: u64,
+    /// Levels kept on the audio thread because they had too little work
+    /// in them to be worth waking a thread for.
+    pub levels_alone: u64,
+    /// Times the audio thread slept waiting for a thread to finish.
+    pub waits_slept: u64,
+    /// Sleeping threads woken for a level.
+    pub worker_wakes: u64,
+    /// Blocks where the audio thread was still waiting for a thread when
+    /// the block's time was up (that thread was not given the core).
+    pub stalls: u64,
 }
 
 #[tauri::command]
 pub fn get_worker_threads(state: State<AppState>) -> WorkerThreads {
     let engine = state.engine.lock();
+    let stats = engine.worker_pool_stats().unwrap_or_default();
     WorkerThreads {
         threads: engine.worker_threads(),
         suggested: hardwave_engine::parallel::default_worker_count(),
         cores: std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1),
+        levels_shared: stats.levels_shared,
+        levels_alone: stats.levels_alone,
+        waits_slept: stats.waits_slept,
+        worker_wakes: stats.worker_wakes,
+        stalls: stats.stalls,
     }
 }
 

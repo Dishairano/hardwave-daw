@@ -112,6 +112,10 @@ impl OfflineBakes {
                 let finished_tx = finished_tx.clone();
                 let (jobs, next) = (&jobs, &next);
                 scope.spawn(move || {
+                    // Below normal, like playback's own bakes: an export
+                    // started while the song plays must not take the
+                    // processor from the audio thread or the window.
+                    hardwave_audio_io::thread_priority::lower_current_thread();
                     while !cancel.load(Ordering::Relaxed) {
                         let Some(job) = jobs.get(next.fetch_add(1, Ordering::Relaxed)) else {
                             break;

@@ -61,6 +61,8 @@ export const nlMixer: Record<string, string> = {
   'Show GUI': 'Venster tonen',
   'Own process: on': 'Eigen proces: aan',
   'Own process: off': 'Eigen proces: uit',
+  'Allow smart disable': 'Slim uitschakelen toestaan',
+  'Stop calling this plug-in while its input is silent and its sound has died away, to save CPU. Off: a third-party plug-in is left out only when it says itself that it has finished. Untick it for a plug-in that should make sound out of silence.': 'Roep deze plug-in niet aan zolang de invoer stil is en het geluid is uitgestorven, om CPU te sparen. Uit: een plug-in van derden wordt alleen overgeslagen als hij zelf zegt dat hij klaar is. Zet het uit voor een plug-in die uit stilte geluid moet maken.',
   'It runs in a process of its own: a crash cannot take the song with it, at the cost of one buffer of latency.': 'De plug-in draait in een eigen proces: een crash neemt de song niet mee, ten koste van één buffer latency.',
   'Run it in a process of its own, so a crash cannot take the song with it. Costs one buffer of latency, and its window opens on its own, beside the DAW.': 'Laat de plug-in in een eigen proces draaien, zodat een crash de song niet meeneemt. Dit kost één buffer latency, en het venster opent los, naast de DAW.',
   '{name} will run in its own process': '{name} draait voortaan in een eigen proces',

@@ -3,9 +3,10 @@
 //! control over both reduction axes plus a wet/dry mix and pre-gain.
 
 use crate::format;
+use crate::tail;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -228,6 +229,28 @@ impl HostedPlugin for NativeBitcrush {
             self.mix = v.clamp(0.0, 1.0);
         }
         Ok(())
+    }
+
+    /// The last held sample stays out until the next hold, at most one
+    /// rate-reduction step later.
+    fn tail(&self) -> Tail {
+        tail::from_samples(self.rate_reduction.max(1.0) as f64 + 1.0)
+    }
+
+    /// The sample-and-hold steps along with the clock, not the sound: keep
+    /// stepping through silence, holding what silence holds.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        for _ in 0..num_samples {
+            self.counter += 1.0;
+            if self.counter >= self.rate_reduction {
+                self.counter -= self.rate_reduction;
+                self.hold_l = Self::quantize(0.0, self.bit_depth);
+                self.hold_r = Self::quantize(0.0, self.bit_depth);
+            }
+        }
     }
 
     fn latency_samples(&self) -> u32 {

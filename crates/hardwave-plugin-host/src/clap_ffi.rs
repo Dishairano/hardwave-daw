@@ -314,6 +314,15 @@ pub struct ClapPluginLatency {
     pub get: unsafe extern "C" fn(plugin: *const ClapPlugin) -> u32,
 }
 
+pub const CLAP_EXT_TAIL: &[u8] = b"clap.tail\0";
+
+/// `clap.tail`: how many samples the plug-in goes on sounding after its
+/// input falls silent. INT32_MAX or more means forever.
+#[repr(C)]
+pub struct ClapPluginTail {
+    pub get: unsafe extern "C" fn(plugin: *const ClapPlugin) -> u32,
+}
+
 pub const CLAP_NAME_SIZE: usize = 256;
 pub const CLAP_PATH_SIZE: usize = 1024;
 

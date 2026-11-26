@@ -15,17 +15,19 @@ use crate::clap_ffi::{
     ClapEventNoteExpression, ClapEventParamValue, ClapEventTransport, ClapHost, ClapHostParams,
     ClapInputEvents, ClapIstream, ClapOstream, ClapOutputEvents, ClapParamInfo, ClapPlugin,
     ClapPluginEntry, ClapPluginFactory, ClapPluginGui, ClapPluginLatency, ClapPluginParams,
-    ClapPluginState, ClapProcess, ClapWindow, ClapWindowHandle, CLAP_BEATTIME_FACTOR,
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF,
-    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT, CLAP_EXT_GUI,
-    CLAP_EXT_HOST_PARAMS, CLAP_EXT_LATENCY, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
-    CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_TUNING, CLAP_PROCESS_ERROR, CLAP_SECTIME_FACTOR,
-    CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
+    ClapPluginState, ClapPluginTail, ClapProcess, ClapWindow, ClapWindowHandle,
+    CLAP_BEATTIME_FACTOR, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, CLAP_EVENT_NOTE_EXPRESSION,
+    CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
+    CLAP_EXT_GUI, CLAP_EXT_HOST_PARAMS, CLAP_EXT_LATENCY, CLAP_EXT_PARAMS, CLAP_EXT_STATE,
+    CLAP_EXT_TAIL, CLAP_NOTE_EXPRESSION_PAN, CLAP_NOTE_EXPRESSION_TUNING, CLAP_PROCESS_CONTINUE,
+    CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, CLAP_PROCESS_ERROR, CLAP_PROCESS_SLEEP, CLAP_PROCESS_TAIL,
+    CLAP_SECTIME_FACTOR, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
     CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_PLAYING,
 };
 use crate::types::*;
 use parking_lot::Mutex;
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 pub struct ClapPluginInstance {
@@ -44,8 +46,11 @@ pub struct ClapPluginInstance {
     // Boxed host-side context hung off `host.host_data`. The
     // `clap.host-params` callbacks read it back to reach the plugin +
     // the shared param queue. Heap-stable for the instance's lifetime.
-    #[allow(dead_code)]
     host_ctx: Box<ClapHostContext>,
+    /// Where the parameter changes the plug-in reports from its audio side
+    /// (`process` and `params.flush`) go: the app's edit log. Heap-stable,
+    /// handed to the plug-in as the output event list's context.
+    out_sink: Box<OutputSink>,
     cached_params: Vec<ParameterInfo>,
     /// Latency the plug-in reported when it was activated. The extension
     /// may only be asked around activation, so it is read there and kept.
@@ -57,7 +62,7 @@ pub struct ClapPluginInstance {
     /// injects `CLAP_EVENT_PARAM_VALUE` events into the plugin each block.
     /// Shared with a separate editor instance via `load_with_shared_pending`.
     pending_params: SharedParamQueue,
-    gui_edit_log: SharedParamQueue,
+    gui_edit_log: SharedEditLog,
     /// True between a successful `open_editor` and `close_editor` so we
     /// don't double-create / leak the plugin's GUI.
     gui_open: bool,
@@ -78,6 +83,14 @@ pub struct ClapPluginInstance {
     input_ptrs: Vec<*mut f32>,
     output_ptrs: Vec<*mut f32>,
     event_queue: Box<EncodedEventQueue>,
+    /// The plug-in's `clap.tail` extension, or null when it has none.
+    /// Found when it is activated.
+    tail_ext: *const ClapPluginTail,
+    /// What the plug-in's last `process` returned.
+    last_status: i32,
+    /// The host's word that the next block's input is exact silence, sent
+    /// as the input buffer's constant mask.
+    input_silent: bool,
 }
 
 /// What the main thread needs for this instance's window. CLAP has the
@@ -234,8 +247,41 @@ struct ClapHostContext {
     resize_request: SharedResizeRequest,
     pending: SharedParamQueue,
     /// Every GUI edit again, drained by the app for automation recording.
-    gui_edit_log: SharedParamQueue,
+    gui_edit_log: SharedEditLog,
+    /// The plug-in is active. CLAP lets `params.flush` run on the main
+    /// thread only while it is not; while it is, only on the audio thread
+    /// and never during `process`.
+    active: AtomicBool,
+    /// A window thread is running `params.flush` (see `request_flush`);
+    /// activating waits for it, so the two never overlap.
+    window_flush: AtomicBool,
+    /// The plug-in asked for a flush that is not done yet. While it is
+    /// active, the audio thread answers it with the next block or flush.
+    flush_requested: AtomicBool,
 }
+
+/// The output event list's context on the audio side: parameter changes
+/// the plug-in reports there go to the app's edit log, except those of
+/// read-only parameters (meters a plug-in publishes as parameters).
+struct OutputSink {
+    log: SharedEditLog,
+    /// Sorted.
+    read_only: Vec<u32>,
+    /// The parameter values the host handed the plug-in this block, sorted
+    /// by id: a value the plug-in reports that only repeats one of these is
+    /// an echo (automation playing back), not a knob move, and automation
+    /// write must not record it. Room for a whole block, made up front.
+    sent: Vec<(u32, f64)>,
+}
+
+/// How close a reported value has to be to the one sent to be an echo.
+const ECHO_TOLERANCE: f64 = 1e-6;
+
+/// CLAP_PARAM_IS_AUTOMATABLE.
+const CLAP_PARAM_IS_AUTOMATABLE: u32 = 1 << 5;
+
+/// CLAP_PARAM_IS_READONLY.
+const CLAP_PARAM_IS_READONLY: u32 = 1 << 3;
 
 // SAFETY: all pointers point into the plugin binary (lifetime bound
 // by `library`) or into host-owned boxes (`host`, `host_ctx`).
@@ -260,7 +306,7 @@ impl ClapPluginInstance {
     pub fn load_with_shared_pending(
         descriptor: PluginDescriptor,
         shared: SharedParamQueue,
-        shared_log: Option<SharedParamQueue>,
+        shared_log: Option<SharedEditLog>,
     ) -> Result<Self, String> {
         Self::load_inner(descriptor, Some(shared), shared_log)
     }
@@ -268,7 +314,7 @@ impl ClapPluginInstance {
     fn load_inner(
         descriptor: PluginDescriptor,
         shared_pending: Option<SharedParamQueue>,
-        shared_log: Option<SharedParamQueue>,
+        shared_log: Option<SharedEditLog>,
     ) -> Result<Self, String> {
         let path = descriptor.path.clone();
         if !path.exists() {
@@ -308,16 +354,22 @@ impl ClapPluginInstance {
         // edits into it. Both the Box<ClapHostContext> and Box<ClapHost>
         // are heap-stable, so the raw pointers we hand the plugin stay
         // valid even after the boxes move into `Self`.
-        let pending_params: SharedParamQueue =
-            shared_pending.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
-        let gui_edit_log: SharedParamQueue =
-            shared_log.unwrap_or_else(|| Arc::new(Mutex::new(Vec::new())));
+        let pending_params: SharedParamQueue = shared_pending.unwrap_or_default();
+        let gui_edit_log: SharedEditLog = shared_log.unwrap_or_default();
         let resize_request: SharedResizeRequest = Arc::new(Mutex::new(None));
         let mut host_ctx = Box::new(ClapHostContext {
             plugin: std::ptr::null(),
             resize_request: Arc::clone(&resize_request),
             pending: Arc::clone(&pending_params),
             gui_edit_log: Arc::clone(&gui_edit_log),
+            active: AtomicBool::new(false),
+            window_flush: AtomicBool::new(false),
+            flush_requested: AtomicBool::new(false),
+        });
+        let out_sink = Box::new(OutputSink {
+            log: Arc::clone(&gui_edit_log),
+            read_only: Vec::new(),
+            sent: Vec::with_capacity(MAX_BLOCK_EVENTS),
         });
         let mut host = Box::new(build_static_host());
         host.host_data = &*host_ctx as *const ClapHostContext as *mut c_void;
@@ -366,6 +418,7 @@ impl ClapPluginInstance {
             plugin,
             host,
             host_ctx,
+            out_sink,
             cached_params: Vec::new(),
             latency: 0,
             initialized: true,
@@ -387,6 +440,9 @@ impl ClapPluginInstance {
             event_queue: Box::new(EncodedEventQueue {
                 events: Vec::with_capacity(MAX_BLOCK_EVENTS),
             }),
+            tail_ext: std::ptr::null(),
+            last_status: CLAP_PROCESS_ERROR,
+            input_silent: false,
         };
         me.refresh_params();
         {
@@ -415,33 +471,38 @@ impl ClapPluginInstance {
     /// Start the event list over with the waiting parameter changes
     /// (automation, generic knob UI, the set_plugin_parameter IPC, and
     /// editor GUI edits captured via request_flush) as
-    /// CLAP_EVENT_PARAM_VALUE events at its head. Draining empties the
-    /// shared queue for next time and keeps its room.
+    /// CLAP_EVENT_PARAM_VALUE events at its head. Never waits on the
+    /// threads that push (the audio thread used to lock their queue here
+    /// every block), and what does not fit in this block's list stays
+    /// queued for the next one instead of being dropped.
     fn take_param_events(&mut self) {
         let events = &mut self.event_queue.events;
         events.clear();
-        let mut pending = self.pending_params.lock();
-        for (param_id, value) in pending.drain(..) {
-            if events.len() >= MAX_BLOCK_EVENTS {
-                break;
-            }
-            events.push(EncodedEvent::ParamValue(ClapEventParamValue {
-                header: ClapEventHeader {
-                    size: std::mem::size_of::<ClapEventParamValue>() as u32,
-                    time: 0,
-                    space_id: CLAP_CORE_EVENT_SPACE_ID,
-                    event_type: CLAP_EVENT_PARAM_VALUE,
-                    flags: 0,
-                },
-                param_id,
-                cookie: std::ptr::null_mut(),
-                note_id: -1,
-                port_index: -1,
-                channel: -1,
-                key: -1,
-                value,
-            }));
-        }
+        // What this block hands the plug-in, for telling an echo from a move
+        // in what it reports back (see `OutputSink`).
+        let sent = &mut self.out_sink.sent;
+        sent.clear();
+        self.pending_params
+            .drain(MAX_BLOCK_EVENTS, |param_id, value| {
+                sent.push((param_id, value));
+                events.push(EncodedEvent::ParamValue(ClapEventParamValue {
+                    header: ClapEventHeader {
+                        size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                        time: 0,
+                        space_id: CLAP_CORE_EVENT_SPACE_ID,
+                        event_type: CLAP_EVENT_PARAM_VALUE,
+                        flags: 0,
+                    },
+                    param_id,
+                    cookie: std::ptr::null_mut(),
+                    note_id: -1,
+                    port_index: -1,
+                    channel: -1,
+                    key: -1,
+                    value,
+                }));
+            });
+        sent.sort_unstable_by_key(|e| e.0);
     }
 
     fn params_ext(&self) -> Option<*const ClapPluginParams> {
@@ -485,6 +546,7 @@ impl ClapPluginInstance {
 
     fn refresh_params(&mut self) {
         self.cached_params.clear();
+        self.out_sink.read_only.clear();
         let Some(params) = self.params_ext() else {
             return;
         };
@@ -496,6 +558,9 @@ impl ClapPluginInstance {
                 continue;
             }
             let name = clap_fixed_string_to_rust(&info.name);
+            if info.flags & CLAP_PARAM_IS_READONLY != 0 {
+                self.out_sink.read_only.push(info.id);
+            }
             self.cached_params.push(ParameterInfo {
                 id: info.id,
                 name,
@@ -503,8 +568,20 @@ impl ClapPluginInstance {
                 min: info.min_value,
                 max: info.max_value,
                 unit: String::new(),
-                automatable: (info.flags & 1) != 0, // CLAP_PARAM_IS_AUTOMATABLE
+                // Bit 5. Bit 0 (read before) is CLAP_PARAM_IS_STEPPED, so
+                // every stepped switch counted as automatable and every
+                // knob did not.
+                automatable: info.flags & CLAP_PARAM_IS_AUTOMATABLE != 0,
             });
+        }
+        self.out_sink.read_only.sort_unstable();
+    }
+
+    /// The output event list for the audio side (see `OutputSink`).
+    fn output_events(&self) -> ClapOutputEvents {
+        ClapOutputEvents {
+            ctx: &*self.out_sink as *const OutputSink as *mut c_void,
+            try_push: output_sink_push,
         }
     }
 }
@@ -649,9 +726,17 @@ impl HostedPlugin for ClapPluginInstance {
         self.input_scratch = (0..2)
             .map(|_| Vec::with_capacity(self.max_block as usize))
             .collect();
+        // From here a flush the window asks for waits for the audio thread,
+        // and one a window thread is running now finishes first: flush and
+        // activate never overlap.
+        self.host_ctx.active.store(true, AtomicOrdering::SeqCst);
+        while self.host_ctx.window_flush.load(AtomicOrdering::SeqCst) {
+            std::thread::yield_now();
+        }
         let ok =
             unsafe { ((*self.plugin).activate)(self.plugin, self.sample_rate, 1, self.max_block) };
         if !ok {
+            self.host_ctx.active.store(false, AtomicOrdering::SeqCst);
             return Err("clap_plugin.activate returned false".into());
         }
         self.active = true;
@@ -662,10 +747,18 @@ impl HostedPlugin for ClapPluginInstance {
             .latency_ext()
             .map(|ext| unsafe { ((*ext).get)(self.plugin) })
             .unwrap_or(0);
+        // The tail is asked while playing, from the audio thread, which the
+        // extension allows; the lookup is made here, once. The id is the
+        // constant itself, so finding it allocates nothing.
+        self.tail_ext = unsafe {
+            ((*self.plugin).get_extension)(self.plugin, CLAP_EXT_TAIL.as_ptr() as *const c_char)
+        } as *const ClapPluginTail;
+        self.last_status = CLAP_PROCESS_ERROR;
         let start_ok = unsafe { ((*self.plugin).start_processing)(self.plugin) };
         if !start_ok {
             unsafe { ((*self.plugin).deactivate)(self.plugin) };
             self.active = false;
+            self.host_ctx.active.store(false, AtomicOrdering::SeqCst);
             return Err("clap_plugin.start_processing returned false".into());
         }
         self.processing = true;
@@ -680,6 +773,7 @@ impl HostedPlugin for ClapPluginInstance {
         if self.active {
             unsafe { ((*self.plugin).deactivate)(self.plugin) };
             self.active = false;
+            self.host_ctx.active.store(false, AtomicOrdering::SeqCst);
         }
     }
 
@@ -693,6 +787,7 @@ impl HostedPlugin for ClapPluginInstance {
     ) {
         if !self.processing || self.plugin.is_null() || num_samples == 0 {
             // Fail open — pass audio through if the plugin isn't ready.
+            self.last_status = CLAP_PROCESS_ERROR;
             for (ch, output) in outputs.iter_mut().enumerate() {
                 if ch < inputs.len() {
                     output.clear();
@@ -703,12 +798,20 @@ impl HostedPlugin for ClapPluginInstance {
         }
         // Build input channel pointers. CLAP wants `*mut *mut f32`.
         let channel_count = inputs.len().min(outputs.len()).max(1) as u32;
-        if self.input_scratch.len() < inputs.len() {
-            self.input_scratch.resize_with(inputs.len(), Vec::new);
+        // A copy per channel the plug-in is told about, each exactly the
+        // block's length: a short input (or none, for the one channel an
+        // instrument is still given) was copied short, and the plug-in read
+        // `num_samples` past its end.
+        let n_in = inputs.len().max(channel_count as usize);
+        if self.input_scratch.len() < n_in {
+            self.input_scratch.resize_with(n_in, Vec::new);
         }
-        for (copy, input) in self.input_scratch.iter_mut().zip(inputs) {
+        for (i, copy) in self.input_scratch.iter_mut().take(n_in).enumerate() {
             copy.clear();
-            copy.extend_from_slice(&input[..num_samples.min(input.len())]);
+            if let Some(input) = inputs.get(i) {
+                copy.extend_from_slice(&input[..num_samples.min(input.len())]);
+            }
+            copy.resize(num_samples, 0.0);
         }
         // Ensure outputs have enough capacity.
         for out in outputs.iter_mut() {
@@ -719,18 +822,29 @@ impl HostedPlugin for ClapPluginInstance {
         self.input_ptrs.extend(
             self.input_scratch
                 .iter_mut()
-                .take(inputs.len())
+                .take(n_in)
                 .map(|v| v.as_mut_ptr()),
         );
         self.output_ptrs.clear();
         self.output_ptrs
             .extend(outputs.iter_mut().map(|v| v.as_mut_ptr()));
+        // Exact silence in is constant on every channel: a plug-in that
+        // reads the mask can skip its work on it.
+        let constant_mask = if self.input_silent {
+            if channel_count >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << channel_count) - 1
+            }
+        } else {
+            0
+        };
         let audio_in = ClapAudioBuffer {
             data32: self.input_ptrs.as_mut_ptr(),
             data64: std::ptr::null_mut(),
             channel_count,
             latency: 0,
-            constant_mask: 0,
+            constant_mask,
         };
         let mut audio_out = ClapAudioBuffer {
             data32: self.output_ptrs.as_mut_ptr(),
@@ -750,10 +864,14 @@ impl HostedPlugin for ClapPluginInstance {
             size: event_queue_size,
             get: event_queue_get,
         };
-        let output_events = ClapOutputEvents {
-            ctx: std::ptr::null_mut(),
-            try_push: event_queue_push_noop,
-        };
+        // Changes the plug-in reports (its own window's, while it plays) go
+        // to the app's edit log; they were thrown away.
+        let output_events = self.output_events();
+        // This block answers a flush the plug-in asked for: CLAP lets the
+        // host answer one with `process`.
+        self.host_ctx
+            .flush_requested
+            .store(false, AtomicOrdering::Relaxed);
 
         let transport = clap_transport(&self.transport);
         let process = ClapProcess {
@@ -769,6 +887,7 @@ impl HostedPlugin for ClapPluginInstance {
         };
 
         let status = unsafe { ((*self.plugin).process)(self.plugin, &process) };
+        self.last_status = status;
 
         if status == CLAP_PROCESS_ERROR {
             log::warn!(
@@ -781,6 +900,34 @@ impl HostedPlugin for ClapPluginInstance {
                 }
             }
         }
+    }
+
+    fn tail(&self) -> Tail {
+        if self.tail_ext.is_null() || !self.processing {
+            return Tail::Unknown;
+        }
+        // SAFETY: the extension came from this plug-in when it was
+        // activated and lives as long as it does.
+        let samples = unsafe { ((*self.tail_ext).get)(self.plugin) };
+        if samples >= i32::MAX as u32 {
+            Tail::Infinite
+        } else {
+            Tail::Samples(samples)
+        }
+    }
+
+    fn process_hint(&self) -> ProcessHint {
+        match self.last_status {
+            CLAP_PROCESS_CONTINUE => ProcessHint::Continue,
+            CLAP_PROCESS_CONTINUE_IF_NOT_QUIET => ProcessHint::ContinueIfNotQuiet,
+            CLAP_PROCESS_TAIL => ProcessHint::Tail,
+            CLAP_PROCESS_SLEEP => ProcessHint::Sleep,
+            _ => ProcessHint::None,
+        }
+    }
+
+    fn set_input_silent(&mut self, silent: bool) {
+        self.input_silent = silent;
     }
 
     fn get_parameter_count(&self) -> u32 {
@@ -810,22 +957,22 @@ impl HostedPlugin for ClapPluginInstance {
         // CLAP_EVENT_PARAM_VALUE at the start of the next block, which is
         // the plugin's own synchronization path. De-dupe consecutive
         // edits to the same param so a fast automation ramp or knob spin
-        // doesn't pile up redundant entries between blocks.
-        let mut q = self.pending_params.lock();
-        if let Some(last) = q.last_mut() {
-            if last.0 == id {
-                last.1 = value;
-                return;
-            }
-        }
-        q.push((id, value));
+        // doesn't pile up redundant entries between blocks: the queue
+        // keeps the newest value per parameter, and pushing never waits.
+        self.pending_params.push(id, value);
     }
 
     fn flush_parameters(&mut self) {
         // Inactive, the first block after activation takes them.
-        if !self.active || self.plugin.is_null() || self.pending_params.lock().is_empty() {
+        // Also when the plug-in asked for a flush while active: its window's
+        // edits then come out of here, on the audio thread.
+        let asked = self.host_ctx.flush_requested.load(AtomicOrdering::Acquire);
+        if !self.active || self.plugin.is_null() || (!self.pending_params.has_pending() && !asked) {
             return;
         }
+        self.host_ctx
+            .flush_requested
+            .store(false, AtomicOrdering::Relaxed);
         // The extension's id as it is stored (it ends in a nul), so the
         // audio thread makes no string to ask for it.
         let params = unsafe {
@@ -844,10 +991,7 @@ impl HostedPlugin for ClapPluginInstance {
             size: event_queue_size,
             get: event_queue_get,
         };
-        let output_events = ClapOutputEvents {
-            ctx: std::ptr::null_mut(),
-            try_push: event_queue_push_noop,
-        };
+        let output_events = self.output_events();
         unsafe { ((*params).flush)(self.plugin, &input_events, &output_events) };
         self.event_queue.events.clear();
     }
@@ -887,6 +1031,10 @@ impl HostedPlugin for ClapPluginInstance {
         let ok = unsafe { ((*state).load)(self.plugin, &stream) };
         let _reader = unsafe { Box::from_raw(ctx) };
         if ok {
+            // Values set before this state (by the host or in the plug-in's
+            // window) are older than it: handed over after it, they put the
+            // old knobs back over a loaded preset.
+            self.pending_params.discard();
             Ok(())
         } else {
             Err("clap_plugin_state.load returned false".into())
@@ -970,7 +1118,12 @@ impl HostedPlugin for ClapPluginInstance {
         self.descriptor.has_editor
     }
 
-    fn gui_edit_log(&self) -> Option<SharedParamQueue> {
+    fn has_pending_changes(&self) -> bool {
+        self.pending_params.has_pending()
+            || self.host_ctx.flush_requested.load(AtomicOrdering::Relaxed)
+    }
+
+    fn gui_edit_log(&self) -> Option<SharedEditLog> {
         Some(Arc::clone(&self.gui_edit_log))
     }
 
@@ -1213,10 +1366,28 @@ unsafe extern "C" fn event_queue_get(
     }
 }
 
-unsafe extern "C" fn event_queue_push_noop(
-    _list: *const ClapOutputEvents,
-    _event: *const ClapEventHeader,
+/// The audio side's output event list (see `OutputSink`): a parameter
+/// change goes to the app's edit log, lock-free, unless the parameter is
+/// read-only. Everything else is accepted and dropped, as before.
+unsafe extern "C" fn output_sink_push(
+    list: *const ClapOutputEvents,
+    event: *const ClapEventHeader,
 ) -> bool {
+    if list.is_null() || event.is_null() || (*list).ctx.is_null() {
+        return true;
+    }
+    let sink = &*((*list).ctx as *const OutputSink);
+    let header = &*event;
+    if header.space_id == CLAP_CORE_EVENT_SPACE_ID && header.event_type == CLAP_EVENT_PARAM_VALUE {
+        let pv = &*(event as *const ClapEventParamValue);
+        let echo = sink
+            .sent
+            .binary_search_by_key(&pv.param_id, |e| e.0)
+            .is_ok_and(|i| (sink.sent[i].1 - pv.value).abs() < ECHO_TOLERANCE);
+        if !echo && sink.read_only.binary_search(&pv.param_id).is_err() {
+            sink.log.push(pv.param_id, pv.value);
+        }
+    }
     true
 }
 
@@ -1224,13 +1395,20 @@ unsafe extern "C" fn event_queue_push_noop(
 // Host params extension — capture the plugin GUI's parameter edits.
 //
 // When the user moves a knob in the plugin's own editor, the plugin calls
-// `clap_host_params.request_flush`. An editor instance is never activated
-// for audio, so we satisfy the flush synchronously on the calling (main)
-// thread: invoke the plugin's `params.flush` with an empty input list and
-// an output list that records every CLAP_EVENT_PARAM_VALUE into the shared
-// queue. The chain instance (sharing that queue) drains it in `process`
-// and re-emits the change to its own audio-side plugin, so editor knob
-// moves are heard live.
+// `clap_host_params.request_flush`. An inactive plug-in (an editor instance
+// is never activated for audio) has the flush done at once on the calling
+// (main) thread: invoke the plugin's `params.flush` with an empty input list
+// and an output list that records every CLAP_EVENT_PARAM_VALUE into the
+// shared queue. The chain instance (sharing that queue) drains it in
+// `process` and re-emits the change to its own audio-side plugin, so editor
+// knob moves are heard live.
+//
+// An active plug-in (the instance that plays, showing its own window) may
+// only be flushed on the audio thread, and never while `process` runs: the
+// request then only sets a flag, and the next block or the audio thread's
+// own flush answers it, with the plug-in's reported changes going to the
+// app's edit log. This used to call `params.flush` right there on the
+// window's thread, at the same time as the audio thread's `process`.
 // ---------------------------------------------------------------------------
 
 static HOST_PARAMS: ClapHostParams = ClapHostParams {
@@ -1308,7 +1486,7 @@ struct ParamCapture {
     /// The same edits again, for the app. `out` is drained on the audio
     /// path, so without a second copy a knob moved in the plug-in's own
     /// window can be heard but never recorded.
-    log: SharedParamQueue,
+    log: SharedEditLog,
 }
 
 /// Output-event sink passed to `params.flush`: records param-value
@@ -1324,28 +1502,8 @@ unsafe extern "C" fn param_capture_push(
     let header = &*event;
     if header.space_id == CLAP_CORE_EVENT_SPACE_ID && header.event_type == CLAP_EVENT_PARAM_VALUE {
         let pv = &*(event as *const ClapEventParamValue);
-        let mut q = cap.out.lock();
-        if let Some(last) = q.last_mut() {
-            if last.0 == pv.param_id {
-                last.1 = pv.value;
-                return true;
-            }
-        }
-        q.push((pv.param_id, pv.value));
-        drop(q);
-        let mut log = cap.log.lock();
-        if let Some(last) = log.last_mut() {
-            if last.0 == pv.param_id {
-                last.1 = pv.value;
-                return true;
-            }
-        }
-        // Bounded: if the app is not draining, the oldest moves go
-        // rather than the memory.
-        if log.len() >= 256 {
-            log.remove(0);
-        }
-        log.push((pv.param_id, pv.value));
+        cap.out.push(pv.param_id, pv.value);
+        cap.log.push(pv.param_id, pv.value);
     }
     true
 }
@@ -1362,6 +1520,34 @@ unsafe extern "C" fn host_params_request_flush(host: *const ClapHost) {
     if ctx.plugin.is_null() {
         return;
     }
+    ctx.flush_requested.store(true, AtomicOrdering::SeqCst);
+    // A few rounds at most: a plug-in that asks again from inside every
+    // flush is answered by its next request instead of looping here.
+    for _ in 0..4 {
+        // A flush already running on a window thread (this one, asked
+        // again from inside it, or another) answers this request.
+        if ctx.window_flush.swap(true, AtomicOrdering::SeqCst) {
+            return;
+        }
+        // Active (or activating): the audio thread answers it.
+        if !ctx.active.load(AtomicOrdering::SeqCst)
+            && ctx.flush_requested.swap(false, AtomicOrdering::SeqCst)
+        {
+            flush_on_window_thread(ctx);
+        }
+        ctx.window_flush.store(false, AtomicOrdering::SeqCst);
+        // Done, unless a request came in meanwhile from a thread that saw
+        // this flush running and left it to us.
+        if ctx.active.load(AtomicOrdering::SeqCst)
+            || !ctx.flush_requested.load(AtomicOrdering::SeqCst)
+        {
+            return;
+        }
+    }
+}
+
+/// `params.flush` on an inactive plug-in, from the thread that asked.
+unsafe fn flush_on_window_thread(ctx: &ClapHostContext) {
     let Ok(id) = CString::new("clap.params") else {
         return;
     };
@@ -1731,8 +1917,12 @@ mod flush_tests {
     unsafe extern "C" fn count(_: *const ClapPlugin) -> u32 {
         1
     }
-    unsafe extern "C" fn get_info(_: *const ClapPlugin, _: u32, _: *mut ClapParamInfo) -> bool {
-        false
+    /// The flags the fake gives its one parameter (id 7).
+    static FLAGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    unsafe extern "C" fn get_info(_: *const ClapPlugin, _: u32, info: *mut ClapParamInfo) -> bool {
+        (*info).id = 7;
+        (*info).flags = FLAGS.load(Ordering::SeqCst);
+        true
     }
     unsafe extern "C" fn get_value(_: *const ClapPlugin, _: u32, out: *mut f64) -> bool {
         *out = f64::from_bits(TAKEN.load(Ordering::SeqCst));
@@ -1755,11 +1945,44 @@ mod flush_tests {
     ) -> bool {
         false
     }
+    /// The fake's own flush count, when a test gives it one in
+    /// `plugin_data`.
+    unsafe fn count_flush(plugin: *const ClapPlugin) {
+        let counter = (*plugin).plugin_data as *const std::sync::atomic::AtomicUsize;
+        if !counter.is_null() {
+            (*counter).fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    /// What the fake reports from its audio side: parameter 42 at 0.66.
+    unsafe fn report(out_events: *const ClapOutputEvents) {
+        if out_events.is_null() {
+            return;
+        }
+        let ev = ClapEventParamValue {
+            header: ClapEventHeader {
+                size: std::mem::size_of::<ClapEventParamValue>() as u32,
+                time: 0,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                event_type: CLAP_EVENT_PARAM_VALUE,
+                flags: 0,
+            },
+            param_id: 42,
+            cookie: std::ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: 0.66,
+        };
+        ((*out_events).try_push)(out_events, &ev.header);
+    }
     unsafe extern "C" fn flush(
-        _: *const ClapPlugin,
+        plugin: *const ClapPlugin,
         in_events: *const ClapInputEvents,
-        _: *const ClapOutputEvents,
+        out_events: *const ClapOutputEvents,
     ) {
+        count_flush(plugin);
+        report(out_events);
         let list = &*in_events;
         for i in 0..(list.size)(in_events) {
             let header = (list.get)(in_events, i);
@@ -1777,9 +2000,19 @@ mod flush_tests {
         text_to_value: to_value,
         flush,
     };
+    unsafe extern "C" fn save(_: *const ClapPlugin, _: *const ClapOstream) -> bool {
+        true
+    }
+    unsafe extern "C" fn load(_: *const ClapPlugin, _: *const ClapIstream) -> bool {
+        true
+    }
+    static STATE: ClapPluginState = ClapPluginState { save, load };
     unsafe extern "C" fn get_extension(_: *const ClapPlugin, id: *const c_char) -> *const c_void {
-        if CStr::from_ptr(id).to_bytes_with_nul() == CLAP_EXT_PARAMS {
+        let id = CStr::from_ptr(id).to_bytes_with_nul();
+        if id == CLAP_EXT_PARAMS {
             &PARAMS as *const ClapPluginParams as *const c_void
+        } else if id == CLAP_EXT_STATE {
+            &STATE as *const ClapPluginState as *const c_void
         } else {
             std::ptr::null()
         }
@@ -1791,17 +2024,13 @@ mod flush_tests {
     unsafe extern "C" fn activate(_: *const ClapPlugin, _: f64, _: u32, _: u32) -> bool {
         true
     }
-    unsafe extern "C" fn process(_: *const ClapPlugin, _: *const ClapProcess) -> i32 {
+    unsafe extern "C" fn process(_: *const ClapPlugin, p: *const ClapProcess) -> i32 {
+        report((*p).out_events);
         0
     }
 
-    /// A value set while no block runs (the song stopped) reaches the
-    /// plug-in through `params.flush`, so the plug-in, its window and its
-    /// saved state have it at once instead of after play starts.
-    #[test]
-    fn a_value_set_between_blocks_reaches_the_plug_in_on_flush() {
-        TAKEN.store(0.333f64.to_bits(), Ordering::SeqCst);
-        let plugin = Box::new(ClapPlugin {
+    fn fake_plugin() -> Box<ClapPlugin> {
+        Box::new(ClapPlugin {
             desc: std::ptr::null(),
             plugin_data: std::ptr::null_mut(),
             init,
@@ -1814,15 +2043,25 @@ mod flush_tests {
             process,
             get_extension,
             on_main_thread: nothing,
-        });
-        let pending_params: SharedParamQueue = Arc::new(Mutex::new(Vec::new()));
+        })
+    }
+
+    /// An active instance of the fake plug-in, with no library behind it.
+    fn fake_instance(plugin: &ClapPlugin) -> ClapPluginInstance {
+        let pending_params: SharedParamQueue = Default::default();
+        let gui_edit_log: SharedEditLog = Default::default();
         let host_ctx = Box::new(ClapHostContext {
-            plugin: &*plugin,
+            plugin,
             resize_request: Arc::new(Mutex::new(None)),
             pending: Arc::clone(&pending_params),
-            gui_edit_log: Arc::new(Mutex::new(Vec::new())),
+            gui_edit_log: Arc::clone(&gui_edit_log),
+            active: AtomicBool::new(true),
+            window_flush: AtomicBool::new(false),
+            flush_requested: AtomicBool::new(false),
         });
-        let mut instance = ClapPluginInstance {
+        let mut host = Box::new(crate::clap_ffi::build_static_host());
+        host.host_data = &*host_ctx as *const ClapHostContext as *mut c_void;
+        ClapPluginInstance {
             descriptor: PluginDescriptor {
                 id: "clap:test.fake".into(),
                 name: "Fake".into(),
@@ -1842,18 +2081,23 @@ mod flush_tests {
             max_block: 256,
             library: None,
             entry: std::ptr::null(),
-            plugin: &*plugin,
-            host: Box::new(crate::clap_ffi::build_static_host()),
+            plugin,
+            host,
             host_ctx,
+            out_sink: Box::new(OutputSink {
+                log: Arc::clone(&gui_edit_log),
+                read_only: Vec::new(),
+                sent: Vec::with_capacity(MAX_BLOCK_EVENTS),
+            }),
             cached_params: Vec::new(),
             latency: 0,
             initialized: true,
             pending_params,
-            gui_edit_log: Arc::new(Mutex::new(Vec::new())),
+            gui_edit_log,
             gui_open: false,
             transport: TransportInfo::default(),
             editor: Arc::new(Mutex::new(ClapEditorSide {
-                plugin: &*plugin,
+                plugin,
                 gui: std::ptr::null(),
                 name: String::new(),
                 open: false,
@@ -1866,19 +2110,223 @@ mod flush_tests {
             event_queue: Box::new(EncodedEventQueue {
                 events: Vec::with_capacity(MAX_BLOCK_EVENTS),
             }),
-        };
+            tail_ext: std::ptr::null(),
+            last_status: CLAP_PROCESS_ERROR,
+            input_silent: false,
+        }
+    }
+
+    /// A value set while no block runs (the song stopped) reaches the
+    /// plug-in through `params.flush`, so the plug-in, its window and its
+    /// saved state have it at once instead of after play starts.
+    #[test]
+    fn a_value_set_between_blocks_reaches_the_plug_in_on_flush() {
+        TAKEN.store(0.333f64.to_bits(), Ordering::SeqCst);
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
         instance.set_parameter_value(7, 0.73);
         assert_eq!(instance.get_parameter_value(7), 0.333, "waits for a block");
         instance.flush_parameters();
         assert_eq!(instance.get_parameter_value(7), 0.73);
-        assert!(
-            instance.pending_params.lock().is_empty(),
-            "handed over once"
-        );
+        assert!(!instance.pending_params.has_pending(), "handed over once");
         // Nothing waiting: nothing is sent.
         TAKEN.store(0.5f64.to_bits(), Ordering::SeqCst);
         instance.flush_parameters();
         assert_eq!(instance.get_parameter_value(7), 0.5);
+        drop(instance);
+    }
+
+    /// More changes than one block's event list holds: the rest used to be
+    /// thrown away with the drained queue. Now they wait for the next block.
+    #[test]
+    fn changes_past_a_full_event_list_arrive_in_the_next_block() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let window = Arc::clone(&instance.pending_params);
+        let total = MAX_BLOCK_EVENTS + 10;
+        for id in 0..total as u32 {
+            window.push(id, 0.5);
+        }
+        instance.take_param_events();
+        assert_eq!(instance.event_queue.events.len(), MAX_BLOCK_EVENTS);
+        assert!(instance.pending_params.has_pending());
+        instance.take_param_events();
+        assert_eq!(instance.event_queue.events.len(), 10);
+        assert!(!instance.pending_params.has_pending());
+        instance.event_queue.events.clear();
+        drop(instance);
+    }
+
+    fn logged(instance: &ClapPluginInstance) -> Vec<(u32, f64)> {
+        let mut out = Vec::new();
+        instance
+            .gui_edit_log
+            .drain(usize::MAX, |id, v| out.push((id, v)));
+        out
+    }
+
+    /// A playing plug-in that asks for a flush from its window is not
+    /// flushed there, at the same time as the audio thread's `process`: the
+    /// request waits for the audio thread, whose flush hands the plug-in's
+    /// reported change to the app.
+    #[test]
+    fn a_flush_asked_for_while_active_is_done_on_the_audio_thread() {
+        let flushes = Box::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut plugin = fake_plugin();
+        plugin.plugin_data = &*flushes as *const _ as *mut c_void;
+        let mut instance = fake_instance(&plugin);
+        unsafe { host_params_request_flush(&*instance.host) };
+        assert_eq!(
+            flushes.load(Ordering::SeqCst),
+            0,
+            "not on the window's thread"
+        );
+        assert!(instance.host_ctx.flush_requested.load(Ordering::SeqCst));
+        instance.flush_parameters();
+        assert_eq!(flushes.load(Ordering::SeqCst), 1, "on the audio thread");
+        assert!(!instance.host_ctx.flush_requested.load(Ordering::SeqCst));
+        assert_eq!(logged(&instance), vec![(42, 0.66)]);
+        instance.flush_parameters();
+        assert_eq!(flushes.load(Ordering::SeqCst), 1, "answered once");
+        drop(instance);
+    }
+
+    /// An inactive plug-in (a window's own copy) is flushed at once, and its
+    /// change goes to the queue the playing copy takes, and to the app.
+    #[test]
+    fn a_flush_asked_for_while_inactive_is_done_at_once() {
+        let flushes = Box::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut plugin = fake_plugin();
+        plugin.plugin_data = &*flushes as *const _ as *mut c_void;
+        let mut instance = fake_instance(&plugin);
+        instance.host_ctx.active.store(false, Ordering::SeqCst);
+        unsafe { host_params_request_flush(&*instance.host) };
+        assert_eq!(flushes.load(Ordering::SeqCst), 1);
+        assert!(!instance.host_ctx.window_flush.load(Ordering::SeqCst));
+        let mut queued = Vec::new();
+        instance
+            .pending_params
+            .drain(usize::MAX, |id, v| queued.push((id, v)));
+        assert_eq!(queued, vec![(42, 0.66)]);
+        assert_eq!(logged(&instance), vec![(42, 0.66)]);
+        instance.active = false;
+        instance.processing = false;
+        drop(instance);
+    }
+
+    /// What a plug-in reports from `process` reaches the app (the output
+    /// list was a no-op), except read-only parameters.
+    #[test]
+    fn changes_a_plug_in_reports_while_playing_reach_the_app() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let input = vec![0.25f32; 16];
+        let mut outputs = vec![vec![0.0f32; 16]; 2];
+        instance.process(&[&input, &input], &mut outputs, &[], &mut Vec::new(), 16);
+        assert_eq!(logged(&instance), vec![(42, 0.66)]);
+
+        instance.out_sink.read_only = vec![42];
+        instance.process(&[&input, &input], &mut outputs, &[], &mut Vec::new(), 16);
+        assert!(logged(&instance).is_empty(), "a meter is not a knob move");
+        instance.event_queue.events.clear();
+        drop(instance);
+    }
+
+    /// The plug-in reads `num_samples` from every input channel it is told
+    /// about: a short input, or none at all, is filled out with silence.
+    #[test]
+    fn every_input_the_plug_in_reads_is_the_block_s_length() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let short = vec![0.5f32; 8];
+        let mut outputs = vec![vec![0.0f32; 16]; 2];
+        instance.process(&[&short, &short], &mut outputs, &[], &mut Vec::new(), 16);
+        assert!(instance.input_scratch.iter().take(2).all(|c| c.len() == 16));
+        assert_eq!(instance.input_scratch[0][7], 0.5);
+        assert_eq!(instance.input_scratch[0][8], 0.0);
+        assert_eq!(instance.input_ptrs.len(), 2);
+
+        instance.process(&[], &mut outputs, &[], &mut Vec::new(), 16);
+        assert_eq!(instance.input_ptrs.len(), 1, "the one channel it is given");
+        assert_eq!(instance.input_scratch[0].len(), 16);
+        assert!(instance.input_scratch[0].iter().all(|s| *s == 0.0));
+        instance.event_queue.events.clear();
+        drop(instance);
+    }
+
+    /// Knob moves made before a state load are older than it: they are
+    /// dropped instead of being handed over after it.
+    #[test]
+    fn a_state_load_drops_the_changes_made_before_it() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        instance.pending_params.push(3, 0.9);
+        instance.set_parameter_value(4, 0.1);
+        instance.set_state(&[1, 2, 3]).unwrap();
+        assert!(!instance.pending_params.has_pending());
+        instance.set_parameter_value(4, 0.2);
+        assert!(
+            instance.pending_params.has_pending(),
+            "a change after it stays"
+        );
+        drop(instance);
+    }
+
+    /// The plug-in repeating, from its audio side, the value the host sent
+    /// it this block (automation playing back) is not a knob move:
+    /// automation write would record it as one.
+    #[test]
+    fn an_echo_of_what_the_host_sent_is_not_recorded() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let input = vec![0.25f32; 16];
+        let mut outputs = vec![vec![0.0f32; 16]; 2];
+        // The fake reports parameter 42 at 0.66 every block.
+        instance.set_parameter_value(42, 0.66);
+        instance.process(&[&input, &input], &mut outputs, &[], &mut Vec::new(), 16);
+        assert!(logged(&instance).is_empty(), "an echo");
+        instance.set_parameter_value(42, 0.5);
+        instance.process(&[&input, &input], &mut outputs, &[], &mut Vec::new(), 16);
+        assert_eq!(logged(&instance), vec![(42, 0.66)], "a move of its own");
+        instance.event_queue.events.clear();
+        drop(instance);
+    }
+
+    /// A knob moved in the window, or a flush asked for, makes a sleeping
+    /// plug-in be called (smart disable asks this).
+    #[test]
+    fn a_waiting_change_is_reported_to_smart_disable() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        assert!(!instance.has_pending_changes());
+        instance.pending_params.push(3, 0.5);
+        assert!(instance.has_pending_changes());
+        instance.flush_parameters();
+        assert!(!instance.has_pending_changes());
+        unsafe { host_params_request_flush(&*instance.host) };
+        assert!(instance.has_pending_changes());
+        instance.flush_parameters();
+        assert!(!instance.has_pending_changes());
+        drop(instance);
+    }
+
+    /// CLAP_PARAM_IS_AUTOMATABLE is bit 5. Bit 0, read before, is
+    /// CLAP_PARAM_IS_STEPPED.
+    #[test]
+    fn a_clap_parameter_is_automatable_by_its_own_flag() {
+        let plugin = fake_plugin();
+        let mut instance = fake_instance(&plugin);
+        let read = |instance: &mut ClapPluginInstance, flags: u32| {
+            FLAGS.store(flags, Ordering::SeqCst);
+            instance.refresh_params();
+            instance.cached_params[0].automatable
+        };
+        assert!(read(&mut instance, 1 << 5));
+        assert!(!read(&mut instance, 1), "stepped alone is not automatable");
+        assert!(read(&mut instance, (1 << 5) | 1));
+        assert!(instance.out_sink.read_only.is_empty());
+        read(&mut instance, 1 << 3);
+        assert_eq!(instance.out_sink.read_only, vec![7], "read-only is listed");
         drop(instance);
     }
 }

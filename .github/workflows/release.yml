@@ -232,9 +232,10 @@ jobs:
   updater-feeds-check:
     name: Updater feeds (before the build)
     runs-on: ubuntu-latest
-    # No environment here, on purpose: v0.266.47 is signed with the old key,
-    # which is still the repository secret. From v0.266.48 on, the secret
-    # lives in the environment daw-release, which only v* tags may use.
+    # The updater signing secret lives in this environment, which only v*
+    # tags may use (create-environment.sh on HQ), not in a repository secret
+    # that a workflow pushed to any branch could read.
+    environment: daw-release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -267,6 +268,9 @@ jobs:
     # Publishes the release, so it alone may write.
     permissions:
       contents: write
+    # The only other job that gets the updater signing secret (see
+    # updater-feeds-check).
+    environment: daw-release
     needs: [frontend, changelog, lint-and-test, ui-tests, secure-code-check, updater-feeds-check]
     strategy:
       fail-fast: false

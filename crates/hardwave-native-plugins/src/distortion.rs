@@ -8,12 +8,13 @@
 //! lands in a follow-up commit.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::distortion::{
     bitcrush, drive_compensate, hard_clip, parallel_mix, soft_clip, tape_saturation, tube_emulation,
 };
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -405,6 +406,12 @@ impl HostedPlugin for NativeDistortion {
             self.output_db = v;
         }
         Ok(())
+    }
+
+    /// Only the oversampler's filters hold anything, and only while it is
+    /// on.
+    fn tail(&self) -> Tail {
+        tail::from_secs(tail::oversampler_secs(self.oversample), self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {

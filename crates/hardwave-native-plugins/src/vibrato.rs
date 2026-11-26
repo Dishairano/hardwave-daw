@@ -8,7 +8,7 @@ use crate::format;
 use hardwave_dsp::modulation::ModulatedDelay;
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -217,6 +217,22 @@ impl HostedPlugin for NativeVibrato {
         }
         self.refresh();
         Ok(())
+    }
+
+    /// The delay line has no feedback: at most its whole length later.
+    fn tail(&self) -> Tail {
+        Tail::Samples(MAX_DELAY_SAMPLES as u32)
+    }
+
+    /// The LFOs run on through silence. The delay line moves its
+    /// sweep and write position on as running silence through it would,
+    /// without reading or writing the line.
+    fn skip_silence(&mut self, num_samples: usize) {
+        if !self.active {
+            return;
+        }
+        self.delay_l.skip(num_samples);
+        self.delay_r.skip(num_samples);
     }
 
     fn latency_samples(&self) -> u32 {

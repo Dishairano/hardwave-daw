@@ -3,10 +3,11 @@
 //! range (dB of attenuation), attack/release, hysteresis.
 
 use crate::format;
+use crate::tail;
 use hardwave_dsp::dynamics::{gate_gain, linear_to_db, DetectMode, EnvelopeFollower};
 use hardwave_midi::MidiEvent;
 use hardwave_plugin_host::types::{
-    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat,
+    HostedPlugin, ParameterInfo, PluginCategory, PluginDescriptor, PluginFormat, Tail,
 };
 use raw_window_handle::RawWindowHandle;
 use std::path::PathBuf;
@@ -307,6 +308,14 @@ impl HostedPlugin for NativeGate {
         self.env_r
             .set_times(self.attack_ms, self.release_ms, self.sample_rate);
         Ok(())
+    }
+
+    /// The input times a gain, so nothing rings; but the detector has to
+    /// fall back below the threshold, closing the gate, so the next sound
+    /// opens it the way it would have.
+    fn tail(&self) -> Tail {
+        let secs = tail::release_secs(self.release_ms as f64 / 1000.0);
+        tail::from_secs(secs, self.sample_rate)
     }
 
     fn latency_samples(&self) -> u32 {
