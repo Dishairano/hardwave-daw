@@ -68,12 +68,16 @@ const TO_CHILD_DEPTH: usize = 8;
 static REGISTRY: Mutex<Vec<SandboxEntry>> = Mutex::new(Vec::new());
 
 /// Forget the sandboxes nothing uses any more: the plug-in was removed,
-/// or it was a copy made for a freeze or an export. Their entries were
+/// or it was a copy made for a freeze or an export. One whose process
+/// has been let go counts as unused whoever still holds a handle to it
+/// (the list of plug-in windows keeps one until the slot is used again):
+/// after a new song the old song's plug-ins stayed in the counters. Their entries were
 /// kept for the whole run, each holding the plug-in's last state, and
 /// showed in the counters as plug-ins that had stopped playing.
 fn forget_finished(registry: &mut Vec<SandboxEntry>) {
     registry.retain(|entry| {
-        entry.crashed.load(Ordering::Relaxed) || Arc::strong_count(&entry.shared) > 1
+        entry.crashed.load(Ordering::Relaxed)
+            || (Arc::strong_count(&entry.shared) > 1 && !entry.shared.ended.load(Ordering::Relaxed))
     });
 }
 
@@ -470,6 +474,8 @@ struct Shared {
     values_epoch: AtomicU64,
     /// An export is driving it: a block may take as long as it takes.
     patient: AtomicBool,
+    /// The bridge has ended and the process has been let go.
+    ended: AtomicBool,
     /// What the audio thread did with this plug-in, counted, for telling
     /// where blocks stop when a plug-in in its own process plays nothing.
     stats: BlockStats,
@@ -1520,6 +1526,7 @@ fn bridge_loop(
     }
 
     bridge_done.store(true, Ordering::Relaxed);
+    shared.ended.store(true, Ordering::Relaxed);
     trace.line("bridge ends");
     if let Ok(mut child) = child.lock() {
         let _ = child.kill();
@@ -1652,6 +1659,10 @@ mod tests {
             entry("dropped", &dropped, false),
             entry("crashed", &crashed, true),
         ];
+        // Its process was let go, though something still holds a handle.
+        let let_go = Arc::new(Shared::default());
+        let_go.ended.store(true, Ordering::Relaxed);
+        registry.push(entry("let go", &let_go, false));
         drop(dropped);
         drop(crashed);
         forget_finished(&mut registry);
