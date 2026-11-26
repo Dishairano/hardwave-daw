@@ -963,7 +963,8 @@ pub fn run() {
             diagnostics::diagnostics_info,
         ]))
         .setup(move |app| {
-            // No main window (WebView2 did not start): start again or say why, never run unseen.
+            // The main window is built here, not by Tauri (tauri.conf.json: "create": false),
+            // so a WebView2 that is slow to start is tried again instead of ending the app.
             main_window::ensure(app.handle());
             // Watch the main thread from the start, not only while the FPS
             // meter is open: a stuck main thread has to leave a line in the log.
