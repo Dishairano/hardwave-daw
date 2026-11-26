@@ -2599,9 +2599,8 @@ export function App() {
           { label: 'Re-run setup…', action: () => useSetupWizardStore.getState().open() },
           { separator: true, label: '' },
           { label: 'Manual', action: () => setShowManual(true) },
-          { label: 'Release notes', action: () => window.open('https://github.com/Dishairano/hardwave-daw/releases', '_blank', 'noopener,noreferrer') },
+          { label: 'Release notes', action: () => window.open('https://hardwavestudios.com/changelog', '_blank', 'noopener,noreferrer') },
           { label: 'Report a bug…', action: () => setBugReport({ open: true, afterCrash: false }) },
-          { label: 'Report an issue on GitHub', action: () => window.open('https://github.com/Dishairano/hardwave-daw/issues', '_blank', 'noopener,noreferrer') },
           {
             label: 'Export diagnostics…',
             action: async () => {
