@@ -224,17 +224,17 @@ export function WelcomeScreen({
             fontSize: 12,
           }}>
             <DocLink
-              href="https://github.com/Dishairano/hardwave-daw#readme"
+              href="https://hardwavestudios.com/learn"
               label={t('Read the docs')}
-              hint={t('Project README on GitHub')}
+              hint={t('Guides on hardwavestudios.com')}
             />
             <DocLink
-              href="https://github.com/Dishairano/hardwave-daw/releases"
+              href="https://hardwavestudios.com/changelog"
               label={t('Release notes')}
               hint={t('Changelog for every version')}
             />
             <DocLink
-              href="https://github.com/Dishairano/hardwave-daw/issues"
+              href="https://hardwavestudios.com/report-a-bug"
               label={t('Report an issue')}
               hint={t('Bug reports and feature requests')}
             />

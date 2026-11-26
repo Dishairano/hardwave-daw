@@ -39,16 +39,19 @@ def sig(key: str, version: str, file: str = "x") -> str:
     return b64(text.encode())
 
 
-def conf(version: str, *, endpoint: str = feeds.V2_ENDPOINT, pubkey: str = NEW_PUBKEY,
+def conf(version: str, *, endpoints=None, pubkey: str = NEW_PUBKEY,
          require_signed_version=True) -> dict:
-    return {"version": version, "pubkey": pubkey, "endpoints": [endpoint],
+    if endpoints is None:  # what a release of that version reads
+        endpoints = feeds.endpoints_for(feeds.version_of_tag("v" + version)[1])
+    return {"version": version, "pubkey": pubkey, "endpoints": endpoints,
             "require_signed_version": require_signed_version}
 
 
 def launcher(era: str, **changes) -> dict:
-    """The launcher as load_launcher reads it, for the bridge release or the ones after it."""
-    found = {"bridge": {"pubkey": feeds.old_pubkey(), "feed": None, "api": True},
-             "after": {"pubkey": NEW_PUBKEY, "feed": feeds.V2_ENDPOINT, "api": True}}[era]
+    """The launcher as load_launcher reads it: of the bridge release, of v0.266.48 (GitHub only), or of the ones after."""
+    found = {"bridge": {"pubkey": feeds.old_pubkey(), "feeds": None, "api": True},
+             "v0.266.48": {"pubkey": NEW_PUBKEY, "feeds": [feeds.V2_ENDPOINT], "api": True},
+             "after": {"pubkey": NEW_PUBKEY, "feeds": list(feeds.ENDPOINTS), "api": True}}[era]
     found.update(changes)
     return found
 
@@ -88,51 +91,70 @@ class Plan(unittest.TestCase):
     def test_only_releases_after_the_bridge_freeze_latest_json(self):
         self.assertEqual(feeds.plan("v0.266.47", conf("0.266.47"), launcher("bridge")), {"frozen": False})
         self.assertEqual(feeds.plan("v0.266.47-rc1", conf("0.266.47-rc1"), launcher("bridge")), {"frozen": False})
-        self.assertEqual(feeds.plan("v0.266.48", conf("0.266.48"), launcher("after")), {"frozen": True})
+        self.assertEqual(feeds.plan("v0.266.48", conf("0.266.48"), launcher("v0.266.48")), {"frozen": True})
+        self.assertEqual(feeds.plan("v0.266.49", conf("0.266.49"), launcher("after")), {"frozen": True})
         self.assertEqual(feeds.plan("v0.267.0-rc1", conf("0.267.0-rc1"), launcher("after")), {"frozen": True})
 
     def test_the_app_must_read_the_v2_feed_and_trust_the_new_key(self):
-        with self.assertRaisesRegex(feeds.FeedError, "latest-v2.json and nothing else"):
-            feeds.plan("v0.266.48", conf("0.266.48", endpoint=feeds.V2_ENDPOINT.replace("-v2", "")),
-                       launcher("after"))
+        own, github = feeds.ENDPOINTS
+        self.assertTrue(own.startswith("https://hardwavestudios.com/"))
+        self.assertTrue(github.startswith("https://github.com/Dishairano/hardwave-daw/"))
+        for wrong in ([github],                              # GitHub only: stops when the repository is private
+                      [own],                                 # no second address when our site is down
+                      [github, own],                         # the wrong way round
+                      [own, github.replace("-v2", "")],      # the frozen feed of old installs
+                      [own.replace("-v2", ""), github],
+                      [own, github, "https://example.com/latest-v2.json"],
+                      [], own):
+            with self.assertRaisesRegex(feeds.FeedError, "our own site first and the GitHub release second"):
+                feeds.plan("v0.266.49", conf("0.266.49", endpoints=wrong), launcher("after"))
+        # v0.266.47 and v0.266.48 are out: they read the GitHub release only.
+        self.assertEqual(feeds.endpoints_for((0, 266, 48)), [github])
+        self.assertEqual(feeds.endpoints_for((0, 266, 49)), [own, github])
+        with self.assertRaisesRegex(feeds.FeedError, "from the GitHub release, and nothing else"):
+            feeds.plan("v0.266.48", conf("0.266.48", endpoints=[own, github]), launcher("v0.266.48"))
         with self.assertRaisesRegex(feeds.FeedError, "stolen"):
             feeds.plan("v0.266.47", conf("0.266.47", pubkey=feeds.old_pubkey()), launcher("bridge"))
         with self.assertRaisesRegex(feeds.FeedError, "the tag says"):
-            feeds.plan("v0.266.48", conf("0.266.47"), launcher("after"))
+            feeds.plan("v0.266.49", conf("0.266.47"), launcher("after"))
         with self.assertRaisesRegex(feeds.FeedError, "not a release tag"):
-            feeds.plan("fast-v1", conf("0.266.48"), launcher("after"))
+            feeds.plan("fast-v1", conf("0.266.49"), launcher("after"))
 
     def test_the_app_must_require_the_signed_version(self):
         for value in (None, False, "true"):
             with self.assertRaisesRegex(feeds.FeedError, "requireSignedVersion"):
-                feeds.plan("v0.266.48", conf("0.266.48", require_signed_version=value), launcher("after"))
+                feeds.plan("v0.266.49", conf("0.266.49", require_signed_version=value), launcher("after"))
 
     def test_the_bridge_launcher_trusts_the_old_key_and_asks_the_github_api(self):
         with self.assertRaisesRegex(feeds.FeedError, "would refuse every download"):
             feeds.plan("v0.266.47", conf("0.266.47"), launcher("bridge", pubkey=NEW_PUBKEY))
         with self.assertRaisesRegex(feeds.FeedError, "through the GitHub API"):
-            feeds.plan("v0.266.47", conf("0.266.47"), launcher("bridge", feed=feeds.V2_ENDPOINT))
+            feeds.plan("v0.266.47", conf("0.266.47"), launcher("bridge", feeds=list(feeds.ENDPOINTS)))
         with self.assertRaisesRegex(feeds.FeedError, "does not ask"):
             feeds.plan("v0.266.47", conf("0.266.47"), launcher("bridge", api=False))
 
     def test_later_launchers_trust_the_apps_key_and_read_latest_v2(self):
         with self.assertRaisesRegex(feeds.FeedError, "would refuse every download"):
-            feeds.plan("v0.266.48", conf("0.266.48"), launcher("after", pubkey=feeds.old_pubkey()))
-        with self.assertRaisesRegex(feeds.FeedError, "must read .*latest-v2.json"):
-            feeds.plan("v0.266.48", conf("0.266.48"), launcher("after", feed=None))
-        with self.assertRaisesRegex(feeds.FeedError, "must read .*latest-v2.json"):
-            feeds.plan("v0.266.48", conf("0.266.48"),
-                       launcher("after", feed=feeds.V2_ENDPOINT.replace("-v2", "")))
+            feeds.plan("v0.266.49", conf("0.266.49"), launcher("after", pubkey=feeds.old_pubkey()))
+        for wrong in (None, [], [feeds.V2_ENDPOINT], [feeds.V2_ENDPOINT, feeds.OWN_V2_ENDPOINT],
+                      [feeds.OWN_V2_ENDPOINT, feeds.V2_ENDPOINT.replace("-v2", "")]):
+            with self.assertRaisesRegex(feeds.FeedError, "same addresses as the app"):
+                feeds.plan("v0.266.49", conf("0.266.49"), launcher("after", feeds=wrong))
 
     def test_the_launcher_is_read_from_its_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "install.rs"
             path.write_text(f'const UPDATER_PUBKEY: &str = "{NEW_PUBKEY}";\n'
-                            f'const FEED_URL: &str =\n    "{feeds.V2_ENDPOINT}";\n'
+                            f'const FEED_URLS: [&str; 2] = [\n    "{feeds.OWN_V2_ENDPOINT}",\n'
+                            f'    "{feeds.V2_ENDPOINT}",\n];\n'
                             f'fn f() {{ get("{feeds.LAUNCHER_API}") }}\n')
             self.assertEqual(feeds.load_launcher(path), launcher("after"))
             path.write_text(f'const UPDATER_PUBKEY: &str = "{NEW_PUBKEY}";\n')
-            self.assertEqual(feeds.load_launcher(path), {"pubkey": NEW_PUBKEY, "feed": None, "api": False})
+            self.assertEqual(feeds.load_launcher(path), {"pubkey": NEW_PUBKEY, "feeds": None, "api": False})
+            path.write_text(f'const UPDATER_PUBKEY: &str = "{NEW_PUBKEY}";\n'
+                            f'const FEED_URLS: [&str; 2] = ["{feeds.OWN_V2_ENDPOINT}", OTHER];\n')
+            with self.assertRaisesRegex(feeds.FeedError, "not a plain string"):
+                feeds.load_launcher(path)
             path.write_text("fn main() {}\n")
             with self.assertRaisesRegex(feeds.FeedError, "UPDATER_PUBKEY"):
                 feeds.load_launcher(path)
@@ -141,7 +163,7 @@ class Plan(unittest.TestCase):
         app = feeds.load_conf(ROOT / "src-tauri" / "tauri.conf.json")
         found = feeds.load_launcher(ROOT / "installer" / "src-tauri" / "src" / "install.rs")
         passed = []
-        for tag in ("v0.266.47", "v0.266.48"):
+        for tag in ("v0.266.47", "v0.266.48", "v0.266.49"):
             try:
                 feeds.plan(tag, dict(app, version=tag[1:]), found)
                 passed.append(tag)
@@ -292,7 +314,7 @@ class FrozenFeed(unittest.TestCase):
             feeds.frozen(raw, sigs, bridge_conf, conf("0.266.49"))
 
     def test_the_bridge_must_lead_on_to_the_new_feed_and_key(self):
-        raw, sigs, bridge_conf = self.bridge(endpoint=feeds.V2_ENDPOINT.replace("-v2", ""))
+        raw, sigs, bridge_conf = self.bridge(endpoints=[feeds.V2_ENDPOINT.replace("-v2", "")])
         with self.assertRaisesRegex(feeds.FeedError, "never see a newer release"):
             feeds.frozen(raw, sigs, bridge_conf, conf("0.266.49"))
         raw, sigs, bridge_conf = self.bridge(pubkey=feeds.old_pubkey())

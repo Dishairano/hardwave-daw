@@ -65,13 +65,19 @@ fn emit(app: &AppHandle, phase: &str, percent: u32, message: &str) {
 /// Launchers up to v0.266.47 hold the old key and refuse these releases.
 const UPDATER_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFBQzc5ODA1MzM1Q0UzNjYKUldSbTQxd3pCWmpIcXVPeFE1NjcxUkcrUTBSTVRZK1U2dS8vOXdJRkRMcW52UXl3eHU5R0pHQ2EK";
 
-/// The update feed the DAW itself reads (src-tauri/tauri.conf.json; a test
-/// keeps the two equal). It names the installer of the newest release and
-/// carries that installer's signature, and from v0.266.48 on it is the one
-/// feed signed with UPDATER_PUBKEY: the older latest.json stays on
-/// v0.266.47 for DAWs that only trust the old key.
-const FEED_URL: &str =
-    "https://github.com/Dishairano/hardwave-daw/releases/latest/download/latest-v2.json";
+/// The update feeds the DAW itself reads, in the order it reads them
+/// (src-tauri/tauri.conf.json; a test keeps the two equal): our own site
+/// first, the GitHub release second, so an install does not depend on the
+/// GitHub repository being reachable. Both are the same feed: it names the
+/// installer of the newest release and carries that installer's signature,
+/// and from v0.266.48 on it is the one feed signed with UPDATER_PUBKEY (the
+/// older latest.json stays on v0.266.47 for DAWs that only trust the old
+/// key). Wherever the feed and the installer come from, the installer runs
+/// only when UPDATER_PUBKEY signed it.
+const FEED_URLS: [&str; 2] = [
+    "https://hardwavestudios.com/api/updates/hardwave-daw/latest-v2.json",
+    "https://github.com/Dishairano/hardwave-daw/releases/latest/download/latest-v2.json",
+];
 
 /// The feed entry the launcher installs from: the NSIS installer on
 /// Windows. The feed has nothing the launcher can run on macOS or Linux
@@ -382,17 +388,16 @@ async fn resolve_download() -> Result<(String, String), String> {
         .map_err(|e| e.to_string())?;
 
     if let Some(entry) = feed_entry() {
-        let feed: serde_json::Value = client
-            .get(FEED_URL)
-            .send()
-            .await
-            .map_err(|e| format!("Could not reach the Hardwave DAW update feed: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("Could not read the Hardwave DAW update feed: {e}"))?
-            .json()
-            .await
-            .map_err(|e| format!("The Hardwave DAW update feed is damaged: {e}"))?;
-        return installer_in_feed(&feed, entry);
+        // The first feed that answers with an installer wins; the next one
+        // is asked only when a feed cannot be reached or read.
+        let mut last_error = String::from("No Hardwave DAW update feed is configured");
+        for feed_url in FEED_URLS {
+            match installer_from_feed(&client, feed_url, entry).await {
+                Ok(found) => return Ok(found),
+                Err(why) => last_error = why,
+            }
+        }
+        return Err(last_error);
     }
 
     // The latest full release only: a release candidate is for testers
@@ -433,6 +438,25 @@ async fn resolve_download() -> Result<(String, String), String> {
              https://github.com/Dishairano/hardwave-daw/releases/latest"
         )),
     }
+}
+
+/// The installer and signature one update feed names for `entry`.
+async fn installer_from_feed(
+    client: &reqwest::Client,
+    feed_url: &str,
+    entry: &str,
+) -> Result<(String, String), String> {
+    let feed: serde_json::Value = client
+        .get(feed_url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach the Hardwave DAW update feed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Could not read the Hardwave DAW update feed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("The Hardwave DAW update feed is damaged: {e}"))?;
+    installer_in_feed(&feed, entry)
 }
 
 async fn fetch_text(url: &str) -> Result<String, String> {
@@ -545,14 +569,43 @@ mod tests {
     }
 
     /// The launcher installs what the DAW's own updater would offer: the
-    /// feed signed with the key both trust, not the frozen latest.json.
+    /// feed signed with the key both trust, not the frozen latest.json,
+    /// from the same addresses in the same order.
     #[test]
-    fn the_launcher_reads_the_feed_the_daw_reads() {
+    fn the_launcher_reads_the_feeds_the_daw_reads() {
         let conf = include_str!("../../../src-tauri/tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(conf).unwrap();
         assert_eq!(
             conf["plugins"]["updater"]["endpoints"],
-            serde_json::json!([FEED_URL])
+            serde_json::json!(FEED_URLS)
+        );
+        assert!(
+            FEED_URLS[0].starts_with("https://hardwavestudios.com/"),
+            "our own site is asked first"
+        );
+    }
+
+    /// Our own site names the installer on our own site; the launcher
+    /// takes the address as the feed gives it.
+    #[test]
+    fn an_installer_on_our_own_site_is_taken_from_the_feed() {
+        let feed = serde_json::json!({
+            "version": "0.266.49",
+            "notes": "",
+            "pub_date": "2026-12-01T10:00:00Z",
+            "platforms": {
+                "windows-x86_64-nsis": {
+                    "signature": "ZXhl",
+                    "url": "https://hardwavestudios.com/api/daw/download/0.266.49/Hardwave.DAW_0.266.49_x64-setup.exe"
+                }
+            }
+        });
+        assert_eq!(
+            installer_in_feed(&feed, "windows-x86_64-nsis"),
+            Ok((
+                "https://hardwavestudios.com/api/daw/download/0.266.49/Hardwave.DAW_0.266.49_x64-setup.exe".to_string(),
+                "ZXhl".to_string()
+            ))
         );
     }
 

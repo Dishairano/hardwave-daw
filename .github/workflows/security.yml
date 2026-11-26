@@ -48,9 +48,9 @@ concurrency:
 jobs:
   check:
     name: Secure Code Check
-    uses: Dishairano/hardwave-secure-code-check/.github/workflows/secure-code-check.yml@70a4fad048a7cbbdec6568dd2df87fd3aa21f66e # shared Secure Code Check
+    uses: Dishairano/hardwave-secure-code-check/.github/workflows/secure-code-check.yml@53d55aa79f1839e2ac000bc7cbb017e0387d9da4 # shared Secure Code Check
     with:
-      tools-ref: 70a4fad048a7cbbdec6568dd2df87fd3aa21f66e
+      tools-ref: 53d55aa79f1839e2ac000bc7cbb017e0387d9da4
       cargo-manifests: |
         Cargo.toml
         installer/src-tauri/Cargo.toml

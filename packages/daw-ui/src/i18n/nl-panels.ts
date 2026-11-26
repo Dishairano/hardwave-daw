@@ -242,7 +242,7 @@ export const nlPanels: Record<string, string> = {
   'Full keyboard cheat sheet': 'Volledig overzicht van de sneltoetsen',
   'Documentation & help': 'Documentatie & hulp',
   'Read the docs': 'De documentatie lezen',
-  'Project README on GitHub': 'README van het project op GitHub',
+  'Guides on hardwavestudios.com': 'Handleidingen op hardwavestudios.com',
   'Release notes': 'Release notes',
   'Changelog for every version': 'Wijzigingen in elke versie',
   'Report an issue': 'Een probleem melden',

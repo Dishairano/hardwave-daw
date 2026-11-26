@@ -105,7 +105,6 @@ export const nl: Record<string, string> = {
   'Roadmap': 'Roadmap',
   'Re-run setup…': 'Instellen opnieuw doorlopen…',
   'Report a bug…': 'Een fout melden…',
-  'Report an issue on GitHub': 'Een probleem melden op GitHub',
   'Export diagnostics…': 'Diagnose exporteren…',
   'Check for updates…': 'Controleren op updates…',
   'About Hardwave DAW': 'Over Hardwave DAW',
