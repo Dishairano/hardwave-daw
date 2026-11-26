@@ -8,6 +8,6 @@
 - fix: the threads that carry audio to and from a plug-in's own process run at the audio priority, so a busy computer does not cause gaps in that plug-in's sound
 
 ### Improvements
-- improve: a plug-in in its own process is heard exactly one buffer later, always. Before, one slow moment could leave its track a buffer further behind the others for the rest of the session
+- improve: a plug-in in its own process is heard exactly one buffer later, always, also on a sound card that asks for its audio in uneven portions. Before, one slow moment could leave its track a buffer further behind the others for the rest of the session
 - improve: a plug-in in its own process now gets the sidechain, reports its own delay to delay compensation, lists its own presets, and can be saved as a .vstpreset
 - improve: exporting, bouncing and freezing wait for a plug-in in its own process, so it renders every sample and adds no delay; if such a plug-in stops during a render you are told, and the file with a gap in it is not kept
