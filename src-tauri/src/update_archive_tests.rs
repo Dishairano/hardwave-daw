@@ -52,12 +52,15 @@ fn app() -> tauri::App<MockRuntime> {
         .expect("the app builds on the mock runtime")
 }
 
-/// The update endpoint the shipped app asks, from tauri.conf.json.
-fn endpoint(app: &tauri::App<MockRuntime>) -> String {
-    app.config().plugins.0["updater"]["endpoints"][0]
-        .as_str()
-        .expect("tauri.conf.json names an update endpoint")
-        .to_string()
+/// The update endpoints the shipped app asks, in order, from tauri.conf.json:
+/// our own site first, the GitHub release second. Both serve the same feed.
+fn endpoints(app: &tauri::App<MockRuntime>) -> Vec<String> {
+    app.config().plugins.0["updater"]["endpoints"]
+        .as_array()
+        .expect("tauri.conf.json names its update endpoints")
+        .iter()
+        .map(|e| e.as_str().expect("an endpoint is a string").to_string())
+        .collect()
 }
 
 /// Where the feeds and archives come from: "live" (GitHub) or the fixtures folder.
@@ -196,11 +199,14 @@ fn the_old_feed_offers_an_update_old_installs_accept() {
 fn the_new_feed_offers_an_update_signed_with_the_key_its_readers_trust() {
     tauri::async_runtime::block_on(async {
         let app = app();
-        assert!(
-            endpoint(&app).ends_with("/latest/download/latest-v2.json"),
-            "from v0.266.47 on the app reads latest-v2.json, not {}",
-            endpoint(&app)
-        );
+        let endpoints = endpoints(&app);
+        assert!(!endpoints.is_empty(), "the app asks at least one endpoint");
+        for endpoint in &endpoints {
+            assert!(
+                endpoint.ends_with("/latest-v2.json"),
+                "from v0.266.47 on the app reads latest-v2.json, not {endpoint}"
+            );
+        }
         let newest = offered(&feed(OLD_FEED).await);
         if newest < BRIDGE {
             println!(
@@ -210,20 +216,24 @@ fn the_new_feed_offers_an_update_signed_with_the_key_its_readers_trust() {
             );
             return;
         }
-        let manifest = feed(&endpoint(&app)).await;
-        let bridge = offered(&manifest) == BRIDGE;
-        let pubkey = bridge.then_some(OLD_PUBKEY);
-        check_update(&app, &manifest, pubkey).await;
-        println!(
-            "update_archive: verified latest-v2.json ({}): offers {}, signed with {}, \
-             unpacks to the installer we signed",
-            source(),
-            manifest["version"].as_str().unwrap_or_default(),
-            if bridge {
-                "the old key"
-            } else {
-                "the key in tauri.conf.json"
-            }
-        );
+        // Every endpoint, each through the whole update: its own feed, the
+        // archive at the address that feed gives, the signature, the unpack.
+        for endpoint in &endpoints {
+            let manifest = feed(endpoint).await;
+            let bridge = offered(&manifest) == BRIDGE;
+            let pubkey = bridge.then_some(OLD_PUBKEY);
+            check_update(&app, &manifest, pubkey).await;
+            println!(
+                "update_archive: verified latest-v2.json ({}, {endpoint}): offers {}, signed with {}, \
+                 unpacks to the installer we signed",
+                source(),
+                manifest["version"].as_str().unwrap_or_default(),
+                if bridge {
+                    "the old key"
+                } else {
+                    "the key in tauri.conf.json"
+                }
+            );
+        }
     });
 }

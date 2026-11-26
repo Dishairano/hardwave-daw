@@ -10,7 +10,7 @@ are chained through v0.266.47, the bridge release:
                   From v0.266.48 on it is frozen: v0.266.47's own
                   latest.json, byte for byte, so those copies install
                   v0.266.47 (old key) and carry on from there.
-  latest-v2.json  read from v0.266.47 on (the endpoint in tauri.conf.json).
+  latest-v2.json  read from v0.266.47 on (the endpoints in tauri.conf.json).
                   v0.266.47's copy is the same as its latest.json (old key:
                   the GitHub secret switches after v0.266.47 is out). From
                   v0.266.48 on it is signed with the key in tauri.conf.json.
@@ -29,6 +29,16 @@ is not signed with the old key.
 The launcher (installer/src-tauri/src/install.rs) moves with the feeds: up to
 v0.266.47 it trusts the old key and finds the installer through the GitHub
 API; after it, it trusts the key in tauri.conf.json and reads latest-v2.json.
+
+Where latest-v2.json is read from: v0.266.47 and v0.266.48 read it from the
+GitHub release only. Later releases read our own copy first
+(hardwavestudios.com/api/updates/hardwave-daw/latest-v2.json, the release's
+feed with the download addresses on our site) and the GitHub release
+second, so updates do not depend on the GitHub repository being reachable.
+The feed is not what is signed: the app checks the installer it downloads
+against the signature in the feed with the key built into it, wherever
+both came from. The feeds written here are the ones on the GitHub release;
+our site serves its copy from them.
 
 Everything here works on local files. scripts/updater-feeds.sh downloads
 and uploads with gh; the release workflow runs that. Commands:
@@ -64,6 +74,12 @@ import urllib.parse
 REPO = "Dishairano/hardwave-daw"
 DOWNLOAD = f"https://github.com/{REPO}/releases/download/"
 V2_ENDPOINT = f"https://github.com/{REPO}/releases/latest/download/latest-v2.json"
+# The same feed on our own site, asked first by releases after v0.266.48.
+OWN_V2_ENDPOINT = "https://hardwavestudios.com/api/updates/hardwave-daw/latest-v2.json"
+# What the app and the launcher of a new release read, in this order.
+ENDPOINTS = [OWN_V2_ENDPOINT, V2_ENDPOINT]
+# The last release that reads latest-v2.json from the GitHub release only.
+GITHUB_ONLY_UNTIL = (0, 266, 48)
 # What the launcher asks for the installer up to v0.266.47 (and on macOS and
 # Linux after it): the latest release on the GitHub API.
 LAUNCHER_API = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -189,16 +205,34 @@ def rust_str_const(source: str, name: str) -> list:
     return pattern.findall(source)
 
 
+def rust_str_list_const(path, source: str, name: str):
+    """The strings of `const NAME: [&str; N] = ["...", ...];` in a Rust file, or None without one."""
+    found = re.findall(r"\bconst\s+" + name + r"\s*:\s*\[\s*&(?:'static\s+)?str\s*;\s*\d+\s*\]\s*=\s*\[(.*?)\]\s*;",
+                       source, re.S)
+    if not found:
+        return None
+    if len(found) > 1:
+        raise FeedError(f"{path}: more than one {name}")
+    body = found[0]
+    values = re.findall(r'"([^"\\]*)"', body)
+    if re.sub(r'"[^"\\]*"|[\s,]', "", body):
+        raise FeedError(f"{path}: {name} holds something that is not a plain string")
+    return values
+
+
 def load_launcher(path) -> dict:
     """What the launcher (installer/src-tauri/src/install.rs) trusts and reads."""
     source = read_text(path)
     keys = rust_str_const(source, "UPDATER_PUBKEY")
     if len(keys) != 1:
         raise FeedError(f"{path}: expected one `const UPDATER_PUBKEY: &str = \"...\";`, found {len(keys)}")
-    urls = rust_str_const(source, "FEED_URL")
-    if len(urls) > 1:
-        raise FeedError(f"{path}: more than one FEED_URL")
-    return {"pubkey": keys[0], "feed": urls[0] if urls else None, "api": f'"{LAUNCHER_API}"' in source}
+    return {"pubkey": keys[0], "feeds": rust_str_list_const(path, source, "FEED_URLS"),
+            "api": f'"{LAUNCHER_API}"' in source}
+
+
+def endpoints_for(version: tuple) -> list:
+    """Where a release of `version` reads latest-v2.json from, in order."""
+    return [V2_ENDPOINT] if version <= GITHUB_ONLY_UNTIL else list(ENDPOINTS)
 
 
 def signer_for(version: tuple, conf: dict) -> tuple:
@@ -214,8 +248,11 @@ def check_conf(tag: str, conf: dict) -> tuple:
     version, numbers = version_of_tag(tag)
     if conf["version"] != version:
         raise FeedError(f"tauri.conf.json says version {conf['version']}, the tag says {tag}")
-    if conf["endpoints"] != [V2_ENDPOINT]:
-        raise FeedError(f"the app must read {V2_ENDPOINT} and nothing else, "
+    wanted = endpoints_for(numbers)
+    if conf["endpoints"] != wanted:
+        how = ("from the GitHub release" if numbers <= GITHUB_ONLY_UNTIL
+               else "from our own site first and the GitHub release second")
+        raise FeedError(f"the app of {tag} must read latest-v2.json {how}, and nothing else ({wanted!r}); "
                         f"tauri.conf.json has {conf['endpoints']!r}")
     if pubkey_id(conf["pubkey"]) == old_key_id():
         raise FeedError("tauri.conf.json trusts the old (stolen) updater key")
@@ -237,8 +274,8 @@ def check_launcher(tag: str, numbers: tuple, conf: dict, launcher: dict) -> None
         if got != old_key_id():
             raise FeedError(f"the launcher of {tag} trusts key {got}, but it installs {tag}, which is signed "
                             f"with the old key ({old_key_id()}): it would refuse every download")
-        if launcher["feed"] is not None:
-            raise FeedError(f"the launcher of {tag} reads {launcher['feed']}; up to {BRIDGE_TAG} it finds the "
+        if launcher["feeds"] is not None:
+            raise FeedError(f"the launcher of {tag} reads {launcher['feeds']}; up to {BRIDGE_TAG} it finds the "
                             f"installer through the GitHub API ({LAUNCHER_API})")
         if not launcher["api"]:
             raise FeedError(f"the launcher of {tag} does not ask {LAUNCHER_API} for the installer")
@@ -247,8 +284,9 @@ def check_launcher(tag: str, numbers: tuple, conf: dict, launcher: dict) -> None
     if got != wanted:
         raise FeedError(f"the launcher of {tag} trusts key {got}, but {tag} is signed with the key in "
                         f"tauri.conf.json ({wanted}): it would refuse every download")
-    if launcher["feed"] != V2_ENDPOINT:
-        raise FeedError(f"the launcher of {tag} must read {V2_ENDPOINT}, it reads {launcher['feed']!r}")
+    if launcher["feeds"] != endpoints_for(numbers):
+        raise FeedError(f"the launcher of {tag} must read latest-v2.json from the same addresses as the app, "
+                        f"in the same order ({endpoints_for(numbers)!r}); it reads {launcher['feeds']!r}")
 
 
 def plan(tag: str, conf: dict, launcher: dict) -> dict:
