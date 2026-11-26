@@ -240,6 +240,10 @@ jobs:
         with:
           name: Hardwave.DAW_fast_x64-setup
           path: Hardwave.DAW_fast_x64-setup.exe
+          # A spare copy: the build itself is on the rolling fast-build
+          # release. Kept three days, not the default ninety: 16 MB a run
+          # adds up, and a private repository has 500 MB for artifacts.
+          retention-days: 3
 
       # Tag hygiene: fast-v* tags are one-shot triggers, not history. Delete
       # the trigger tag after a successful publish so they don't pile up.

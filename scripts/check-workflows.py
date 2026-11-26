@@ -10,7 +10,10 @@ is checked here before a push instead.
 It also catches the YAML that parses but that GitHub refuses: a step
 whose `env:` or `with:` is left empty (null), which happens when the
 last line under it is removed, and an action used by tag instead of
-a pinned commit.
+a pinned commit. A shared workflow from another repository (the Secure
+Code Check) must be pinned to a commit too, and its tools-ref must be
+that same commit, so the scripts that write the report are the ones the
+workflow was tested with.
 """
 import pathlib
 import re
@@ -36,6 +39,17 @@ def problems(workflow):
         uses = step.get("uses") or ""
         if uses and not uses.startswith("./") and not re.search(r"@[0-9a-f]{40}$", uses):
             found.append(f"{name}: {uses} is not pinned to a commit")
+    for job_id, job in (workflow.get("jobs") or {}).items():
+        uses = (job or {}).get("uses") or ""
+        if not uses or uses.startswith("./"):
+            continue
+        pin = re.search(r"@([0-9a-f]{40})$", uses)
+        if not pin:
+            found.append(f"job {job_id}: {uses} is not pinned to a commit")
+            continue
+        inputs = job.get("with") or {}
+        if "tools-ref" in inputs and inputs["tools-ref"] != pin.group(1):
+            found.append(f"job {job_id}: tools-ref {inputs['tools-ref']} is not the commit in `uses:` ({pin.group(1)})")
     return found
 
 def main() -> int:

@@ -5,9 +5,10 @@ run-name: Security · ${{ github.ref_name }}
 # new advisory against something already shipped shows up without
 # waiting for a commit.
 #
-# The checks themselves live in secure-code-check.yml, shared with the
-# Suite and the plug-ins, so the release runs exactly the same ones on
-# its tag:
+# The checks themselves live in the shared workflow in
+# Dishairano/hardwave-secure-code-check, pinned to one commit (the same
+# commit as tools-ref), shared with the plug-ins, so the release runs
+# exactly the same ones on its tag:
 #
 # - Rust dependencies of the DAW and of the launcher: known
 #   vulnerabilities, yanked crates, licences and sources, per deny.toml.
@@ -47,9 +48,9 @@ concurrency:
 jobs:
   check:
     name: Secure Code Check
-    uses: ./.github/workflows/secure-code-check.yml
+    uses: Dishairano/hardwave-secure-code-check/.github/workflows/secure-code-check.yml@53d55aa79f1839e2ac000bc7cbb017e0387d9da4 # shared Secure Code Check
     with:
-      tools-ref: ${{ github.sha }}
+      tools-ref: 53d55aa79f1839e2ac000bc7cbb017e0387d9da4
       cargo-manifests: |
         Cargo.toml
         installer/src-tauri/Cargo.toml

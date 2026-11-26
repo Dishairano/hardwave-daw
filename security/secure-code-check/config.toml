@@ -1,7 +1,7 @@
 # Secure Code Check: what the report says about this product. What the
 # checks cover is set by the inputs in .github/workflows/security.yml
 # and release.yml; the format is described in
-# scripts/secure-code-check/config.py.
+# scripts/secure-code-check/config.py of Dishairano/hardwave-secure-code-check.
 
 [product]
 id = "hardwave-daw"
