@@ -1376,6 +1376,10 @@ pub struct DawEngine {
     /// Used to capture plug-in state into `Project.plugin_states` so
     /// save/load round-trips preserve the user's knob tweaks.
     pub pending_state_snapshot: PluginStateSnapshotSlot,
+    /// Run before the plug-ins' states are read (`snapshot_plugin_states`),
+    /// off the audio thread: the app brings up to date what a plug-in in
+    /// its own process last handed over.
+    pub before_state_snapshot: Option<Arc<dyn Fn() + Send + Sync>>,
     /// How the live stream's callback hands its plug-ins back when the
     /// stream lets it go; see [`PluginStateFarewell`]. `None` while no
     /// stream runs.
@@ -1478,6 +1482,7 @@ impl DawEngine {
             insert_command_sender: Arc::new(Mutex::new(None)),
             insert_graveyard: Arc::new(Mutex::new(None)),
             pending_state_snapshot: Arc::new(Mutex::new(None)),
+            before_state_snapshot: None,
             plugin_farewell: None,
             main_thread: None,
             #[cfg(test)]
@@ -1501,6 +1506,11 @@ impl DawEngine {
         // the performance test half a second.
         if !self.is_running() {
             return None;
+        }
+        // Plug-ins that keep their state somewhere slower than a call (one
+        // in its own process) bring it up to date first.
+        if let Some(settle) = self.before_state_snapshot.as_ref() {
+            settle();
         }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         {

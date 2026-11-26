@@ -352,6 +352,12 @@ pub fn run() {
     if prefs.link_enabled {
         engine.set_link_enabled(true);
     }
+    // A plug-in in its own process hands its state over a moment after a
+    // knob moves; whoever reads the states (a save, a preset, the parameter
+    // sheet) gets them brought up to date first.
+    engine.before_state_snapshot = Some(Arc::new(|| {
+        plugin_sandbox::settle_states(std::time::Duration::from_millis(400))
+    }));
     #[cfg(target_os = "windows")]
     if prefs.wasapi_exclusive {
         if let Err(e) = engine.set_wasapi_exclusive(true) {
