@@ -1,21 +1,26 @@
 name: Release
+# Per-run display label — without this every entry in the Actions list
+# reads as a generic "Release" with no way to tell v0.157.36 apart from
+# v0.157.37 at a glance. github.ref_name resolves to the pushed tag.
+run-name: Release ${{ github.ref_name }}
 
 on:
   push:
     tags:
       - 'v*'
 
+# Read-only unless a job says otherwise. Only the build job, which
+# publishes the release, may write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
@@ -25,34 +30,90 @@ jobs:
         run: |
           cd packages/daw-ui
           npm ci
+          # Typecheck BEFORE build — Vite emits happily over TS errors,
+          # so without this gate broken TS ships to production.
+          npm run typecheck
+          npm run test:unit
           npm run build
 
       - name: Upload frontend artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: frontend-dist
           path: packages/daw-ui/dist
           retention-days: 1
+
+  # UI regression suite — the full app booted in a browser against the
+  # mocked Tauri backend (src/dev/tauri-mock.ts). Brought back to 60/60
+  # green on 2026-07-07 (deep-research DAW-19); it caught the lost
+  # window drag-region, so it gates releases like every other check.
+  ui-tests:
+    # Pinned: ubuntu-latest became Ubuntu 26.04 on 21 Oct 2026, where Playwright
+    # 1.58 cannot install Chromium. Move back once Playwright supports 26.04.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/daw-ui/package-lock.json
+
+      - name: Run Playwright UI suite
+        run: |
+          cd packages/daw-ui
+          npm ci
+          npx playwright install chromium --with-deps
+          npx playwright test
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-failures
+          path: packages/daw-ui/test-results
+          retention-days: 3
 
   changelog:
     runs-on: ubuntu-latest
     outputs:
       body: ${{ steps.changelog.outputs.body }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+
+      # A tag name is text someone typed. It is checked against the one
+      # shape a release tag has before anything uses it, and scripts read
+      # it from the environment, never pasted into the script itself.
+      - name: The tag is a release tag
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ]]; then
+            echo "::error::'$GITHUB_REF_NAME' is not a release tag (vX.Y.Z or vX.Y.Z-rcN)"
+            exit 1
+          fi
 
       - name: Generate changelog from tag annotation
         id: changelog
         run: |
-          # Get the annotated tag message (set by release.sh)
-          TAG_MSG=$(git tag -l --format='%(contents)' "${{ github.ref_name }}" 2>/dev/null || echo "")
-          if [ -z "$TAG_MSG" ] || [ "$TAG_MSG" = "${{ github.ref_name }}" ]; then
+          # RELEASE_CHANGELOG.md is written by release.sh and committed with
+          # the release. Read it rather than the tag annotation: checkout
+          # lands the tag as a lightweight ref, and
+          # `git tag -l --format='%(contents)'` then silently falls back to
+          # the COMMIT message, which is how several releases announced
+          # nothing but "version bump for X".
+          if [ -f RELEASE_CHANGELOG.md ]; then
+            TAG_MSG=$(cat RELEASE_CHANGELOG.md)
+          else
+            TAG_MSG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME" 2>/dev/null || echo "")
+          fi
+          if [ -z "$TAG_MSG" ] || [ "$TAG_MSG" = "$GITHUB_REF_NAME" ]; then
             # Fallback: generate from commits since previous tag
-            PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || echo "")
+            # Release tags only; test-build tags (fast-v...) share commits.
+            PREV_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
             if [ -n "$PREV_TAG" ]; then
-              TAG_MSG=$(git log "${PREV_TAG}..${{ github.ref_name }}" --pretty=format:"- %s" --no-merges | grep -v "^- Release\|^- v[0-9]" || echo "- Bug fixes and improvements")
+              TAG_MSG=$(git log "${PREV_TAG}..${GITHUB_REF_NAME}" --pretty=format:"- %s" --no-merges | grep -v "^- Release\|^- v[0-9]" || echo "- Bug fixes and improvements")
             else
               TAG_MSG="- Bug fixes and improvements"
             fi
@@ -62,49 +123,216 @@ jobs:
           echo "$TAG_MSG" >> "$GITHUB_OUTPUT"
           echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
 
+  lint-and-test:
+    # Mirrors the dev-build branch gate. Blocks tagged releases when
+    # fmt fails or any cargo test fails — including the functional
+    # smoke tests that exercise live MIDI end-to-end. Pre-add the
+    # branch can ship through release.yml even if the smoke tests
+    # regressed since the last successful Dev Build; this closes that
+    # window.
+    name: Lint & Test (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: release-lint-and-test
+          cache-on-failure: true
+
+      # No sccache here — same reason as dev-build.yml's lint-and-test
+      # job. When the Azure GHA cache backend is degraded, sccache
+      # breaks every rustc/clippy invocation. rust-cache@v2 alone is
+      # plenty for a Lint/Test pass.
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            mold clang
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      # Hard error since 2026-07-07: the workspace was brought fully
+      # clippy-clean (deep-research P2-11), so any new warning is a
+      # regression. --all-targets so test code is held to the same bar.
+      # Local pre-push equivalent: ./scripts/lint.sh
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Everything, the long tests included: a release is the one place
+      # nothing is skipped for speed.
+      - name: cargo test --workspace
+        run: cargo test --workspace -- --include-ignored
+
+      # The launcher (HardwaveDAW-Setup.exe) is a workspace of its own, so
+      # `--workspace` above does not reach it. Its tests hold its updater key
+      # and feed to the key the DAW trusts. Its one ignored test needs a
+      # published installer on disk, so it is not included.
+      - name: Launcher tests
+        run: cargo test --manifest-path installer/src-tauri/Cargo.toml
+
+  # The same checks as the Security run, again on the tag itself: a new
+  # advisory published since that run still stops this release. Nothing
+  # is built until every one of them is green.
+  #
+  # The release report must be signed, and the evidence job only runs
+  # after the installers are public. So the key is checked here too
+  # (require-signing-key), before anything is built: a missing or wrong
+  # key stops the release while there is still nothing to take back.
+  secure-code-check:
+    name: Secure Code Check
+    uses: ./.github/workflows/secure-code-check.yml
+    with:
+      tools-ref: ${{ github.sha }}
+      cargo-manifests: |
+        Cargo.toml
+        installer/src-tauri/Cargo.toml
+      # The interface with its build tools; the launcher's shipped packages
+      # only (its vite 5 and tailwind 3 need major upgrades to clear their
+      # advisories and are audited once those are done).
+      npm-audit: |
+        packages/daw-ui
+        installer --omit=dev
+      semgrep-languages: rust typescript javascript
+      fuzz: true
+      # The audio crates link ALSA through alsa-sys.
+      fuzz-apt-packages: libasound2-dev pkg-config
+      content-policy-dir: packages/daw-ui
+      # The full run: ten minutes per target, side by side.
+      fuzz-seconds: 600
+      require-signing-key: true
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+
+  # The DAW has two update feeds since the updater key changed with v0.266.47
+  # (scripts/updater_feeds.py says why). Checked here, before anything is
+  # built, so a release whose feeds old installs could not follow stops while
+  # there is nothing to take back: the app reads latest-v2.json, trusts the
+  # new key and requires signed versions, the launcher trusts the key of what
+  # it installs, the signing secret is the key this version must be signed
+  # with (the old key up to v0.266.47, the key in tauri.conf.json after it),
+  # and from v0.266.48 on v0.266.47's latest.json is there to be frozen.
+  updater-feeds-check:
+    name: Updater feeds (before the build)
+    runs-on: ubuntu-latest
+    # No environment here, on purpose: v0.266.47 is signed with the old key,
+    # which is still the repository secret. From v0.266.48 on, the secret
+    # lives in the environment daw-release, which only v* tags may use.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Feed script tests
+        run: python3 -m unittest discover -s scripts -p 'test_updater_feeds.py'
+
+      - name: The app, the launcher and the frozen latest.json follow the rules
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/updater-feeds.sh check
+
+      - name: Install Tauri CLI
+        # The same pinned version as the build. It needs no install scripts.
+        run: npm install -g --ignore-scripts @tauri-apps/cli@2.11.5
+
+      # Signs a throwaway file with the secret and reads which key signed it.
+      # A secret switched before v0.266.47 was out, or not yet switched for a
+      # later release, would publish updates nobody's DAW accepts. The build
+      # job checks it again just before it signs anything.
+      - name: The signing secret is the key this version must be signed with
+        timeout-minutes: 5
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/updater-feeds.sh signing-key
+
   build:
-    needs: [frontend, changelog]
+    # Publishes the release, so it alone may write.
+    permissions:
+      contents: write
+    needs: [frontend, changelog, lint-and-test, ui-tests, secure-code-check, updater-feeds-check]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
+          # Windows-only lane (2026-09-14, founder call): the Linux and macOS
+          # legs are parked so a tag reaches a testable installer as fast as
+          # the runners allow. Every gate still runs. Uncomment both legs to
+          # go back to a three-platform release; while they are off,
+          # the update feeds carry no Linux or macOS entry, so users on those
+          # platforms stay on the version they have.
+          # - platform: ubuntu-22.04
+          #   target: x86_64-unknown-linux-gnu
+          #   tauri-bundles: deb,appimage,updater
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-          - platform: macos-latest
-            target: aarch64-apple-darwin
+            # NSIS is what the updater + branded launcher consume. .msi is
+            # a duplicate installer format end-users never asked for and
+            # adds ~90s to Windows bundle.
+            tauri-bundles: nsis,updater
+          # - platform: macos-latest
+          #   target: aarch64-apple-darwin
+          #   # Skip rpm-equivalent extras. .app is implicit inside the DMG.
+          #   tauri-bundles: app,dmg,updater
 
     runs-on: ${{ matrix.platform }}
 
+    # Network + incremental hygiene applied to every leg:
+    # - CARGO_INCREMENTAL=0 means sccache can do its job without fighting
+    #   the local incremental cache. Saves a few minutes when cache hits.
+    # - The retry + git-cli flags keep transient network blips from
+    #   stalling the whole matrix.
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+      RUST_BACKTRACE: 1
+
     steps:
-      - uses: actions/checkout@v4
+      # Full history: the launcher step below compares this tag against the
+      # previous one to decide whether it has to be rebuilt at all.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Download frontend artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: frontend-dist
           path: packages/daw-ui/dist
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
-        continue-on-error: true
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: ${{ matrix.target }}
+          cache-on-failure: true
 
-      - name: Configure sccache
-        run: |
-          if sccache --start-server 2>/dev/null; then
-            echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-            echo "sccache available"
-          else
-            echo "sccache unavailable, building without cache"
-          fi
-        shell: bash
+      # No compiler cache wrapper here: a release build has the updater
+      # signing key in its environment, and nothing that is not needed to
+      # build should run beside it.
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -116,15 +344,116 @@ jobs:
             librsvg2-dev \
             patchelf \
             libasound2-dev \
+            libjack-jackd2-dev \
             libgtk-3-dev \
             libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
+            libjavascriptcoregtk-4.1-dev \
+            mold clang
+          # Cuts Rust link time roughly in half (mostly noticeable on the final
+          # binary link). clang invokes mold via -fuse-ld=mold.
+          echo "RUSTFLAGS=-C linker=clang -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+
+      - name: Fetch ASIO SDK (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # Steinberg ASIO SDK is redistributable under the developer agreement.
+          # cpal's asio feature expects CPAL_ASIO_DIR to point at the extracted SDK.
+          $url = 'https://www.steinberg.net/asiosdk'
+          $dest = "$env:RUNNER_TEMP\asiosdk.zip"
+          $out  = "$env:RUNNER_TEMP\asiosdk"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Expand-Archive -Path $dest -DestinationPath $out -Force
+          $sdkRoot = Get-ChildItem -Path $out -Directory | Select-Object -First 1
+          echo "CPAL_ASIO_DIR=$($sdkRoot.FullName)" >> $env:GITHUB_ENV
+          echo "Extracted ASIO SDK to $($sdkRoot.FullName)"
+
+      - name: Install LLVM (Windows — required for cpal/asio bindgen)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          # windows-latest GitHub runners ship with LLVM pre-installed. Point
+          # bindgen at it rather than re-installing (choco refuses to downgrade).
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvmBin\libclang.dll")) {
+            Write-Host "LLVM not found at $llvmBin — installing via choco"
+            choco install llvm -y --no-progress --force
+          } else {
+            Write-Host "LLVM already present at $llvmBin"
+          }
+          echo "LIBCLANG_PATH=$llvmBin" >> $env:GITHUB_ENV
+          # Add LLVM to PATH so cargo can find lld-link.exe (the LLVM linker
+          # we point the MSVC target at below).
+          echo "$llvmBin" >> $env:GITHUB_PATH
+          # Switch from MSVC's link.exe to LLVM's lld-link.exe. Cuts our
+          # Windows build from ~16min → ~9min, dominated by Rust + Tauri
+          # final-binary linking. Same target ABI (x86_64-pc-windows-msvc),
+          # only the linker changes — no runtime/ABI risk for end-users.
+          echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link.exe" >> $env:GITHUB_ENV
 
       - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@latest
+        # PINNED. `@latest` picked up 2.12.0 on 2026-09-26, whose NSIS
+        # template calls RestartManager macros that the nsis_tauri_utils it
+        # downloads does not define, so every Windows build died with
+        # `macro named "RestartManager_StartSession" not found` (v0.230.0).
+        # Move this forward deliberately, together with the tauri crate.
+        # It needs no install scripts, and none run next to the signing key.
+        run: npm install -g --ignore-scripts @tauri-apps/cli@2.11.5
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+      # The signing secret again, on this machine, as soon as the Tauri CLI is
+      # here: the secret could have changed since updater-feeds-check ran. It
+      # runs before the release is created below, so a wrong key stops the
+      # release with nothing published. An empty public release would be the
+      # latest one, and every installed DAW's update check would get a 404.
+      - name: The signing secret is the key this version must be signed with
+        shell: bash
+        timeout-minutes: 5
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/updater-feeds.sh signing-key
+
+      # Pre-create the GitHub release if it doesn't exist yet. tauri-action
+      # auto-creates releases with the GITHUB_TOKEN, but during periods of
+      # parallel-run contention (e.g. v0.157.36 + v0.157.37 finalising
+      # together) the create-release REST call intermittently returns
+      # "Resource not accessible by integration". Creating the empty
+      # release upfront via gh CLI sidesteps this — every later
+      # tauri-action call only needs upload permission, which the token
+      # always has. Idempotent: `gh release view` first, only create when
+      # missing. Runs on every platform so a parallel-build race can't
+      # leave any matrix leg without a release to upload to.
+      # NOTE: Pass the changelog body via env var, NOT via `${{ }}` shell
+      # interpolation. The body is user-supplied (from the tag message)
+      # and may contain backticks, $variables, or quotes that bash would
+      # interpret as command substitution. v0.157.39's body contained the
+      # word `log` in backticks, which expanded to a `log` subshell call
+      # and crashed the step on every platform with exit 1. Reading from
+      # env via "$RELEASE_BODY" is shell-safe.
+      - name: Pre-create GitHub release shell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ github.repository }}
+          RELEASE_BODY: ${{ needs.changelog.outputs.body }}
+        shell: bash
+        run: |
+          if gh release view "$TAG_NAME" --repo "$REPO_NAME" >/dev/null 2>&1; then
+            echo "release $TAG_NAME already exists; skipping create"
+          else
+            # A tag with a dash (v1.2.3-rc1) is a prerelease: the updater
+            # and the launcher only ever install releases without one.
+            PRE=""
+            case "$TAG_NAME" in *-*) PRE="--prerelease" ;; esac
+            gh release create "$TAG_NAME" \
+              --repo "$REPO_NAME" \
+              --title "Hardwave DAW $TAG_NAME" \
+              --notes "$RELEASE_BODY" $PRE
+          fi
+
+      - name: Build Tauri app (Linux — with JACK)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -134,17 +463,343 @@ jobs:
           releaseName: 'Hardwave DAW ${{ github.ref_name }}'
           releaseBody: ${{ needs.changelog.outputs.body }}
           releaseDraft: false
-          prerelease: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           tauriScript: tauri
-          args: --target ${{ matrix.target }}
+          # Tauri never writes a feed: the updater-feeds job writes both
+          # (scripts/updater_feeds.py), so latest.json never carries
+          # new-key content, not even between two uploads.
+          includeUpdaterJson: false
+          args: --target ${{ matrix.target }} --features jack --bundles ${{ matrix.tauri-bundles }}
 
-  discord-changelog:
+      # Custom branded launcher-style installer (the small Tauri app
+      # under `installer/`). Built with --no-bundle so we get the raw
+      # executable instead of yet another NSIS wrap. The launcher downloads
+      # the main DAW NSIS .exe at install time and runs it silently, so the
+      # user only ever sees the branded window. Rebuilt every release from
+      # this commit: it runs installers on people's machines.
+      #
+      # It is also the DAW's uninstaller: the DAW's installer carries it as
+      # binaries\hardwave-daw-uninstaller.exe and Windows Apps opens it with
+      # --uninstall. So it is built and signed before the bundle, and the
+      # same signed file is the HardwaveDAW-Setup.exe asset.
+      #
+      # Its packages install with no install scripts, from the lockfile when
+      # there is one: nothing it needs runs one (esbuild and the Tauri CLI
+      # take their binaries from their platform packages), and nothing that
+      # is not needed should run on a machine that signs.
+      - name: Build Hardwave DAW launcher installer (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        working-directory: installer
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts
+          else
+            npm install --ignore-scripts
+          fi
+          npm run tauri:build -- --no-bundle
+          # The DAW's build runs next, and the Tauri CLI checks its Rust
+          # crates against the npm packages of the first folder with a
+          # package.json it finds, which is this one. Left here, the
+          # launcher's packages fail the DAW's build on any version drift.
+          rm -rf node_modules
+
+      # Built with --no-bundle, so Tauri's signing never sees it: signed
+      # here, with the same script and the same rule (a release that
+      # cannot be signed stops).
+      - name: Sign the launcher and put it in the bundle (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          $exe = "installer/src-tauri/target/release/hardwave-daw-installer.exe"
+          if (-not (Test-Path $exe)) { throw "hardwave-daw-installer.exe not found" }
+          ./scripts/sign-windows.ps1 $exe
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item $exe src-tauri/binaries/hardwave-daw-uninstaller.exe -Force
+
+      # The 32-bit helper. A plug-in that was never rebuilt for 64-bit
+      # cannot be loaded by the app at all; it runs in here instead.
+      # Built before the bundle so the installer can carry it.
+      - name: Build the 32-bit plug-in helper (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          rustup target add i686-pc-windows-msvc
+          # Its own linker setting: the LLVM lld-link we point the
+          # 64-bit build at is configured per target above.
+          cargo build --release --target i686-pc-windows-msvc -p hardwave-plugin-bridge
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item target/i686-pc-windows-msvc/release/hardwave-plugin-bridge.exe `
+            src-tauri/binaries/hardwave-plugin-bridge-x86.exe -Force
+          # It ships inside the installer, where Tauri's signing does not
+          # reach, so it is signed here (the script checks its imports
+          # first).
+          ./scripts/sign-windows.ps1 src-tauri/binaries/hardwave-plugin-bridge-x86.exe
+
+      - name: Build Tauri app (Windows — with ASIO)
+        if: matrix.platform == 'windows-latest'
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CPAL_ASIO_DIR: ${{ env.CPAL_ASIO_DIR }}
+          LIBCLANG_PATH: ${{ env.LIBCLANG_PATH }}
+          # Azure Trusted Signing. Tauri runs scripts/sign-windows.ps1
+          # on each file it bundles, before the updater signature is
+          # taken, so the bytes the updater signed are the signed ones.
+          # With these unset the script leaves the file alone and the
+          # build still finishes, which is what a fork or a dry run
+          # needs.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          AZURE_TRUSTED_SIGNING_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Hardwave DAW ${{ github.ref_name }}'
+          releaseBody: ${{ needs.changelog.outputs.body }}
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tauriScript: tauri
+          # Tauri never writes a feed: the updater-feeds job writes both
+          # (scripts/updater_feeds.py), so latest.json never carries
+          # new-key content, not even between two uploads.
+          includeUpdaterJson: false
+          args: --target ${{ matrix.target }} --features asio --bundles ${{ matrix.tauri-bundles }}
+
+      - name: Stage HardwaveDAW-Setup.exe
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $installerExe = Get-ChildItem -Path installer/src-tauri/target/release -Filter "hardwave-daw-installer.exe" -File | Select-Object -First 1
+          if (-not $installerExe) { throw "hardwave-daw-installer.exe not found" }
+          Copy-Item $installerExe.FullName "HardwaveDAW-Setup.exe"
+          Get-Item HardwaveDAW-Setup.exe | Select-Object Name,Length
+
+      - name: Upload HardwaveDAW-Setup.exe to release
+        if: matrix.platform == 'windows-latest'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            HardwaveDAW-Setup.exe
+
+      # For the Secure Code Check report: the Windows signature of every
+      # installer this leg published, read on the machine that signed
+      # them. Matched to the release files by SHA-256. It never fails the
+      # build; a file it could not read shows as "not verified".
+      - name: Record the Windows signatures (Windows)
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        shell: pwsh
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          $files = @(Get-Item HardwaveDAW-Setup.exe)
+          $files += Get-ChildItem -Path "target/$env:RUST_TARGET/release/bundle/nsis", "src-tauri/target/$env:RUST_TARGET/release/bundle/nsis" -Filter "*-setup.exe" -File -ErrorAction SilentlyContinue
+          $records = foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            [pscustomobject]@{
+              file   = $f.Name
+              sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+              status = [string]$sig.Status
+              signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "" }
+            }
+          }
+          ConvertTo-Json -InputObject @($records) | Set-Content -Encoding utf8 authenticode.json
+          Get-Content authenticode.json
+
+      - name: Keep the signature record (Windows)
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: authenticode
+          path: authenticode.json
+          retention-days: 90
+
+      - name: Build Tauri app (macOS)
+        if: matrix.platform == 'macos-latest'
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Tell rustc to target Apple's M1 CPU baseline — every macOS user
+          # that can run the app has at least an M1 chip (aarch64 target),
+          # so this is free runtime perf with no build-time cost. Without
+          # this rustc generates conservative ARMv8 code that doesn't use
+          # M1-specific instructions.
+          RUSTFLAGS: '-C target-cpu=apple-m1'
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Hardwave DAW ${{ github.ref_name }}'
+          releaseBody: ${{ needs.changelog.outputs.body }}
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tauriScript: tauri
+          # Tauri never writes a feed: the updater-feeds job writes both
+          # (scripts/updater_feeds.py), so latest.json never carries
+          # new-key content, not even between two uploads.
+          includeUpdaterJson: false
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.tauri-bundles }}
+
+      # A leg that fails after the release was created leaves it public
+      # without its installers or update feeds (the feeds job only runs after
+      # every leg). While it is the latest release, every installed DAW's
+      # update check fails. Said on the run page and in Discord, with what to
+      # do, so it does not go unnoticed.
+      - name: Say that the build failed
+        if: failure()
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ matrix.platform }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          delete=""
+          if ! prerelease="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease 2>/dev/null)"; then
+            state="No release $tag could be found, so installed DAWs should not be affected (check the Releases page)."
+            todo="Fix the cause, then use Re-run failed jobs."
+          elif [ "$prerelease" = true ]; then
+            state="The prerelease $tag exists without all its files; installed DAWs never install a prerelease, so they are not affected."
+            todo="Fix the cause, then use Re-run failed jobs."
+          else
+            state="The release $tag is public without its installers or update feeds, so while it is the latest release every installed DAW's update check fails."
+            todo="Fix the cause and use Re-run failed jobs, or delete the release $tag on GitHub (keep the tag) so the previous release is the latest again."
+            delete="Deleting the release keeps the tag: \`gh release delete $tag --repo $GITHUB_REPOSITORY --yes\` (without \`--cleanup-tag\`)."
+          fi
+          msg="Hardwave DAW $tag: the $PLATFORM build FAILED. $state $todo $RUN_URL"
+          {
+            echo "## Build failed for $tag ($PLATFORM)"
+            echo
+            echo "$state"
+            echo
+            echo "$todo"
+            if [ -n "$delete" ]; then
+              echo
+              echo "$delete"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::$msg"
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL is not set: no Discord post"
+            exit 0
+          fi
+          # On a Windows runner `python3` may be missing or the Microsoft
+          # Store stub; jq may be missing.
+          py=python3
+          "$py" -c '' >/dev/null 2>&1 || py=python
+          payload="$("$py" -I -c 'import json, sys; print(json.dumps({"content": sys.argv[1], "allowed_mentions": {"parse": []}}))' "$msg")"
+          # Neither the webhook URL nor curl's own messages are printed.
+          if curl -sS --fail -o /dev/null -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL" 2>/dev/null; then
+            echo "posted to Discord"
+          else
+            echo "::warning::the Discord post about the failed build failed"
+          fi
+
+  # Attaches the update feeds once the build has uploaded the installers and
+  # their .sig files: latest-v2.json, built from this release's files, and
+  # latest.json, which is the same feed up to v0.266.47 and from v0.266.48 on
+  # the frozen v0.266.47 feed that sends DAWs up to v0.266.46 there. A job of
+  # its own after every build leg, so the feeds cover all of them. It checks
+  # everything before it uploads anything; a failure leaves a feed missing
+  # (no update offered), never one that installs cannot verify. It writes the
+  # same bytes every time, so "Re-run failed jobs" is the fix for a failure.
+  updater-feeds:
+    name: Updater feeds
     needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Write and attach the feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/updater-feeds.sh publish
+
+      # The release is already public, so a failure here means installed DAWs
+      # are offered no update until this job runs again. Said on the run page
+      # and in Discord, so it does not go unnoticed.
+      - name: Say that the feeds are not published
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          msg="Hardwave DAW $GITHUB_REF_NAME: the updater feeds (latest.json, latest-v2.json) were NOT published, so installed DAWs are offered no update. Fix the cause, then re-run the failed Updater feeds job (safe to repeat): $RUN_URL"
+          {
+            echo "## Updater feeds not published for $GITHUB_REF_NAME"
+            echo
+            echo "The release is public, but latest.json and/or latest-v2.json are missing or out of date on it, so installed DAWs are offered no update."
+            echo
+            echo "Read the error in **Write and attach the feeds**, fix the cause, then use **Re-run failed jobs**. The job builds the same feeds from the release's files every time, so it is safe to repeat."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::$msg"
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL is not set: no Discord post"
+            exit 0
+          fi
+          payload="$(jq -n --arg content "$msg" '{content: $content, allowed_mentions: {parse: []}}')"
+          # Neither the webhook URL nor curl's own messages are printed.
+          if curl -sS --fail -o /dev/null -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL" 2>/dev/null; then
+            echo "posted to Discord"
+          else
+            echo "::warning::the Discord post about the missing feeds failed"
+          fi
+
+  # Secure Code Check evidence for this release: the report (HTML and
+  # JSON) built from this run's results, signed with our key, the SBOMs,
+  # and the public page as files ready to publish. All attached to the
+  # GitHub release. Runs after the build and the feeds, because the report
+  # lists the SHA-256 of every file the release carries.
+  evidence:
+    name: Secure Code Check evidence
+    needs: [secure-code-check, lint-and-test, ui-tests, build, updater-feeds]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-evidence.yml
+    with:
+      tools-ref: ${{ github.sha }}
+      tag: ${{ github.ref_name }}
+      needs-json: ${{ toJSON(needs) }}
+      authenticode-artifact: authenticode
+    secrets:
+      SECURE_CODE_CHECK_SIGNING_KEY: ${{ secrets.SECURE_CODE_CHECK_SIGNING_KEY }}
+
+  # Announced once the in-app update can reach people.
+  discord-changelog:
+    needs: [build, updater-feeds]
     runs-on: ubuntu-latest
     if: success()
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -153,39 +808,134 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           VERSION: ${{ github.ref_name }}
         run: |
-          # Read changelog directly from the annotated tag
-          CHANGES=$(git tag -l --format='%(contents)' "$VERSION" 2>/dev/null \
-            | grep '^\s*[-*]' \
-            | sed 's/^\s*[-*]\s*/• /' \
-            | head -15)
-
-          if [ -z "$CHANGES" ]; then
-            CHANGES="• Bug fixes and improvements"
+          # The committed changelog, not the tag annotation: checkout lands
+          # the tag as a lightweight ref, so `%(contents)` returns the commit
+          # message instead. That is why v0.212.0, v0.213.1 and v0.214.1
+          # announced only "version bump for X" while their real changelog sat
+          # in the tag, and why v0.212.1 published an `--- announcement ---`
+          # marker as a bullet.
+          if [ -f RELEASE_CHANGELOG.md ]; then
+            TAG_BODY=$(cat RELEASE_CHANGELOG.md)
+          else
+            TAG_BODY=$(git tag -l --format='%(contents)' "$VERSION" 2>/dev/null)
           fi
 
-          CHANGE_COUNT=$(echo "$CHANGES" | grep -c '.' 2>/dev/null || echo 0)
+          # A bullet is "- " or "* ": a marker line like `--- announcement ---`
+          # and a bold line like `**Open for testing**` both start with those
+          # characters and were published as changelog items.
+          RAW=$(printf '%s\n' "$TAG_BODY" | grep -E '^[[:space:]]*[-*][[:space:]]' | sed 's/^[[:space:]]*[-*][[:space:]]*//')
+
+          # No prose block around the changes: the release post is its
+          # bullets, the way v0.204.19 read. What makes it informative is each
+          # bullet being a full sentence that names the consequence.
+          #
+          # An ANNOUNCEMENT is different: a deliberate message to everyone,
+          # written between `--- announcement ---` and `--- end announcement ---`
+          # in the release commit. It posts as its own embed above the change
+          # list and pings @everyone, so it is only ever there when someone
+          # wrote one on purpose.
+          ANNOUNCEMENT=$(printf '%s\n' "$TAG_BODY" \
+            | sed -n '/^--- announcement ---$/,/^--- end announcement ---$/p' \
+            | sed '1d;$d' \
+            | cat -s \
+            | head -c 3900)
+
+          FEATURES=""
+          FIXES=""
+          IMPROVEMENTS=""
+          TOTAL=0
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            TOTAL=$((TOTAL + 1))
+            case "$line" in
+              feat:*|feature:*|add:*|new:*)
+                FEATURES="${FEATURES}• ${line#*: }"$'\n' ;;
+              fix:*|bug:*|bugfix:*)
+                FIXES="${FIXES}• ${line#*: }"$'\n' ;;
+              improve:*|perf:*|refactor:*|ui:*|ux:*|chore:*)
+                IMPROVEMENTS="${IMPROVEMENTS}• ${line#*: }"$'\n' ;;
+              *)
+                IMPROVEMENTS="${IMPROVEMENTS}• ${line}"$'\n' ;;
+            esac
+          done <<< "$RAW"
+
+          # A Discord embed field caps at 1024 characters. Bullets are now
+          # written as full sentences, so a busy release can pass that and get
+          # the whole post rejected. Trim per category and say so.
+          trim_field() {
+            local text="$1"
+            if [ "${#text}" -gt 1000 ]; then
+              printf '%s\n• …more in the full notes on the release page' "${text:0:940}"
+            else
+              printf '%s' "$text"
+            fi
+          }
+          FEATURES=$(trim_field "$FEATURES")
+          FIXES=$(trim_field "$FIXES")
+          IMPROVEMENTS=$(trim_field "$IMPROVEMENTS")
+
+          # Build the fields array dynamically so empty categories are dropped.
+          FIELDS=$(jq -n \
+            --arg features "$(echo -n "$FEATURES" | sed -e 's/[[:space:]]*$//')" \
+            --arg fixes "$(echo -n "$FIXES" | sed -e 's/[[:space:]]*$//')" \
+            --arg improvements "$(echo -n "$IMPROVEMENTS" | sed -e 's/[[:space:]]*$//')" \
+            '[
+              (if $features != "" then {"name": "New features", "value": $features, "inline": false} else empty end),
+              (if $fixes != "" then {"name": "Bug fixes", "value": $fixes, "inline": false} else empty end),
+              (if $improvements != "" then {"name": "Improvements", "value": $improvements, "inline": false} else empty end)
+            ]')
+
+          if [ "$(echo "$FIELDS" | jq 'length')" = "0" ]; then
+            FIELDS='[{"name": "Improvements", "value": "• Internal maintenance and stability updates", "inline": false}]'
+            TOTAL=1
+          fi
+
+
+          NOUN="changes"
+          [ "$TOTAL" = "1" ] && NOUN="change"
 
           PAYLOAD=$(jq -n \
             --arg title "Hardwave DAW ${VERSION}" \
-            --arg changes "$CHANGES" \
-            --arg footer "Release ${VERSION} · ${CHANGE_COUNT} changes" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION}" \
+            --argjson fields "$FIELDS" \
+            --arg footer "Release ${VERSION} · ${TOTAL} ${NOUN}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg announcement "$ANNOUNCEMENT" \
             '{
-              "embeds": [{
-                "title": $title,
-                "color": 15228416,
-                "fields": [
-                  {"name": "Changes", "value": $changes, "inline": false}
-                ],
-                "footer": {
-                  "text": $footer
-                },
-                "timestamp": $timestamp
-              }]
-            }')
+              "embeds": ([]
+                + (if $announcement != "" then [{
+                    "title": "Hardwave DAW is open for testing",
+                    "description": $announcement,
+                    "color": 16750848
+                  }] else [] end)
+                + [{
+                    "title": $title,
+                    "url": $url,
+                    "color": 15228416,
+                    "fields": $fields,
+                    "footer": {
+                      "text": $footer
+                    },
+                    "timestamp": $timestamp
+                  }])
+            }
+            + (if $announcement != "" then {
+                 "content": "@everyone",
+                 # An embed never pings on its own: the mention has to be in
+                 # content AND allowed by allowed_mentions.
+                 "allowed_mentions": { "parse": ["everyone"] }
+               } else {} end)')
 
-          curl -s -H "Content-Type: application/json" \
+          # --fail matters: Discord rejects an embed whose field runs past
+          # 1024 characters, and without it curl stayed silent and the step
+          # still printed success, so a missing announcement looked like a
+          # delivered one.
+          if ! curl -sS --fail-with-body -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL"
+            "$DISCORD_WEBHOOK_URL"; then
+            echo "::error::Discord rejected the changelog for ${VERSION}"
+            exit 1
+          fi
 
           echo "Discord changelog posted for ${VERSION}"
