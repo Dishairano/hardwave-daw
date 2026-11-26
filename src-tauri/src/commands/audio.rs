@@ -60,36 +60,98 @@ pub(crate) fn import_audio_file_blocking(
     file_path: String,
     position_ticks: Option<u64>,
 ) -> Result<ImportedClip, String> {
-    state.engine.lock().snapshot_before_mutation();
+    let clip = {
+        let engine = state.engine.lock();
+        import_onto_track(&engine, track_id, file_path.clone(), position_ticks)?
+    };
     // Imported by the person, so a network server it is on is one they
     // use for samples, and projects using it may load from it.
     if hardwave_engine::source_paths::network_server(&file_path).is_some() {
         state.engine.lock().trust_network_location(&file_path);
         crate::commands::engine::persist_audio_prefs_public(&state);
     }
-    let engine = state.engine.lock();
-    place_audio_file(&engine, track_id, file_path, position_ticks)
+    Ok(clip)
+}
+
+/// Put an audio file on a track as a clip, as one undo step. The file is
+/// read before the step is taken: a file that would not load, or a track
+/// that is gone, left an undo step that undid nothing and threw the redo
+/// steps away.
+pub(crate) fn import_onto_track(
+    engine: &hardwave_engine::DawEngine,
+    track_id: String,
+    file_path: String,
+    position_ticks: Option<u64>,
+) -> Result<ImportedClip, String> {
+    let file = load_for_placing(engine, &track_id, &file_path)?;
+    engine.snapshot_before_mutation();
+    place_loaded_file(engine, track_id, file, position_ticks)
 }
 
 /// Load an audio file and put it on a track as a clip, without an undo
-/// step of its own: for a command that takes one step for all it does
-/// (a bounce, a freeze, a consolidate), where the import's own step made
-/// it two, and the first undo took away only the new clip.
+/// step of its own.
 pub(crate) fn place_audio_file(
     engine: &hardwave_engine::DawEngine,
     track_id: String,
     file_path: String,
     position_ticks: Option<u64>,
 ) -> Result<ImportedClip, String> {
-    let path = PathBuf::from(&file_path);
-    let file_name = path
+    let file = load_for_placing(engine, &track_id, &file_path)?;
+    place_loaded_file(engine, track_id, file, position_ticks)
+}
+
+/// An audio file read into the pool, ready to go on a track.
+pub(crate) struct LoadedFile {
+    path: PathBuf,
+    name: String,
+    /// Where its audio is in the pool.
+    pub(crate) source_id: String,
+    info: hardwave_dsp::AudioFileInfo,
+}
+
+/// Read an audio file into the pool for a clip on `track_id`, changing
+/// nothing in the song. Everything that can go wrong with placing a file
+/// goes wrong here, so a command reads its file first and takes its undo
+/// step only once the file is in.
+pub(crate) fn load_for_placing(
+    engine: &hardwave_engine::DawEngine,
+    track_id: &str,
+    file_path: &str,
+) -> Result<LoadedFile, String> {
+    if engine.project.lock().track(track_id).is_none() {
+        return Err(format!("Track not found: {}", track_id));
+    }
+    let path = PathBuf::from(file_path);
+    let name = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled")
         .to_string();
-
-    // Load audio into pool
     let (source_id, info) = engine.load_audio_file(&path)?;
+    Ok(LoadedFile {
+        path,
+        name,
+        source_id,
+        info,
+    })
+}
+
+/// Put a loaded file on a track as a clip, without an undo step of its
+/// own: for a command that takes one step for all it does (a bounce, a
+/// freeze, a consolidate), where the import's own step made it two, and
+/// the first undo took away only the new clip.
+pub(crate) fn place_loaded_file(
+    engine: &hardwave_engine::DawEngine,
+    track_id: String,
+    file: LoadedFile,
+    position_ticks: Option<u64>,
+) -> Result<ImportedClip, String> {
+    let LoadedFile {
+        path,
+        name: file_name,
+        source_id,
+        info,
+    } = file;
 
     // A loop whose name says its tempo follows the song's tempo and lasts
     // its own beats; anything else keeps its speed and lasts its seconds
