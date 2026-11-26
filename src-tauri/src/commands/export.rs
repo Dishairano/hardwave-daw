@@ -2421,17 +2421,21 @@ pub fn unfreeze_track(state: State<AppState>, track_id: String) -> Result<(), St
     unfreeze(&engine, &track_id)
 }
 
-/// Unfreeze a track, as one undo step: one undo freezes it again.
+/// Unfreeze a track, as one undo step: one undo freezes it again. A track
+/// that is not frozen, or is gone, takes no step: it took one that undid
+/// nothing and threw the redo steps away.
 fn unfreeze(engine: &DawEngine, track_id: &str) -> Result<(), String> {
-    engine.snapshot_before_mutation();
     {
-        let mut project = engine.project.lock();
+        let project = engine.project.lock();
         let track = project
-            .track_mut(track_id)
+            .track(track_id)
             .ok_or_else(|| format!("Track not found: {track_id}"))?;
         if !track.frozen {
             return Err("that track is not frozen".into());
         }
+    }
+    engine.snapshot_before_mutation();
+    if let Some(track) = engine.project.lock().track_mut(track_id) {
         track.frozen = false;
     }
     engine.rebuild_graph();
@@ -3818,6 +3822,19 @@ mod placing_tests {
             steps,
             "no track: no step, redo kept"
         );
+    }
+
+    /// Unfreezing a track that is not frozen, or one that is gone, is no
+    /// undo step. It took one that undid nothing and threw the redo steps
+    /// away.
+    #[test]
+    fn an_unfreeze_that_does_nothing_takes_no_undo_step() {
+        let engine = DawEngine::new();
+        let (id, song, steps) = song_with_history(&engine);
+        assert!(unfreeze(&engine, &id).is_err());
+        assert!(unfreeze(&engine, "no such track").is_err());
+        assert_eq!(saved(&engine), song);
+        assert_eq!(engine.history_sizes(), steps, "no step, redo kept");
     }
 
     /// A dropped sample that cannot be read is no undo step either.
