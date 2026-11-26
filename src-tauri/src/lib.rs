@@ -110,8 +110,9 @@ pub struct AppState {
     /// The reference track's measured loudness and its name, which the
     /// engine itself has no reason to know.
     pub reference_meta: Arc<Mutex<(f32, String)>>,
-    /// Plug-ins the user has asked to run in a process of their own.
-    pub sandboxed_plugins: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Which plug-ins run in a process of their own: third-party ones
+    /// unless the producer chose otherwise.
+    pub sandboxed_plugins: Arc<Mutex<plugin_sandbox::Choices>>,
     /// Which live slots are running sandboxed, and whether their
     /// process has gone, so the mixer can say which plug-in it was.
     #[allow(clippy::type_complexity)]
@@ -385,9 +386,11 @@ pub fn run() {
             Arc::new(surface)
         },
         reference_meta: Arc::new(Mutex::new((f32::NEG_INFINITY, String::new()))),
-        sandboxed_plugins: commands::plugins::sandboxed_set(
-            prefs.sandboxed_plugins.iter().cloned().collect(),
-        ),
+        sandboxed_plugins: commands::plugins::sandboxed_set(plugin_sandbox::Choices {
+            always: prefs.sandboxed_plugins.iter().cloned().collect(),
+            never: prefs.in_process_plugins.iter().cloned().collect(),
+            third_party_inside: prefs.third_party_plugins_in_process,
+        }),
         sandbox_health: Arc::new(Mutex::new(std::collections::HashMap::new())),
         collab: Arc::new(crate::collab::Collab::default()),
         osc_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -598,6 +601,7 @@ pub fn run() {
             commands::engine::get_osc_status,
             commands::engine::set_osc_enabled,
             commands::plugins::get_sandboxed_plugins,
+            commands::plugins::get_plugin_home,
             commands::plugins::take_sandbox_crashes,
             commands::plugins::get_sandbox_stats,
             commands::plugins::restart_sandboxed_plugin,

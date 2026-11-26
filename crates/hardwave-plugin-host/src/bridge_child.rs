@@ -178,6 +178,23 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
+    serve_with(plugin, input, output, title, None)
+}
+
+/// [`serve`], with something to run first on the thread that plays: the
+/// DAW raises that thread to the priority its own audio thread has, so a
+/// busy computer does not make the plug-in's process late with its blocks.
+pub fn serve_with<R, W>(
+    plugin: Box<dyn HostedPlugin>,
+    input: R,
+    output: W,
+    title: &str,
+    on_play_thread: Option<Box<dyn FnOnce() + Send>>,
+) -> i32
+where
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
     let editor = plugin.editor();
     let gui_log = plugin.gui_edit_log();
     let out: Out<W> = Arc::new(Mutex::new(BufWriter::new(output)));
@@ -189,6 +206,9 @@ where
         std::thread::Builder::new()
             .name("hardwave-bridge-play".into())
             .spawn(move || {
+                if let Some(prepare) = on_play_thread {
+                    prepare();
+                }
                 let code = serve_frames(plugin, input, &out, &ui_tx, &waker);
                 drop(ui_tx);
                 waker.wake();
@@ -202,6 +222,35 @@ where
     player.join().unwrap_or(6)
 }
 
+/// How long after a block a knob set by the host still counts as "the
+/// song is playing": the next block hands it to the plug-in. Past this,
+/// nothing is calling the plug-in, and the value is handed over at once.
+const PLAYING_WITHIN: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How many blocks pass between looks at the plug-in's delay, which some
+/// plug-ins change while they play (a limiter's lookahead knob).
+const LATENCY_EVERY: u32 = 32;
+
+/// The parameter list with where each one stands, as a frame.
+fn params_frame(plugin: &dyn HostedPlugin) -> Frame {
+    let list: Vec<_> = (0..plugin.get_parameter_count())
+        .filter_map(|index| plugin.get_parameter_info(index))
+        .map(|info| {
+            let value = plugin.get_parameter_value(info.id);
+            (info, value)
+        })
+        .collect();
+    Frame::params(&list)
+}
+
+/// What the plug-in says about itself now.
+fn info_of(plugin: &dyn HostedPlugin) -> ChildInfo {
+    ChildInfo {
+        latency: plugin.latency_samples(),
+        class_id: plugin.vst3_class_id(),
+    }
+}
+
 /// The frames, one after another, on the thread that plays.
 fn serve_frames<R: Read, W: Write>(
     mut plugin: Box<dyn HostedPlugin>,
@@ -213,9 +262,25 @@ fn serve_frames<R: Read, W: Write>(
     let mut reader = BufReader::new(input);
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];
+    let mut key_left = vec![0.0f32; 4096];
+    let mut key_right = vec![0.0f32; 4096];
     let mut outputs = vec![Vec::new(), Vec::new()];
     let mut midi = Vec::with_capacity(MAX_BLOCK_EVENTS);
+    let mut midi_out = Vec::with_capacity(64);
     let mut sample_rate = 48_000.0;
+    let mut told = None::<ChildInfo>;
+    let mut last_block = None::<std::time::Instant>;
+    let mut blocks_since_look = 0u32;
+
+    // Tell the host what the plug-in says about itself, when that changed.
+    let tell = |plugin: &dyn HostedPlugin, told: &mut Option<ChildInfo>| -> bool {
+        let now = info_of(plugin);
+        if *told == Some(now) {
+            return true;
+        }
+        *told = Some(now);
+        send(out, Frame::info(&now))
+    };
 
     // The host going away, or the stream ending, ends this process too:
     // there is nothing here without it.
@@ -232,21 +297,42 @@ fn serve_frames<R: Read, W: Write>(
                     if left.len() < block as usize {
                         left.resize(block as usize, 0.0);
                         right.resize(block as usize, 0.0);
+                        key_left.resize(block as usize, 0.0);
+                        key_right.resize(block as usize, 0.0);
                     }
                     sample_rate = rate;
                     let _ = plugin.activate(rate, block);
                 }
-                if !send(out, Frame::new(RES_OK, Vec::new())) {
+                // Its delay is only certain once it knows the rate, and the
+                // host hears it before it hears the plug-in is ready.
+                if !tell(plugin.as_ref(), &mut told) || !send(out, Frame::new(RES_OK, Vec::new())) {
                     break;
                 }
             }
             REQ_SET_PARAM => {
                 if let Some((id, value)) = frame.read_set_param() {
                     plugin.set_parameter_value(id, value);
+                    // VST3 and CLAP plug-ins only hear a value inside a
+                    // block. With the song stopped, or the plug-in left out
+                    // while it is silent, no block comes: hand it over now,
+                    // so its window and its saved state have it.
+                    let playing = last_block.is_some_and(|at| at.elapsed() < PLAYING_WITHIN);
+                    if !playing {
+                        plugin.flush_parameters();
+                    }
                 }
             }
-            REQ_SET_STATE => {
-                let _ = plugin.set_state(&frame.payload);
+            REQ_SET_STATE | REQ_LOAD_PRESET => {
+                if frame.kind == REQ_SET_STATE {
+                    let _ = plugin.set_state(&frame.payload);
+                } else if let Some(index) = frame.read_preset_index() {
+                    let _ = plugin.load_factory_preset(index as usize);
+                }
+                // Every knob may stand somewhere else now, and the delay
+                // may differ: the host shows and compensates what is true.
+                if !send(out, params_frame(plugin.as_ref())) || !tell(plugin.as_ref(), &mut told) {
+                    break;
+                }
             }
             REQ_GET_STATE => {
                 // Values set since the last block go in first, or a
@@ -258,14 +344,19 @@ fn serve_frames<R: Read, W: Write>(
                 }
             }
             REQ_PARAMS => {
-                let list: Vec<_> = (0..plugin.get_parameter_count())
-                    .filter_map(|index| plugin.get_parameter_info(index))
-                    .map(|info| {
-                        let value = plugin.get_parameter_value(info.id);
-                        (info, value)
-                    })
-                    .collect();
-                if !send(out, Frame::params(&list)) {
+                if !send(out, params_frame(plugin.as_ref())) || !tell(plugin.as_ref(), &mut told) {
+                    break;
+                }
+            }
+            REQ_ASK => {
+                // Always answered, whatever was asked: the host is waiting.
+                let answer = match frame.read_ask() {
+                    Some(Ask::Text(id, value)) => Answer::Text(plugin.parameter_text(id, value)),
+                    Some(Ask::Options(id)) => Answer::Options(plugin.parameter_options(id)),
+                    Some(Ask::Presets) => Answer::Presets(plugin.factory_presets()),
+                    None => Answer::Text(None),
+                };
+                if !send(out, Frame::answer(&answer)) {
                     break;
                 }
             }
@@ -288,6 +379,7 @@ fn serve_frames<R: Read, W: Write>(
                 }
             }
             REQ_AUDIO | REQ_PROCESS => {
+                let mut keyed = false;
                 let frames = if frame.kind == REQ_PROCESS {
                     let wanted = frame
                         .payload
@@ -298,10 +390,19 @@ fn serve_frames<R: Read, W: Write>(
                     if left.len() < wanted {
                         left.resize(wanted, 0.0);
                         right.resize(wanted, 0.0);
+                        key_left.resize(wanted, 0.0);
+                        key_right.resize(wanted, 0.0);
                     }
-                    match frame.read_process(&mut left, &mut right, &mut midi, sample_rate) {
-                        Some((frames, transport)) => {
+                    match frame.read_process(
+                        &mut left,
+                        &mut right,
+                        Some((&mut key_left, &mut key_right)),
+                        &mut midi,
+                        sample_rate,
+                    ) {
+                        Some((frames, transport, with_key)) => {
                             plugin.set_transport(transport);
+                            keyed = with_key;
                             frames
                         }
                         // A block that does not add up gets silence back,
@@ -320,9 +421,23 @@ fn serve_frames<R: Read, W: Write>(
                     frames
                 };
                 if frames > 0 {
-                    let inputs: [&[f32]; 2] = [&left[..frames], &right[..frames]];
-                    plugin.process(&inputs, &mut outputs, &midi, &mut Vec::new(), frames);
+                    midi_out.clear();
+                    if keyed {
+                        // The same four channels the chain gives a keyed
+                        // plug-in in the DAW's own process.
+                        let inputs: [&[f32]; 4] = [
+                            &left[..frames],
+                            &right[..frames],
+                            &key_left[..frames],
+                            &key_right[..frames],
+                        ];
+                        plugin.process(&inputs, &mut outputs, &midi, &mut midi_out, frames);
+                    } else {
+                        let inputs: [&[f32]; 2] = [&left[..frames], &right[..frames]];
+                        plugin.process(&inputs, &mut outputs, &midi, &mut midi_out, frames);
+                    }
                 }
+                last_block = Some(std::time::Instant::now());
                 let out_l = outputs
                     .first()
                     .map(|c| &c[..frames.min(c.len())])
@@ -335,6 +450,13 @@ fn serve_frames<R: Read, W: Write>(
                 reply.kind = RES_AUDIO;
                 if !send(out, reply) {
                     break;
+                }
+                blocks_since_look += 1;
+                if blocks_since_look >= LATENCY_EVERY {
+                    blocks_since_look = 0;
+                    if !tell(plugin.as_ref(), &mut told) {
+                        break;
+                    }
                 }
             }
             _ => {}
@@ -812,7 +934,7 @@ mod tests {
             ..TransportInfo::default()
         };
         let mut payload = Vec::new();
-        Frame::write_process(&mut payload, &input, &input, &note, &transport);
+        Frame::write_process(&mut payload, &input, &input, None, &note, &transport);
         Frame::new(REQ_PROCESS, payload)
             .write(&mut to_child)
             .unwrap();

@@ -1424,6 +1424,8 @@ pub(crate) mod tests {
         gain: f32,
         active: bool,
         process_calls: Arc<AtomicU32>,
+        /// The delay it reports, which a test may change while it plays.
+        latency: Arc<AtomicU32>,
     }
 
     impl GainPlugin {
@@ -1445,6 +1447,7 @@ pub(crate) mod tests {
                 gain: initial_gain,
                 active: false,
                 process_calls: counter,
+                latency: Arc::new(AtomicU32::new(0)),
             }
         }
     }
@@ -1509,7 +1512,7 @@ pub(crate) mod tests {
             Ok(())
         }
         fn latency_samples(&self) -> u32 {
-            0
+            self.latency.load(Ordering::Relaxed)
         }
         fn open_editor(&mut self, _parent: RawWindowHandle) -> bool {
             false
@@ -1618,6 +1621,24 @@ pub(crate) mod tests {
             gain_reduction_db: LiveSlot::new_gain_reduction(),
         };
         (slot, counter)
+    }
+
+    /// A gain slot whose reported delay the test holds and may change.
+    pub(crate) fn make_latent_slot(id: &str, latency: Arc<AtomicU32>) -> LiveSlot {
+        let mut gain = GainPlugin::new(1.0, Arc::new(AtomicU32::new(0)));
+        gain.latency = latency;
+        let plugin: Box<dyn HostedPlugin> = Box::new(gain);
+        LiveSlot {
+            sleep: Default::default(),
+            param_ranges: LiveSlot::ranges_of(plugin.as_ref()),
+            levels: Default::default(),
+            slot_id: id.into(),
+            plugin,
+            enabled: true,
+            wet: 1.0,
+            sidechain_active: false,
+            gain_reduction_db: LiveSlot::new_gain_reduction(),
+        }
     }
 
     /// Records the midi_in slice it sees on every process call. Used to
